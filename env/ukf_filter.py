@@ -13,11 +13,32 @@ import json
 
 
 def load_calibration(path='calibration.json'):
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"[!] {path} 파일이 없습니다. calibrate_sysld.py를 먼저 실행하세요.")
-    with open(path) as f:
-        return json.load(f)
+    """캘리브레이션 파일 로드. 주어진 경로가 없으면 흔한 위치들을 자동 탐색.
+    탐색 순서: (1) 준 경로 그대로 (2) ./calibration/<파일명>
+    (3) 이 모듈 기준 ../calibration/<파일명> (4) cwd/<파일명)."""
+    import glob
+    base = os.path.basename(path)
+    here = os.path.dirname(os.path.abspath(__file__))   # .../env
+    repo = os.path.dirname(here)                          # repo root
+    candidates = [
+        path,
+        os.path.join('calibration', base),
+        os.path.join(repo, 'calibration', base),
+        os.path.join(repo, base),
+        os.path.join(os.getcwd(), base),
+    ]
+    # 마지막 폴백: 레포 어디든 같은 이름 파일
+    candidates += sorted(glob.glob(os.path.join(repo, '**', base), recursive=True))
+
+    for c in candidates:
+        if c and os.path.exists(c):
+            with open(c) as f:
+                return json.load(f)
+
+    raise FileNotFoundError(
+        f"[!] '{base}' 를 찾지 못했습니다. 다음 위치를 확인했습니다:\n  - "
+        + "\n  - ".join(dict.fromkeys(candidates))
+        + "\n  calibrate_sysld.py로 생성하거나 calibration/ 폴더에 두세요.")
 
 
 def to_physical_u(thrust, torque, calib):

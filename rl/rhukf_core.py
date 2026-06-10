@@ -25,8 +25,8 @@ import torch
 
 from .network import forward_single, forward_bmm, DTYPE
 
-JITTER = 1e-7
-JITTER_TRIA = 1e-7
+JITTER = 1e-6
+JITTER_TRIA = 1e-6
 
 
 # ═════════════════════════════════════════════════════════════

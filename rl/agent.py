@@ -20,7 +20,7 @@ import torch
 from .memory import TensorReplayBuffer
 from .network import (
     create_network_info, initialize_theta, FilterCacheFV,
-    InputNormalizer, forward_single, DTYPE,
+    InputNormalizer, forward_single, DTYPE, apply_tf32_config,
 )
 from .rhukf_core import (
     rhukf_step_fv, rhukf_step_fv_error, init_error_horizon, compute_per_priorities,
@@ -32,10 +32,8 @@ class OnlineRHUKFAgent:
         self.cfg = cfg
         self.device = cfg.device
 
-        # ── Mixed precision (FP32 + TF32 가속) ──
-        if cfg.use_tf32 and torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+        # ── 정밀도: 전역 FP32 고정, forward만 스코프 TF32 (use_tf32_forward) ──
+        apply_tf32_config(cfg)
 
         # ── 네트워크 구조 + 파라미터 ──
         self.info = create_network_info(cfg.dimS, cfg.num_actions, cfg)

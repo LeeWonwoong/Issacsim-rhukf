@@ -1,5 +1,10 @@
 # UAV_AttackDetection_SWRL_OnlineRL — RHUKF-FV 통합본
 
+## 이번 개정 (rhukf.py 기준 정렬)
+- **정밀도 모델 = rhukf.py와 동일**: 전역 FP32 고정(`allow_tf32=False`), NN forward만 `@tf32_forward` 데코레이터로 호출 동안 TF32 허용. 필터 행렬연산(cholesky/qr/solve_triangular)은 항상 FP32. config `use_tf32`→**`use_tf32_forward: bool=False`** (Ampere+에서만 효과). `JITTER=1e-6`(FP32).
+- **D3QN(dueling) 전부 제거 → 순수 DDQN**: network/forward에서 value·advantage 스트림 삭제, `shared_layers → q_layers → nA` 단일 Q헤드만. config의 `use_dueling/value_layers/advantage_layers` 제거. custom_env의 Adam도 `AdamDDQNAgent`(plain MLP)로 교체 — RHUKF/Adam 동일 파라미터수로 공정 비교.
+- **calibration "없음" 해결**: `load_calibration()`이 준 경로 → `calibration/<파일>` → 레포 루트 → cwd → 레포 전체 glob 순으로 자동 탐색. 루트에서 `isim online_rl_main.py` 실행해도 `calibration/calibration.json` 자동 인식.
+
 기존 SWRL/SRRHUIF 파이프라인을 **RHUKF-FV(Receding-Horizon UKF, Full-Vector, Covariance form)** 로
 교체한 전체 프로젝트입니다. 온라인(`online_rl_main.py`)·오프라인 검증(`custom_env.py`) 모두 통합·검증 완료.
 

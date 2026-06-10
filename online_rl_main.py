@@ -783,9 +783,11 @@ def main():
     warnings.filterwarnings("ignore", category=FutureWarning)
     warnings.filterwarnings("ignore", message=".*deprecated.*")
 
-    if cfg.use_tf32 and torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+    # 정밀도: 전역 FP32 고정 + forward만 스코프 TF32 (use_tf32_forward)
+    from rl.network import apply_tf32_config
+    _en, _sup = apply_tf32_config(cfg)
+    print(f"[TF32] forward TF32 = {'ON' if _en else 'off'} (요청={cfg.use_tf32_forward}, "
+          f"GPU지원={'yes' if _sup else 'no'}) | 행렬연산은 FP32 유지")
 
     if hasattr(torch, '_dynamo'):
         torch._dynamo.config.suppress_errors = True

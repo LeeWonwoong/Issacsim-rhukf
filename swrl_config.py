@@ -26,7 +26,7 @@ class Config:
     outdir: str = "./results"
     headless: bool = False
     sim_launcher: str = 'isim'
-    use_tf32: bool = True            # FP32 연산을 TF32로 가속
+    use_tf32_forward: bool = False   # forward(matmul)만 TF32 허용(Ampere+); 행렬연산은 항상 FP32. 전역 기본 FP32.
     use_compile: bool = False        # torch.compile (실시간 충돌 시 False)
 
     # ══════════════════════════════════════════════════════════
@@ -112,14 +112,13 @@ class Config:
     # ══════════════════════════════════════════════════════════
     #  D3QN 네트워크 구조
     # ══════════════════════════════════════════════════════════
-    use_dueling: bool = True
+    # ── 순수 DDQN (dueling 제거) : shared_layers → q_layers → nA 단일 Q헤드 ──
     shared_layers: List[int] = field(default_factory=lambda: [16, 16])
-    value_layers: List[int] = field(default_factory=lambda: [4])
-    advantage_layers: List[int] = field(default_factory=lambda: [4])
-    q_layers: List[int] = field(default_factory=lambda: [])   # non-dueling 전용
+    q_layers: List[int] = field(default_factory=lambda: [])   # [] = shared_out → nA 단일 선형
     activation_fn: str = 'silu'
     init_scheme: str = 'he'          # 'he' | 'xavier' | 'orthogonal'
     use_residual: bool = False
+    adam_force_fp32: bool = True     # custom_env Adam-DDQN baseline은 TF32 끄고 FP32 (공정/재현)
 
     # ══════════════════════════════════════════════════════════
     #  RHUKF-FV (필터 뇌) — error/absolute state, full-vector covariance

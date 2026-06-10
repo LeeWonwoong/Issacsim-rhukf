@@ -1,8 +1,8 @@
 """
-custom_env.py — RHUKF-FV vs Adam D3QN 오프라인 검증
+custom_env.py — RHUKF-FV vs Adam DDQN 오프라인 검증
 =====================================================
 RealisticCliffEnv(공격/기동/NIS 겹침 모사)에서 RHUKF-FV 에이전트가
-정상 학습되는지 + Adam D3QN 대비 reward 곡선을 비교한다.
+정상 학습되는지 + Adam DDQN 대비 reward 곡선을 비교한다.
 
 온라인(online_rl_main.py)과 동일한 OnlineRHUKFAgent / rl.network / env.reward 사용.
 weight-space loss landscape는 검증 단계라 생략, reward/loss 비교 + 4-Context Q-landscape만.
@@ -29,34 +29,27 @@ from rl.network import forward_single, DTYPE
 from env.reward import calculate_reward
 
 # =========================================================================
-# 1. Adam D3QN Agent (FP32 baseline, 새 buffer/n-step/PER 사용)
+# 1. Adam DDQN Agent (FP32 baseline, 새 buffer/n-step/PER 사용)
 # =========================================================================
-class D3QNNetwork(nn.Module):
-    def __init__(self, dimS, num_actions, shared_layers, value_layers, advantage_layers):
+class DDQNNetwork(nn.Module):
+    """순수 DDQN MLP: shared_layers → q_layers → nA (dueling 없음)."""
+    def __init__(self, dimS, num_actions, shared_layers, q_layers):
         super().__init__()
         layers = []; in_dim = dimS
-        for h in shared_layers:
+        for h in list(shared_layers) + list(q_layers):
             layers.append(nn.Linear(in_dim, h)); layers.append(nn.ReLU()); in_dim = h
-        self.shared = nn.Sequential(*layers)
-        v_layers = []; v_in = in_dim
-        for h in value_layers:
-            v_layers.append(nn.Linear(v_in, h)); v_layers.append(nn.ReLU()); v_in = h
-        v_layers.append(nn.Linear(v_in, 1)); self.value = nn.Sequential(*v_layers)
-        a_layers = []; a_in = in_dim
-        for h in advantage_layers:
-            a_layers.append(nn.Linear(a_in, h)); a_layers.append(nn.ReLU()); a_in = h
-        a_layers.append(nn.Linear(a_in, num_actions)); self.advantage = nn.Sequential(*a_layers)
+        layers.append(nn.Linear(in_dim, num_actions))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x):
-        s = self.shared(x); v = self.value(s); a = self.advantage(s)
-        return v + (a - a.mean(dim=-1, keepdim=True))
+        return self.net(x)
 
 
-class AdamD3QNAgent:
+class AdamDDQNAgent:
     def __init__(self, cfg):
         self.cfg = cfg; self.device = cfg.device
-        self.net = D3QNNetwork(cfg.dimS, cfg.num_actions, cfg.shared_layers,
-                               cfg.value_layers, cfg.advantage_layers).float().to(cfg.device)
+        self.net = DDQNNetwork(cfg.dimS, cfg.num_actions, cfg.shared_layers,
+                               cfg.q_layers).float().to(cfg.device)
         self.target_net = copy.deepcopy(self.net)
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=3e-4)
         self.buffer = TensorReplayBuffer(cfg.buffer_size, cfg.dimS, cfg.device, cfg)
@@ -64,7 +57,7 @@ class AdamD3QNAgent:
         self.episode_rewards = []; self.episode_lengths = []; self.info = None
         self._learn_call_count = 0   # update_interval 게이트용
         self.target_gamma = (cfg.gamma ** cfg.n_step_size) if cfg.use_n_step else cfg.gamma
-        print(f"  Agent: Adam D3QN | Params: {sum(p.numel() for p in self.net.parameters())} | Device: {cfg.device}")
+        print(f"  Agent: Adam DDQN | Params: {sum(p.numel() for p in self.net.parameters())} | Device: {cfg.device}")
 
     def warmup_compile(self): pass
 
@@ -351,7 +344,7 @@ def plot_comparison_4context(theta_rhukf, info_rhukf, adam_net, cfg, param_str, 
     fig = plt.figure(figsize=(24, 12))
     for row, (mname, qfn) in enumerate([
         ("RHUKF-FV", lambda s: forward_single(theta_rhukf.squeeze(), info_rhukf, s)),
-        ("Adam D3QN", lambda s: adam_net(s.float()))]):
+        ("Adam DDQN", lambda s: adam_net(s.float()))]):
         for col, (title, hist, prev_a) in enumerate(contexts):
             states = np.zeros((resolution * resolution, cfg.window_size * 3))
             states[:, 0:3] = hist[0]; states[:, 3:6] = hist[1]; states[:, 6:9] = hist[2]
@@ -441,6 +434,8 @@ def main():
 
     cfg = Config()
     cfg.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    from rl.network import apply_tf32_config
+    apply_tf32_config(cfg)   # 전역 FP32 + forward만 스코프 TF32
     if args.episodes is not None: cfg.max_episodes = args.episodes
     if args.state_form is not None: cfg.state_form = args.state_form
     if args.alpha is not None: cfg.alpha = args.alpha
@@ -470,11 +465,11 @@ def main():
 
     agent_a = None
     if not args.skip_adam:
-        print(f"\n{'='*50}\n  Phase 2: Adam D3QN\n{'='*50}")
+        print(f"\n{'='*50}\n  Phase 2: Adam DDQN\n{'='*50}")
         np.random.seed(cfg.seed + 1000); torch.manual_seed(cfg.seed + 1000)
         env_a = RealisticCliffEnv(cfg, window_size=cfg.window_size)
-        agent_a = AdamD3QNAgent(cfg)
-        log_a = LivePlotter("Adam_D3QN", cfg.max_episodes, plot_max_reward, cfg.outdir, cfg.param_str)
+        agent_a = AdamDDQNAgent(cfg)
+        log_a = LivePlotter("Adam_DDQN", cfg.max_episodes, plot_max_reward, cfg.outdir, cfg.param_str)
         train_agent(agent_a, env_a, cfg, 'Adam', log_a, comp)
     comp.close()
 
