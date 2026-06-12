@@ -1,47 +1,52 @@
 # UAV_AttackDetection_SWRL_OnlineRL — RHUKF-FV 통합본
 
-## 이번 개정 (rhukf.py 기준 정렬)
-- **정밀도 모델 = rhukf.py와 동일**: 전역 FP32 고정(`allow_tf32=False`), NN forward만 `@tf32_forward` 데코레이터로 호출 동안 TF32 허용. 필터 행렬연산(cholesky/qr/solve_triangular)은 항상 FP32. config `use_tf32`→**`use_tf32_forward: bool=False`** (Ampere+에서만 효과). `JITTER=1e-6`(FP32).
-- **D3QN(dueling) 전부 제거 → 순수 DDQN**: network/forward에서 value·advantage 스트림 삭제, `shared_layers → q_layers → nA` 단일 Q헤드만. config의 `use_dueling/value_layers/advantage_layers` 제거. custom_env의 Adam도 `AdamDDQNAgent`(plain MLP)로 교체 — RHUKF/Adam 동일 파라미터수로 공정 비교.
-- **calibration "없음" 해결**: `load_calibration()`이 준 경로 → `calibration/<파일>` → 레포 루트 → cwd → 레포 전체 glob 순으로 자동 탐색. 루트에서 `isim online_rl_main.py` 실행해도 `calibration/calibration.json` 자동 인식.
+## 이번 개정 (online 실험 세팅: burst LoE / Adam baseline / PER off / done 정책 / 리셋 수정)
+- **agent_type 선택**: `cfg.agent_type = 'rhukf'`(제안) | `'adam'`(Adam+Huber baseline).
+  `rl/agent_adam.py`(신규) = `OnlineRHUKFAgent`와 동일 인터페이스·동일 네트워크 구조,
+  손실만 Huber(smooth_l1) + Adam + soft target update. → FIR(receding-horizon) **구조 순기여 isolate**.
+- **버스트 LoE 공격**: `attack_mode='burst'`. 에피소드 내 on-off-on 반복(`attack_burst_*_range`).
+  `sample_episode_scenario`가 `scenario['attack_bursts']=[(s,e),...]` 생성, 컨트롤러가 경계에서 토글.
+  LoE 자체(`compute_attack_forces`)는 on/off 그대로 — 비정상성을 시간 구조로만 강조(FIR이 이기는 regime).
+- **PER off → Huber-R 단독**: `use_per=False`. RHUKF의 outlier 방어를 Huber-adaptive R 하나로 격리.
+  (Adam baseline도 동일하게 uniform 샘플링 → 공정 비교.)
+- **done 정책**: `use_logical_done=False`(기본) → **물리적 crash만 종료**. 논리적 종료(미탐/복귀/오탐)는 끔.
+  push의 terminal 마스크는 물리 crash에만 True (timeout·논리종료는 truncation → 부트스트랩 유지).
+- **리셋 수정**: circle 시작 갭 제거(중심 (-R,0)), `crash_drift` 유예(`drift_patience`),
+  eval crash도 reason별 SOFT/WARM/HARD 라우팅, SOFT_RECOVERY `soft_recovery_timeout` 초과 시 WARM 에스컬레이션.
 
-기존 SWRL/SRRHUIF 파이프라인을 **RHUKF-FV(Receding-Horizon UKF, Full-Vector, Covariance form)** 로
-교체한 전체 프로젝트입니다. 온라인(`online_rl_main.py`)·오프라인 검증(`custom_env.py`) 모두 통합·검증 완료.
+## 정밀도/구조 (rhukf.py 기준 정렬)
+- 전역 FP32 고정(`allow_tf32=False`), NN forward만 `@tf32_forward`로 호출 동안 TF32 허용(`use_tf32_forward`).
+- 순수 DDQN(dueling 제거): `shared_layers → q_layers → nA`.
+- `load_calibration()` 자동 탐색: 준 경로 → `calibration/<파일>` → 레포 루트 → cwd → glob.
 
-## 무엇이 바뀌었나
-- `rl/srrhuif_core.py` **삭제** → `rl/rhukf_core.py` **신규** (covariance form, error/absolute 스위치)
-- `rl/agent.py` : `OnlineRHUKFAgent` (learn() → 3-튜플, soft target, PER β-annealing, n-step)
-- `rl/network.py`, `rl/memory.py` : **FP32 + TF32**, PER(우선순위/IS-weight)·n-step 버퍼
-- `env/reward.py` : `RewardConfig` 모듈화 (+ 기존 `calculate_reward` 하위호환)
-- `swrl_config.py` : RHUKF 필드(state_form/measurement_mode/anchor/N_horizon/q·r·p_init 등),
-  `reward: RewardConfig`, `done_steps`(기존 `done_step` 오타 수정), `obs_scale=[1.0]*12`
-- `online_rl_main.py` : import/agent 3곳 RHUKF로 교체, 보상 호출에 `rc=cfg.reward`
-- `custom_env.py` : RHUKF-FV vs Adam D3QN 오프라인 비교(FP32) + 4-Context Q-landscape
-
-> 참고: `calibration/calibrate_online_today.py`의 저장부에 있던 `json.setdefault(...)` 크래시 라인을
-> 제거했습니다(정상 `json.dump(..., indent=4)`만 유지). 그 외 calibration 로직은 원본 그대로입니다.
+## 비교 실험 (에이전트만 바꿔 두 번)
+```python
+cfg.agent_type = 'rhukf'    # 제안
+# cfg.agent_type = 'adam'   # baseline (Adam + Huber)
+cfg.use_per = False         # 공통: Huber-R 단독
+cfg.attack_mode = 'burst'   # 공통: 버스트 LoE
+```
 
 ## 핵심 설정 (swrl_config.py)
 - 필터: RHUKF-FV / covariance / `state_form='error'`(기본, `'absolute'` 전환 가능)
 - `measurement_mode='q_target'`, activation `silu`, soft update `tau=0.005`
-- `use_n_step=True`(n=3), `use_per=True`(IS-weight를 R 대각에 `/w` 적용), twin off
+- `use_n_step=True`(n=3), `use_per=False`(이번 실험), twin off
 - UT: `alpha=0.9, beta=2.0, kappa=0.0` / `q_init=0.01, r_init=1.5, p_init=0.03, p_delta_init=0.05`
-- `N_horizon=5`, `huber_c=1000`, `tikhonov_lambda=1e-8`
-- `update_interval=1` : learn 빈도 게이트 (N 스텝마다 1번만 업데이트, 1=매 스텝). 온라인·오프라인·Adam 모두 동일 적용
+- `N_horizon=5`, `huber_c=1000`, `tikhonov_lambda=1e-8`, `update_interval=1`
+- done: `use_logical_done=False`, `drift_patience=5`, `soft_recovery_timeout=15.0`
+- attack: `attack_mode='burst'`, `attack_burst_count_range=(2,4)`, `_on_range=(15,35)`, `_off_range=(20,50)`
 
-## 오프라인 검증
+## 오프라인 검증 (custom_env — 이번 온라인 실험엔 미사용)
 ```bash
-python custom_env.py --episodes 200 --state_form error     # RHUKF-FV(error) vs Adam
-python custom_env.py --episodes 200 --state_form absolute   # absolute 모드
-python custom_env.py --episodes 200 --skip_adam             # RHUKF 단독
+python custom_env.py --episodes 200 --state_form error
+python custom_env.py --episodes 200 --skip_adam
 ```
-→ `./results_drone/<param_str>/` 에 reward/loss 곡선 + 4-Context Q-landscape PNG.
 
 ## 온라인 (실시간, 서버)
 ```bash
 # 터미널 1: Isaac Sim + PX4 SITL
 isim run_sim.py --no-headless
-# 터미널 2: ROS2 RL 노드 (calibration.json이 실행 디렉터리에 있어야 함)
+# 터미널 2: ROS2 RL 노드 (calibration.json 자동 탐색)
 isim online_rl_main.py
 ```
 PX4 최초 1회 (pxh):
@@ -55,13 +60,14 @@ param save
 ```
 online_rl_main.py        # ROS2 RL 제어/평가 노드 (50Hz tick, 비동기 learn)
 run_sim.py               # Isaac Sim + Pegasus + PX4 SITL
-swrl_config.py           # 통합 설정 + 시나리오 샘플러 + 공격 유틸
+swrl_config.py           # 통합 설정 + 시나리오 샘플러(버스트) + 공격 유틸
 custom_env.py            # 오프라인 RHUKF-FV vs Adam 벤치
 env/
   ukf_filter.py          # 12-state Dynamics UKF + NIS
   reward.py              # RewardConfig + calculate_reward
 rl/
   agent.py               # OnlineRHUKFAgent
+  agent_adam.py          # OnlineAdamAgent (Adam + Huber baseline)
   rhukf_core.py          # RHUKF-FV step (absolute/error) + PER priorities
   network.py             # flat-theta forward (FP32)
   memory.py              # PER + n-step 버퍼

@@ -7,6 +7,13 @@ online_rl_main.py — 온라인 RL 제어 루프 + 평가 시스템
 ★ 제어 루프는 50Hz 타이머 (setpoint 규칙적 발행)
 ★ GT 콜백은 상태 갱신만 (제어에 영향 없음)
 ★ learn()은 비동기 스레드 (제어 루프 블로킹 없음)
+
+이번 개정:
+  - agent_type 'rhukf' | 'adam'(Adam+Huber baseline) 선택
+  - 버스트 LoE 공격 (on-off-on) 스케줄링
+  - crash_drift 유예(drift_patience) — transient 스파이크 보호
+  - use_logical_done 게이트 (기본 False=물리 crash만 종료) + terminated 부트스트랩 분리
+  - eval crash도 reason별 리셋 라우팅 + SOFT_RECOVERY 타임아웃 에스컬레이션
 """
 import rclpy
 import numpy as np
@@ -34,6 +41,10 @@ from swrl_config import Config, sample_episode_scenario
 from env.ukf_filter import DynamicsUKF, compute_nis_scaled, load_calibration, to_physical_u
 from env.reward import calculate_reward
 from rl.agent import OnlineRHUKFAgent
+
+
+# 물리적 crash만 부트스트랩 terminal(가치=0). timeout·논리종료는 truncation.
+PHYSICAL_TERMINALS = ('crash_drift', 'crash_altitude', 'crash_flip')
 
 
 # ══════════════════════════════════════════════════════════════
@@ -128,7 +139,11 @@ class OnlineRLNode(Node):
         # ── UKF + Agent ──
         self.calib = load_calibration('calibration.json')
         self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib)
-        self.agent = OnlineRHUKFAgent(cfg)
+        if getattr(cfg, 'agent_type', 'rhukf') == 'adam':
+            from rl.agent_adam import OnlineAdamAgent
+            self.agent = OnlineAdamAgent(cfg)
+        else:
+            self.agent = OnlineRHUKFAgent(cfg)
         self.window_buffer = collections.deque(maxlen=cfg.window_size)
 
         # ── Sensor state ──
@@ -150,6 +165,12 @@ class OnlineRLNode(Node):
         self.prev_state = None; self.prev_action = None
         self.episode_reward = 0.0; self.is_ukf_initialized = False
         self.attack_active_flag = False
+
+        # ── 공격 버스트 상태 ──
+        self.attack_bursts = []
+        self._cur_burst_start = 0
+        self._last_burst_end = None
+        self.drift_counter = 0
 
         # ── HOVER 위치 고정 (★ 떨림 방지) ──
         self._hover_pos = np.zeros(2)  # HOVER 전환 시 위치 저장
@@ -186,7 +207,11 @@ class OnlineRLNode(Node):
         self.last_z_var = 0.0  # Z 분산 저장용
 
         self.get_logger().info(
-            f'[INIT] dimS={cfg.dimS} | eval_interval={cfg.eval_interval} | max_ep={cfg.max_episodes}')
+            f'[INIT] agent={getattr(cfg, "agent_type", "rhukf")} | dimS={cfg.dimS} | '
+            f'eval_interval={cfg.eval_interval} | max_ep={cfg.max_episodes} | '
+            f'attack_mode={getattr(cfg, "attack_mode", "single")} | '
+            f'use_logical_done={getattr(cfg, "use_logical_done", False)} | '
+            f'PER={"ON" if cfg.use_per else "off"}')
 
     # ══════════════════════════════════════════════════════════
     #  Sensor Callbacks (★ 상태 갱신만, 제어 로직 없음)
@@ -265,6 +290,13 @@ class OnlineRLNode(Node):
     def _check_heartbeat(self):
         return (pytime.time() - self.last_gt_time) < self.heartbeat_timeout
 
+    def _is_attack_step(self, step):
+        """현재 step이 어떤 버스트 ON 구간 [s, e)에 속하는지."""
+        for (s, e) in self.attack_bursts:
+            if s <= step < e:
+                return True
+        return False
+
     # ══════════════════════════════════════════════════════════
     #  Flight Patterns
     # ══════════════════════════════════════════════════════════
@@ -278,7 +310,8 @@ class OnlineRLNode(Node):
             return (0.0, 0.0, alt, 0.0, 0.0, 0.0, 0.0)
 
         elif pattern == 'circle':
-            x = R*np.cos(self.theta); y = R*np.sin(self.theta)
+            x = R*np.cos(self.theta) - R          # 중심 (-R,0): theta=0에서 원점 통과 (시작 갭 제거)
+            y = R*np.sin(self.theta)
             vx = -R*w*np.sin(self.theta); vy = R*w*np.cos(self.theta)
             yaw = self.theta + np.pi/2; self.theta += w*dt
             return (float(x), float(y), float(alt), float(yaw), float(vx), float(vy), 0.0)
@@ -322,6 +355,10 @@ class OnlineRLNode(Node):
         self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib)
         self.is_ukf_initialized = False; self.last_res = np.zeros(9); self.last_Pzz = np.eye(9)
         self.continuous_fp_count = 0
+        self.drift_counter = 0
+        self.attack_bursts = []
+        self._cur_burst_start = 0
+        self._last_burst_end = None
 
     def _start_new_episode(self):
         if self.eval_mode:
@@ -343,9 +380,27 @@ class OnlineRLNode(Node):
         self._send_scenario_cmd()
         self._reset_episode_state(); self.home_lat = None; self.init_counter = 0
 
+        # ── 공격 버스트 일정 확정 (burst 우선, 없으면 단일 구간) ──
+        self.attack_bursts = self.scenario.get('attack_bursts')
+        if self.attack_bursts is None:
+            if self.scenario.get('attack_type', 'none') != 'none':
+                s = self.scenario.get('attack_start_step', 0)
+                e = self.scenario.get('attack_end_step', 99999)
+                self.attack_bursts = [(s, e)]
+            else:
+                self.attack_bursts = []
+        self._cur_burst_start = 0
+        self._last_burst_end = None
+
     def _check_done(self, trajectory_sp):
         dist = math.hypot(self.cur_pos[0]-trajectory_sp[0], self.cur_pos[1]-trajectory_sp[1])
-        if dist >= self.cfg.max_error: return True, 'crash_drift'
+        # drift는 순간 스파이크가 아니라 지속 이탈일 때만 종료 (transient 보호)
+        if dist >= self.cfg.max_error:
+            self.drift_counter += 1
+        else:
+            self.drift_counter = 0
+        if self.drift_counter >= self.cfg.drift_patience:
+            return True, 'crash_drift'
         if self.cur_pos[2] > self.cfg.min_altitude: return True, 'crash_altitude'
         if abs(self.cur_euler[0]) > 1.05 or abs(self.cur_euler[1]) > 1.05: return True, 'crash_flip'
         if self.step_count >= self.cfg.episode_max_steps: return True, 'timeout'
@@ -366,6 +421,17 @@ class OnlineRLNode(Node):
         self._reset_episode_state()
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
         self.home_lat = None; self.init_counter = 0; self.flight_state = 'HARD_RESET'
+
+    def _apply_reset(self, reason):
+        """crash 종류에 따라 SOFT / WARM / HARD 리셋 선택 (train·eval 공통)."""
+        if reason == 'crash_flip':
+            self._trigger_hard_reset()
+        elif reason == 'crash_altitude':
+            self._reset_episode_state(); self.home_lat = None
+            self.init_counter = 0; self.flight_state = 'WARM_RESET'
+        else:  # crash_drift, timeout, (use_logical_done 시 논리종료)
+            self._reset_episode_state(); self.stable_counter = 0
+            self.init_counter = 0; self.flight_state = 'SOFT_RECOVERY'
 
     # ══════════════════════════════════════════════════════════
     #  Evaluation System
@@ -446,14 +512,19 @@ class OnlineRLNode(Node):
         # ── SOFT_RECOVERY ──
         elif self.flight_state == 'SOFT_RECOVERY':
             self._send_setpoint(0.0, 0.0, -abs(self.cfg.flight_altitude), 0.0)
+            self.init_counter += 1
             dist = np.linalg.norm(self.cur_pos[:2])
             alt_err = abs(self.cur_pos[2] + self.cfg.flight_altitude)
             if dist < 1.0 and alt_err < 0.5: self.stable_counter += 1
             else: self.stable_counter = 0
             if self.stable_counter >= int(self.cfg.warmup_seconds / self.step_dt):
                 self._start_new_episode()
-                self.flight_state = 'STABILIZE'; self.stable_counter = 0
+                self.flight_state = 'STABILIZE'; self.stable_counter = 0; self.init_counter = 0
                 self.get_logger().info('  → STABILIZE (soft)')
+            elif self.init_counter >= int(self.cfg.soft_recovery_timeout / self.step_dt):
+                self.get_logger().warn('  [SOFT] 복구 시간 초과 → WARM_RESET 에스컬레이션')
+                self._reset_episode_state(); self.home_lat = None
+                self.init_counter = 0; self.flight_state = 'WARM_RESET'
 
         # ── WARM_RESET ──
         elif self.flight_state == 'WARM_RESET':
@@ -531,9 +602,7 @@ class OnlineRLNode(Node):
 
                 pattern = self.scenario['pattern'] if self.scenario else 'hover'
                 if pattern == 'circle':
-                    self.theta = np.arctan2(self.cur_pos[1], self.cur_pos[0])
-                    if abs(self.cur_pos[0]) < 0.5 and abs(self.cur_pos[1]) < 0.5:
-                        self.theta = np.pi / 2
+                    self.theta = 0.0   # 오프셋 원이 원점을 지나므로 0에서 시작 → 드론 위치와 일치
                 elif pattern in ('figure8', 'waypoint', 'aggressive'):
                     self.tick_count = 0
 
@@ -612,20 +681,16 @@ class OnlineRLNode(Node):
         state = np.array(self.window_buffer).flatten()
         done, term_reason = self._check_done(trajectory_sp)
 
-        # ── 0. 초기화 및 상태 확인 ──
-        attack_step = self.scenario.get('attack_start_step', 0)
-        attack_end_step = self.scenario.get('attack_end_step', 99999)
-
         attack_delay = 0
         recovery_delay = 0
 
-        # ── 1. 딜레이 및 FP 카운터 계산 ──
+        # ── 1. 딜레이 및 FP 카운터 계산 (버스트 기준) ──
         if self.attack_active_flag:
-            attack_delay = max(0, self.step_count - attack_step)
+            attack_delay = max(0, self.step_count - self._cur_burst_start)
             self.continuous_fp_count = 0
         else:
-            if self.step_count >= attack_end_step:
-                recovery_delay = max(0, self.step_count - attack_end_step)
+            if self._last_burst_end is not None and self.step_count >= self._last_burst_end:
+                recovery_delay = max(0, self.step_count - self._last_burst_end)
                 self.continuous_fp_count = 0
             else:
                 if self.prev_action == 1:
@@ -643,23 +708,23 @@ class OnlineRLNode(Node):
         )
         self.episode_reward += reward
 
-        # ── 3. 허용치 초과 시 조용히 셔터 내리기 (Logical Done 처리) ──
-        done_steps = cfg.done_steps
-        if not done:
+        # ── 3. 논리적 종료 (use_logical_done=True일 때만; 기본 False=물리 crash만) ──
+        if cfg.use_logical_done and not done:
+            done_steps = cfg.done_steps
             if attack_delay >= done_steps:
-                done = True
-                term_reason = 'detection_failed'
+                done = True; term_reason = 'detection_failed'
             elif recovery_delay >= done_steps:
-                done = True
-                term_reason = 'recovery_failed'
+                done = True; term_reason = 'recovery_failed'
             elif self.continuous_fp_count >= done_steps:
-                done = True
-                term_reason = 'excessive_fp'
+                done = True; term_reason = 'excessive_fp'
+
+        # ── 부트스트랩용 terminal: 물리적 crash만 True (timeout·논리종료는 truncation) ──
+        terminated = term_reason in PHYSICAL_TERMINALS
 
         # ── Transition 저장 + 비동기 학습 ──
         if self.prev_state is not None and self.prev_action is not None:
             if not self.eval_mode:
-                self.agent.push(self.prev_state, self.prev_action, reward, state, done)
+                self.agent.push(self.prev_state, self.prev_action, reward, state, terminated)
                 if not self._is_learning_bg:
                     self._is_learning_bg = True
                     threading.Thread(target=self._async_learn_task, daemon=True).start()
@@ -688,21 +753,20 @@ class OnlineRLNode(Node):
             if not self.attack_active_flag:
                 self.hover_before_attack_count += 1
 
-        # ── Attack start & end ──
-        attack_step = self.scenario.get('attack_start_step', 0)
-        attack_end_step = self.scenario.get('attack_end_step', 99999)
-
-        if self.step_count == attack_step and self.scenario['attack_type'] != 'none':
+        # ── Attack burst on/off (버스트 경계에서 토글) ──
+        want_attack = (self.scenario['attack_type'] != 'none') and self._is_attack_step(self.step_count)
+        if want_attack and not self.attack_active_flag:
             self._send_attack_cmd(True, self.scenario['attack_type'], self.scenario['attack_intensity'])
             self.attack_active_flag = True
+            self._cur_burst_start = self.step_count
             self.get_logger().warn(
-                f'  🚨 Attack ON @ step {self.step_count}: {self.scenario["attack_type"]} '
+                f'  🚨 Attack ON (burst) @ step {self.step_count}: {self.scenario["attack_type"]} '
                 f'(int={self.scenario["attack_intensity"]:.3f})')
-
-        elif self.step_count == attack_end_step and self.attack_active_flag:
+        elif (not want_attack) and self.attack_active_flag:
             self._send_attack_cmd(False)
             self.attack_active_flag = False
-            self.get_logger().warn(f'  🟢 Attack OFF @ step {self.step_count} (Resuming normal tracking)')
+            self._last_burst_end = self.step_count
+            self.get_logger().warn(f'  🟢 Attack OFF (burst) @ step {self.step_count}')
 
         # ── Debug log ──
         if self.step_count % cfg.log_interval == 0:
@@ -730,13 +794,14 @@ class OnlineRLNode(Node):
     def _end_episode(self, reason):
         self._send_attack_cmd(False); self.attack_active_flag = False
 
+        # ── EVAL: 결과 기록 후, crash 종류에 맞는 리셋으로 라우팅 ──
+        #   (이전엔 무조건 SOFT → 추락/뒤집힘 시 복구 불가 → 드론 사라진 채 무한 대기 버그)
         if self.eval_mode:
             self._record_eval_result(reason)
             self.eval_scenario_idx += 1
             if self.eval_scenario_idx >= len(self.cfg.eval_scenarios):
                 self._finish_eval_round()
-            self._reset_episode_state(); self.stable_counter = 0
-            self.flight_state = 'SOFT_RECOVERY'
+            self._apply_reset(reason)
             return
 
         self.agent.end_episode(self.episode_reward, self.step_count)
@@ -746,14 +811,10 @@ class OnlineRLNode(Node):
                   'crash_flip': '🔥 FLIP', 'timeout': '⏱️ TIMEOUT',
                   'detection_failed': '🙈 MISS', 'recovery_failed': '🔒 STUCK',
                   'excessive_fp': '🤡 PANIC'}
-
-        reset_map = {'crash_flip': 'HARD', 'crash_altitude': 'WARM',
-                     'crash_drift': 'SOFT', 'timeout': 'SOFT',
-                     'detection_failed': 'SOFT', 'recovery_failed': 'SOFT',
-                     'excessive_fp': 'SOFT'}
+        reset_label = {'crash_flip': 'HARD', 'crash_altitude': 'WARM'}.get(reason, 'SOFT')
 
         self.get_logger().info(
-            f'\n  ┌─ Ep {self.episode}: {emojis.get(reason, reason)} → {reset_map.get(reason, "?")} reset\n'
+            f'\n  ┌─ Ep {self.episode}: {emojis.get(reason, reason)} → {reset_label} reset\n'
             f'  │ R={self.episode_reward:.1f} Steps={self.step_count} Loss={avg_loss:.4f}\n'
             f'  │ ε={eps:.3f} P={p_init:.5f}\n'
             f'  │ Atk: {self.scenario["attack_type"]}(int={self.scenario["attack_intensity"]:.3f}, '
@@ -766,14 +827,7 @@ class OnlineRLNode(Node):
         if self.episode % self.cfg.eval_interval == 0:
             self._start_eval_round()
 
-        if reason == 'crash_flip':
-            self._trigger_hard_reset()
-        elif reason == 'crash_altitude':
-            self._reset_episode_state(); self.home_lat = None; self.init_counter = 0
-            self.flight_state = 'WARM_RESET'
-        else:
-            self._reset_episode_state(); self.stable_counter = 0
-            self.flight_state = 'SOFT_RECOVERY'
+        self._apply_reset(reason)
 
 
 def main():

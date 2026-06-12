@@ -28,6 +28,8 @@ class Config:
     sim_launcher: str = 'isim'
     use_tf32_forward: bool = False   # forward(matmul)만 TF32 허용(Ampere+); 행렬연산은 항상 FP32. 전역 기본 FP32.
     use_compile: bool = False        # torch.compile (실시간 충돌 시 False)
+    agent_type: str = "rhukf"        # 'rhukf'(제안) | 'adam'(Adam+Huber baseline)
+    adam_lr: float = 3e-4            # Adam baseline 학습률
 
     # ══════════════════════════════════════════════════════════
     #  에피소드 구조
@@ -67,6 +69,12 @@ class Config:
         'loe_combined',
     ])
     prob_no_attack: float = 0.15
+
+    # ── 공격 시간 구조: burst(on-off-on 반복)로 비정상성 강조 — FIR이 이기는 regime ──
+    attack_mode: str = 'burst'                                  # 'burst' | 'single'
+    attack_burst_count_range: Tuple[int, int] = (2, 4)          # 에피소드당 버스트 개수
+    attack_burst_on_range: Tuple[int, int] = (15, 35)           # 각 버스트 ON 길이 (RL steps@10Hz)
+    attack_burst_off_range: Tuple[int, int] = (20, 50)          # 버스트 사이 OFF 길이
 
     # ══════════════════════════════════════════════════════════
     #  커리큘럼
@@ -158,13 +166,13 @@ class Config:
     use_n_step: bool = True
     n_step_size: int = 3
 
-    # ── PER (IS weight는 R^-1 스케일로 적용) ──
-    use_per: bool = True
+    # ── PER (이번 실험: PER off → Huber-R 단독 outlier 방어로 FIR 기여 isolate) ──
+    use_per: bool = False
     per_alpha: float = 0.6
     per_beta_start: float = 0.4
     per_beta_end: float = 1.0
     per_eps: float = 1e-6
-    per_apply_is_weight: bool = True       # r_inv_i = r_inv_base · w_i
+    per_apply_is_weight: bool = True       # r_inv_i = r_inv_base · w_i (use_per=True일 때만 효과)
 
     # ── 입력 정규화 (항상 ON; 드론 NIS는 [0,1]이라 scale=1.0 → identity) ──
     use_input_norm: bool = True
@@ -173,7 +181,13 @@ class Config:
     # ── 비활성 ──
     use_twin: bool = False
 
-    done_steps: int = 4                    # 논리적 종료 한계 (탐지/복귀/오탐 연속)
+    # ══════════════════════════════════════════════════════════
+    #  종료(done) 정책
+    # ══════════════════════════════════════════════════════════
+    done_steps: int = 4                    # 논리적 종료 한계 (use_logical_done=True일 때만 사용)
+    use_logical_done: bool = False         # 논리적 종료(미탐/복귀/오탐) 사용 여부. 기본 False = 물리적 crash만 종료
+    drift_patience: int = 5                # crash_drift: 연속 N RL스텝(10Hz≈0.5s) 이탈 시에만 종료
+    soft_recovery_timeout: float = 15.0    # SOFT_RECOVERY 복구 실패 시 WARM_RESET 에스컬레이션 (초)
 
     # ══════════════════════════════════════════════════════════
     #  보상 설계 (env/reward.py로 분리)
@@ -233,6 +247,7 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
         'attack_intensity': 0.0,
         'attack_start_step': 0,
         'attack_end_step': 99999,
+        'attack_bursts': [],
         'disturbance_type': 'none',
         'wind_speed': 0.0,
     }
@@ -240,9 +255,26 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
         scenario['attack_type'] = random.choice(cfg.attack_types)
         lo, hi = get_curriculum_intensity(episode, cfg)
         scenario['attack_intensity'] = random.uniform(lo, hi)
-        scenario['attack_start_step'] = random.randint(*cfg.attack_start_range)
-        duration = random.randint(*cfg.attack_duration_range)
-        scenario['attack_end_step'] = scenario['attack_start_step'] + duration
+
+        if getattr(cfg, 'attack_mode', 'single') == 'burst':
+            # 버스트 일정: ON 구간을 여러 번 (on-off-on …) → 반복적 빠른 적응 요구
+            bursts = []
+            t = random.randint(*cfg.attack_start_range)
+            for _ in range(random.randint(*cfg.attack_burst_count_range)):
+                on = random.randint(*cfg.attack_burst_on_range)
+                bursts.append((t, t + on))
+                t = t + on + random.randint(*cfg.attack_burst_off_range)
+                if t > cfg.episode_max_steps - 10:
+                    break
+            scenario['attack_bursts'] = bursts
+            scenario['attack_start_step'] = bursts[0][0]      # 로깅 호환
+            scenario['attack_end_step'] = bursts[-1][1]
+        else:
+            scenario['attack_start_step'] = random.randint(*cfg.attack_start_range)
+            duration = random.randint(*cfg.attack_duration_range)
+            scenario['attack_end_step'] = scenario['attack_start_step'] + duration
+            scenario['attack_bursts'] = [(scenario['attack_start_step'], scenario['attack_end_step'])]
+
     if cfg.disturbance_enabled:
         scenario['disturbance_type'] = random.choice(cfg.disturbance_types)
         if scenario['disturbance_type'] != 'none':
