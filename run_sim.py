@@ -187,6 +187,12 @@ class PegasusApp:
         self.body_view = None
         self._setup_body_view()
 
+        # ── GUI 보기용: chase-cam + 컬러 조명 (headless엔 무영향, 실패해도 무해) ──
+        self._cam_follow = (not args.headless)
+        self._cam_offset = np.array([-7.0, -7.0, 4.0])   # 드론 뒤·위 오프셋(ENU)
+        self._cam_eye = None
+        self._add_colored_lights()
+
         self.stop_sim = False
 
     def _cb_attack_config(self, msg):
@@ -236,6 +242,52 @@ class PegasusApp:
                 except Exception:
                     pass
                 break
+
+    def _update_chase_cam(self, drone_pos):
+        """GUI 뷰포트 카메라가 드론을 부드럽게 추적(chase-cam). 실패 시 1회 경고 후 비활성."""
+        try:
+            from omni.isaac.core.utils.viewports import set_camera_view
+            target = np.asarray(drone_pos, dtype=float)
+            desired_eye = target + self._cam_offset
+            if self._cam_eye is None:
+                self._cam_eye = desired_eye.copy()
+            else:
+                self._cam_eye = 0.85 * self._cam_eye + 0.15 * desired_eye   # 저역통과(부드럽게)
+            set_camera_view(self._cam_eye.tolist(), target.tolist(),
+                            camera_prim_path="/OmniverseKit_Persp")
+        except Exception as e:
+            carb.log_warn(f"[chase-cam] 비활성화: {e}")
+            self._cam_follow = False
+
+    def _add_colored_lights(self):
+        """무대 조명을 컬러로. (1) 기존 dome/distant 틴트 + (2) 컬러 sphere light 추가.
+        Isaac 버전마다 intensity/속성명이 달라 전부 try/except로 감쌈(실패해도 무해)."""
+        try:
+            from pxr import UsdLux
+            stage = self.stage
+            # (1) 기존 조명 살짝 틴트
+            for prim in stage.Traverse():
+                t = prim.GetTypeName()
+                if t in ("DomeLight", "DistantLight"):
+                    try:
+                        UsdLux.LightAPI(prim).CreateColorAttr().Set(Gf.Vec3f(0.55, 0.65, 1.0))
+                    except Exception:
+                        pass
+            # (2) 컬러 sphere light 추가 (위치/색/밝기는 취향껏 조정)
+            specs = [
+                ("/World/StageLights/Red",   (0.0, 0.0, 9.0),    (1.0, 0.15, 0.15)),
+                ("/World/StageLights/Blue",  (8.0, 8.0, 9.0),    (0.2, 0.3, 1.0)),
+                ("/World/StageLights/Green", (-8.0, -8.0, 9.0),  (0.2, 1.0, 0.3)),
+            ]
+            for path, pos, color in specs:
+                light = UsdLux.SphereLight.Define(stage, Sdf.Path(path))
+                light.CreateRadiusAttr(0.5)
+                light.CreateIntensityAttr(50000.0)     # 너무 어두우면 ↑, 너무 밝으면 ↓
+                light.CreateColorAttr(Gf.Vec3f(*color))
+                UsdGeom.XformCommonAPI(light.GetPrim()).SetTranslate(Gf.Vec3d(*pos))
+            carb.log_warn("[lights] colored stage lights 추가됨")
+        except Exception as e:
+            carb.log_error(f"[lights] 실패: {e}")
 
     def _do_reset(self):
         self.attack_active = False
@@ -299,6 +351,8 @@ class PegasusApp:
                         self.body_view.apply_forces(forces, is_global=True)
 
             do_render = (not _pre_args.headless) and (step_counter % render_interval == 0)
+            if do_render and self._cam_follow:
+                self._update_chase_cam(self.vehicle.state.position)
             self.world.step(render=do_render)
 
             self.sim_time += self.physics_dt
