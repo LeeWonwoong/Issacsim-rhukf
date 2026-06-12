@@ -39,7 +39,7 @@ class RewardConfig:
     escalation_power: float = 2.0
 
     # ── 종료 페널티 (env done 로직 전용) ──
-    terminal_penalty: float = -7.0
+    terminal_penalty: float = -4.0       # -7→-4 (물리 추락 anchor; 분산 완화). flip/altitude에만 적용
 
 
 # 모듈 기본 인스턴스 (rc 미지정 호출 호환용)

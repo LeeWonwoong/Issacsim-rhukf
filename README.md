@@ -31,9 +31,17 @@ cfg.attack_mode = 'burst'   # 공통: 버스트 LoE
 - 필터: RHUKF-FV / covariance / `state_form='error'`(기본, `'absolute'` 전환 가능)
 - `measurement_mode='q_target'`, activation `silu`, soft update `tau=0.005`
 - `use_n_step=True`(n=3), `use_per=False`(이번 실험), twin off
-- UT: `alpha=0.9, beta=2.0, kappa=0.0` / `q_init=0.01, r_init=1.5, p_init=0.03, p_delta_init=0.05`
-- `N_horizon=5`, `huber_c=1000`, `tikhonov_lambda=1e-8`, `update_interval=1`
-- done: `use_logical_done=False`, `drift_patience=5`, `soft_recovery_timeout=15.0`
+- UT: `alpha=0.3`(σ스프레드 축소·발산억제), `beta=2.0, kappa=0.0` / `q_init=0.01, r_init=1.5, p_init=0.03, p_delta_init=0.05` (q/r은 **분산 컨벤션**: rhukf_core에서 제곱 안 함)
+- `N_horizon=5`, `huber_c=3`(adapt-R 실작동), `tikhonov_lambda=1e-8`, `update_interval=4`
+- done: `use_logical_done=False`, `max_error=10`/`drift_patience=10`(통제상실 안전망=truncation, 페널티X), `soft_recovery_timeout=15.0`
+- 보상: `terminal_penalty=-4`는 **물리 추락(altitude/flip)에만**; escalation은 `min(delay,5)`로 캡
+
+## 최신 개정 (이 통합본에 반영됨)
+- **곱셈형 LoE 공격**: `run_sim.py`가 PX4 명령(thrust/torque setpoint)을 구독해 `-α·u_ref` 외력/토크 주입 → 플랜트가 `(1-α)·u_ref`에 반응. `attack_intensity`는 이제 **LoE 비율 α**. 강도 밴드는 커리큘럼 α∈[0.15,0.45](TWR 의존 → sweep로 상한 검증 권장), ramp `0.6s`.
+- **발산 안정화**: alpha 0.3 / update_interval 4 / huber_c 3 / Q·R 제곱 제거(분산 컨벤션).
+- **보상 분산 완화**: crash_drift는 물리 terminal에서 제외(truncation), terminal_penalty −4, escalation 캡.
+- **torch.compile(default)**: `use_compile=True` → `warmup_compile()`이 startup에서 학습 hot path만 컴파일+사전워밍업(실패 시 eager 폴백). act(제어)는 eager.
+- **GUI 편의**: chase-cam(드론 추적) + 컬러 무대 조명(`run_sim.py`).
 - attack: `attack_mode='burst'`, `attack_burst_count_range=(2,4)`, `_on_range=(15,35)`, `_off_range=(20,50)`
 
 ## 오프라인 검증 (custom_env — 이번 온라인 실험엔 미사용)

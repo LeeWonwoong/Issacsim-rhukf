@@ -27,7 +27,7 @@ class Config:
     headless: bool = False
     sim_launcher: str = 'isim'
     use_tf32_forward: bool = False   # forward(matmul)만 TF32 허용(Ampere+); 행렬연산은 항상 FP32. 전역 기본 FP32.
-    use_compile: bool = False        # torch.compile (실시간 충돌 시 False)
+    use_compile: bool = True         # torch.compile(default) — warmup_compile에서 학습 hot path만 컴파일+사전워밍업
     agent_type: str = "rhukf"        # 'rhukf'(제안) | 'adam'(Adam+Huber baseline)
     adam_lr: float = 3e-4            # Adam baseline 학습률
 
@@ -47,7 +47,7 @@ class Config:
     #  드론 물리 (보상/판정용)
     # ══════════════════════════════════════════════════════════
     natural_lag: float = 1.0
-    max_error: float = 4.0
+    max_error: float = 10.0          # drift 종료용 '통제상실' 경계(추적오차 판정 아님). 회복가능 상황엔 안 터지게 크게
     min_altitude: float = -0.5
     flight_altitude: float = 5.0
     flight_radius: float = 5.0
@@ -144,7 +144,7 @@ class Config:
     use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
 
     N_horizon: int = 5
-    update_interval: int = 4               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
+    update_interval: int = 1               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
     tau_srrhuif: float = 0.005             # soft target update 비율
     target_update_mode: str = 'soft'       # 'soft'(선택) | 'hard'
     target_update_period: int = 200
@@ -157,11 +157,13 @@ class Config:
     # ── 노이즈/공분산 (eps와 동일 지수 스케줄: init→end) ──
     q_init: float = 1e-2
     q_end: float = 1e-2
+
     r_init: float = 1.5
     r_end: float = 1.5
+
     p_init: float = 0.03                   # 초기 파라미터 공분산
     p_delta_init: float = 0.05             # error-state Δ 초기 공분산
-    huber_c: float = 5.0                   # Phase0: 1000→5 잠정 (Huber-적응 R 활성화). 첫 실행 |residual| 중앙값 보고 2~10 조정
+    huber_c: float = 7.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ──
@@ -188,7 +190,7 @@ class Config:
     # ══════════════════════════════════════════════════════════
     done_steps: int = 4                    # 논리적 종료 한계 (use_logical_done=True일 때만 사용)
     use_logical_done: bool = False         # 논리적 종료(미탐/복귀/오탐) 사용 여부. 기본 False = 물리적 crash만 종료
-    drift_patience: int = 5                # crash_drift: 연속 N RL스텝(10Hz≈0.5s) 이탈 시에만 종료
+    drift_patience: int = 10               # crash_drift: >max_error를 연속 10스텝(10Hz≈1.0s) 지속 시에만 = 명백한 통제상실 안전망. truncation(페널티X)
     soft_recovery_timeout: float = 15.0    # SOFT_RECOVERY 복구 실패 시 WARM_RESET 에스컬레이션 (초)
 
     # ══════════════════════════════════════════════════════════

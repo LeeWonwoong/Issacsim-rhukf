@@ -43,8 +43,8 @@ from env.reward import calculate_reward
 from rl.agent import OnlineRHUKFAgent
 
 
-# 물리적 crash만 부트스트랩 terminal(가치=0). timeout·논리종료는 truncation.
-PHYSICAL_TERMINALS = ('crash_drift', 'crash_altitude', 'crash_flip')
+# 물리적 crash만 부트스트랩 terminal(가치=0)+종단 페널티. drift는 비행 중 이탈→truncation(SOFT 리셋, 페널티 X, 부트스트랩 유지).
+PHYSICAL_TERMINALS = ('crash_altitude', 'crash_flip')
 
 
 # ══════════════════════════════════════════════════════════════

@@ -77,7 +77,22 @@ class OnlineAdamAgent:
 
     # ─────────────────────────────────────────────────────────
     def warmup_compile(self):
-        return
+        """use_compile=True면 net을 default 모드로 컴파일 + startup 더미 워밍업(학습 B=batch / act B=1).
+        실패 시 eager 폴백. (옵티마이저는 동일 파라미터를 가리키므로 재바인딩 불필요.)"""
+        if not getattr(self.cfg, 'use_compile', False):
+            return
+        try:
+            self.net = torch.compile(self.net)          # default mode
+            self.net.train()
+            for B in (self.cfg.batch_size, 1):           # 학습(B=batch) + act(B=1) 경로 컴파일
+                x = torch.zeros(B, self.cfg.dimS, dtype=torch.float32, device=self.device)
+                self.net(x).sum().backward()
+            self.net.zero_grad(set_to_none=True)
+            if self.device == 'cuda':
+                torch.cuda.synchronize()
+            print("  [compile] Adam net 컴파일+워밍업 완료 (default)")
+        except Exception as e:
+            print(f"  [compile] Adam 컴파일 실패 → eager 유지: {e}")
 
     def act(self, state, eps):
         self.steps_done += 1

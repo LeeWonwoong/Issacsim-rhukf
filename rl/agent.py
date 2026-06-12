@@ -75,10 +75,38 @@ class OnlineRHUKFAgent:
               f"PER: {'ON' if cfg.use_per else 'off'} | n-step: {cfg.n_step_size if cfg.use_n_step else 1}")
 
     # ═════════════════════════════════════════════════════════
-    #  Warmup (no torch.compile in online mode)
+    #  Warmup / Compile (학습 hot path만; act는 eager; startup에서 사전 워밍업)
     # ═════════════════════════════════════════════════════════
     def warmup_compile(self):
-        return
+        """use_compile=True면 학습 hot path(forward_single/forward_bmm)만 default 모드로 컴파일하고
+        startup 중 실제 shape 더미로 미리 워밍업(첫 컴파일 지연을 라이브 전에 흡수).
+        act()(제어 경로)는 eager 유지. 실패하면 eager로 자동 폴백(런 안 죽음)."""
+        if not getattr(self.cfg, 'use_compile', False):
+            return
+        try:
+            from . import network as net_mod
+            from . import rhukf_core as core_mod
+            c_single = torch.compile(net_mod.forward_single)   # default mode
+            c_bmm = torch.compile(net_mod.forward_bmm)
+            # 학습 경로가 호출하는 전역 이름 교체 (filter/init_error_horizon/per가 core_mod 전역으로 조회).
+            # agent.py가 import한 forward_single(act 경로)은 건드리지 않음 → 제어는 eager.
+            net_mod.forward_single = c_single
+            net_mod.forward_bmm = c_bmm
+            core_mod.forward_single = c_single
+            core_mod.forward_bmm = c_bmm
+            # ── 더미 워밍업: 실제 shape로 컴파일 트리거 (B=batch) ──
+            n_x = self.info['total_params']; num_sigma = 2 * n_x + 1; B = self.cfg.batch_size
+            s_b = torch.zeros(self.cfg.dimS, B, dtype=DTYPE, device=self.device)
+            sig = torch.zeros(num_sigma, n_x, dtype=DTYPE, device=self.device)
+            th = self.theta.squeeze()
+            with torch.no_grad():
+                _ = c_bmm(sig, self.info, s_b)        # 학습 hot path (시그마 forward)
+                _ = c_single(th, self.info, s_b)      # filter 내 a_best (B=batch)
+            if self.device == 'cuda':
+                torch.cuda.synchronize()
+            print("  [compile] RHUKF forward_single/forward_bmm 컴파일+워밍업 완료 (default). act는 eager")
+        except Exception as e:
+            print(f"  [compile] RHUKF 컴파일 실패 → eager 유지: {e}")
 
     # ═════════════════════════════════════════════════════════
     #  Action Selection
