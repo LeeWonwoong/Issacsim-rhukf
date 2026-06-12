@@ -5,7 +5,7 @@ run_sim.py — Isaac Sim + PX4 물리 엔진 구동
   1. PhysX 물리 시뮬레이션 (250Hz)
   2. GPS 센서 퍼블리시 (10Hz) — 순수 노이즈만, 센서 공격 없음
   3. Ground Truth Odometry 퍼블리시 (250Hz)
-  4. 액추에이터 공격 주입 (Additive 외력/토크 + 0.1s Ramp)
+  4. 액추에이터 공격 주입 (곱셈형 LoE: actual=(1-α)·u_ref, -α·u_ref 외력/토크 주입 + Ramp)
   5. 환경 외란 (바람, 충돌)
   6. 에피소드 리셋 제어
 
@@ -43,12 +43,14 @@ from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from scipy.spatial.transform import Rotation
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Vector3Stamped
 from std_msgs.msg import String
-from px4_msgs.msg import SensorGps
+from px4_msgs.msg import SensorGps, VehicleThrustSetpoint, VehicleTorqueSetpoint
 
-from swrl_config import compute_attack_ramp, compute_attack_forces
+from swrl_config import compute_attack_ramp
+from env.ukf_filter import load_calibration
 
 
 # ══════════════════════════════════════════════════════════════
@@ -108,9 +110,17 @@ class PegasusApp:
 
         self.attack_active = False
         self.attack_type = 'none'
-        self.attack_intensity = 0.0
+        self.attack_intensity = 0.0       # 이제 LoE 비율 α (0~1)
         self.attack_start_time = 0.0
         self.attack_ramp_duration = 0.1
+
+        # 곱셈형 LoE용: PX4가 명령한 추력/토크 (u_ref) + calib 계수
+        self.cmd_thrust = np.zeros(3)
+        self.cmd_torque = np.zeros(3)
+        self.calib = load_calibration('calibration.json')
+        self._C_thrust = self.calib['C_thrust']
+        self._C_torque_xy = self.calib['C_torque_xy']
+        self._C_torque_z = self.calib['C_torque_z']
 
         self.last_gps_time = 0.0
         self.gps_noise_state = np.zeros(3)
@@ -135,6 +145,18 @@ class PegasusApp:
             String, '/scenario_config', self._cb_scenario_config, 10)
         self.ros_node.create_subscription(
             String, '/sim_control', self._cb_sim_control, 10)
+
+        # PX4가 명령한 actuator setpoint 구독 (곱셈형 LoE = -α·u_ref 주입용)
+        px4_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST, depth=5)
+        self.ros_node.create_subscription(
+            VehicleThrustSetpoint, '/fmu/out/vehicle_thrust_setpoint',
+            self._cb_thrust, px4_qos)
+        self.ros_node.create_subscription(
+            VehicleTorqueSetpoint, '/fmu/out/vehicle_torque_setpoint',
+            self._cb_torque, px4_qos)
 
         self.timeline = omni.timeline.get_timeline_interface()
         self.pg = PegasusInterface()
@@ -196,6 +218,12 @@ class PegasusApp:
             self.needs_reset = True
             carb.log_warn("[SIM] Reset requested")
 
+    def _cb_thrust(self, msg):
+        self.cmd_thrust[:] = msg.xyz[:3]
+
+    def _cb_torque(self, msg):
+        self.cmd_torque[:] = msg.xyz[:3]
+
     def _setup_body_view(self):
         for path in ["/World/quadrotor/body", "/World/quadrotor"]:
             prim = self.stage.GetPrimAtPath(path)
@@ -237,12 +265,22 @@ class PegasusApp:
             attack_force = np.zeros(3)
             attack_torque = np.zeros(3)
 
-            if self.attack_active:
+            if self.attack_active and self.attack_type != 'none':
                 t_since = self.sim_time - self.attack_start_time
-                current_intensity = compute_attack_ramp(
+                alpha = compute_attack_ramp(
                     t_since, self.attack_intensity, self.attack_ramp_duration)
-                attack_force, attack_torque = compute_attack_forces(
-                    self.attack_type, current_intensity)
+                # ── 곱셈형 LoE: 플랜트가 (1-α)·u_ref 에 반응하도록 -α·u_ref 주입 ──
+                #   u_ref(물리량) = PX4 명령 setpoint × calib. (덧셈 고정크기 → 명령 비례로 변경)
+                #   주입 프레임/적용방식은 기존(월드, is_global=True)과 동일 유지.
+                #   ※ 부호 규약: 원본 loe_thrust가 force[2]=-mag(하향=고도손실)였던 것과 동일.
+                #     만약 너 환경에서 원본이 상향이었다면 부호만 뒤집으면 됨.
+                f_thrust = abs(self.cmd_thrust[2]) * self._C_thrust   # 명령 추력 크기(N)
+                attack_force[2] = -alpha * f_thrust                   # 추력 LoE (월드 z 하향)
+                if self.attack_type == 'loe_combined':
+                    # 토크 채널에도 동일 LoE: -α·(명령 토크). 명령 비례라 크기가 자동 유계.
+                    attack_torque[0] = -alpha * (self.cmd_torque[0] * self._C_torque_xy)
+                    attack_torque[1] = -alpha * (self.cmd_torque[1] * self._C_torque_xy)
+                    attack_torque[2] = -alpha * (self.cmd_torque[2] * self._C_torque_z)
 
             total_force = wf + attack_force
 

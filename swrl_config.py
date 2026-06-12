@@ -36,7 +36,7 @@ class Config:
     # ══════════════════════════════════════════════════════════
     warmup_seconds: float = 3.0
     attack_start_range: Tuple[int, int] = (30, 100)
-    attack_ramp_duration: float = 0.05
+    attack_ramp_duration: float = 0.6     # LoE α가 0→목표까지 차오르는 시간(초). 잔차 점진 상승→선제 호버 가능
     attack_duration_range: Tuple[int, int] = (50, 120)
 
     eps_action_probs: List[float] = field(default_factory=lambda: [0.9, 0.1])
@@ -79,10 +79,12 @@ class Config:
     # ══════════════════════════════════════════════════════════
     #  커리큘럼
     # ══════════════════════════════════════════════════════════
+    # 강도 = LoE 비율 α (0~1). "track하면 추락 / hover하면 생존" 밴드로 한정.
+    #   ※ TWR 의존이라 실제 상한은 sweep로 검증 필요 (호버 시 (1-α)·hover_thrust ≥ weight).
     curriculum_enabled: bool = True
-    curriculum_fixed_min: float = 0.04
-    curriculum_start_max: float = 0.05
-    curriculum_end_max: float = 0.9
+    curriculum_fixed_min: float = 0.15
+    curriculum_start_max: float = 0.20
+    curriculum_end_max: float = 0.45
     curriculum_warmup_episodes: int = 50
     curriculum_full_episodes: int = 150
 
@@ -142,13 +144,13 @@ class Config:
     use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
 
     N_horizon: int = 5
-    update_interval: int = 1               # learn 빈도 게이트: N 스텝(=N번의 learn 호출)마다 1번만 실제 업데이트 (1=매 스텝)
+    update_interval: int = 4               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
     tau_srrhuif: float = 0.005             # soft target update 비율
     target_update_mode: str = 'soft'       # 'soft'(선택) | 'hard'
     target_update_period: int = 200
 
     # ── UKF 시그마포인트 ──
-    alpha: float = 0.9
+    alpha: float = 0.3                     # Phase0: 0.9→0.3 (n_x≈514에서 σ스프레드 3배 축소→발산 억제)
     beta: float = 2.0
     kappa: float = 0.0
 
@@ -159,7 +161,7 @@ class Config:
     r_end: float = 1.5
     p_init: float = 0.03                   # 초기 파라미터 공분산
     p_delta_init: float = 0.05             # error-state Δ 초기 공분산
-    huber_c: float = 1000.0
+    huber_c: float = 5.0                   # Phase0: 1000→5 잠정 (Huber-적응 R 활성화). 첫 실행 |residual| 중앙값 보고 2~10 조정
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ──
@@ -203,10 +205,10 @@ class Config:
          'attack_intensity': 0.0, 'attack_start_step': 0,
          'disturbance_type': 'none', 'wind_speed': 0.0},
         {'pattern': 'circle', 'attack_type': 'loe_combined',
-         'attack_intensity': 0.055, 'attack_start_step': 50,
+         'attack_intensity': 0.25, 'attack_start_step': 50,
          'disturbance_type': 'none', 'wind_speed': 0.0},
         {'pattern': 'figure8', 'attack_type': 'loe_combined',
-         'attack_intensity': 0.8, 'attack_start_step': 50,
+         'attack_intensity': 0.40, 'attack_start_step': 50,
          'disturbance_type': 'none', 'wind_speed': 0.0},
     ])
 

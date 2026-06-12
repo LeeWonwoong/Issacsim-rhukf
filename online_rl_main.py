@@ -702,10 +702,14 @@ class OnlineRLNode(Node):
         reward = calculate_reward(
             self.prev_action if self.prev_action is not None else 0,
             self.attack_active_flag,
-            attack_delay,
-            recovery_delay,
+            min(attack_delay, 5),      # Phase0: escalation 캡 (분산 폭주 차단; -1-0.2·5²=-6에서 포화)
+            min(recovery_delay, 5),    # Phase0: escalation 캡 (raw delay는 logical_done 판정에 그대로 사용)
             rc=self.cfg.reward,
         )
+        # 물리적 crash = 결과 기반 종단 페널티 (추종오차 대신 '추락=나쁨' outcome anchor).
+        #   강도가 '생존 가능 띠'에 들어와 있을 때만 깨끗한 신호가 됨(즉사 구간이면 노이즈).
+        if done and term_reason in PHYSICAL_TERMINALS:
+            reward += self.cfg.reward.terminal_penalty
         self.episode_reward += reward
 
         # ── 3. 논리적 종료 (use_logical_done=True일 때만; 기본 False=물리 crash만) ──
