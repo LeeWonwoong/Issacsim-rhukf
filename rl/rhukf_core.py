@@ -108,7 +108,7 @@ def rhukf_step_fv(theta_current_in, theta_target, filter_P_cov, batch, sp,
     # ── [A] Time update: P_pred = P_prev + Q ────────────────────────
     eye_n = fv_cache.eye_n
     P_prev = (p_init_val * eye_n) if (is_first or filter_P_cov is None) else filter_P_cov
-    Q_proc = (cfg.q_init ** 2) * eye_n
+    Q_proc = cfg.q_init * eye_n            # Phase0: 분산 컨벤션(제곱 제거)→P 재팽창 복원
     P_pred = P_prev + Q_proc
     P_pred = 0.5 * (P_pred + P_pred.t())
 
@@ -166,7 +166,7 @@ def rhukf_step_fv(theta_current_in, theta_target, filter_P_cov, batch, sp,
     res_abs = torch.abs(residual).squeeze(-1)
     adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0)
     current_r_std = sp.get('current_r_std', cfg.r_init)
-    R_diag_eff = (current_r_std ** 2) * adapt_factor
+    R_diag_eff = current_r_std * adapt_factor   # Phase0: 분산 컨벤션(제곱 제거)
     R_diag_eff = _apply_is_weight_to_R(R_diag_eff, batch, cfg)
     P_zz = P_zz_sigma + torch.diag(R_diag_eff)
     P_zz = 0.5 * (P_zz + P_zz.t())
@@ -303,7 +303,7 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
         P_delta_prev = filter_state['P_delta']
 
     # ── Time update ─────────────────────────────────────────────────
-    Q_proc = (cfg.q_init ** 2) * eye_n
+    Q_proc = cfg.q_init * eye_n            # Phase0: 분산 컨벤션(제곱 제거)→P 재팽창 복원
     P_delta_pred = P_delta_prev + Q_proc
     P_delta_pred = 0.5 * (P_delta_pred + P_delta_pred.t())
 
@@ -378,7 +378,7 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
     res_abs = torch.abs(residual).squeeze(-1)
     adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0)
     current_r_std = sp.get('current_r_std', cfg.r_init)
-    R_diag_eff = (current_r_std ** 2) * adapt_factor
+    R_diag_eff = current_r_std * adapt_factor   # Phase0: 분산 컨벤션(제곱 제거)
     R_diag_eff = _apply_is_weight_to_R(R_diag_eff, batch, cfg)
     P_zz = P_zz_sigma + torch.diag(R_diag_eff)
     P_zz = 0.5 * (P_zz + P_zz.t())
