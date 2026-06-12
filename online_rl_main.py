@@ -856,11 +856,11 @@ def main():
     rclpy.init()
     node = OnlineRLNode(cfg)
 
-    node.get_logger().warn(
-        '\n  ⚠️  PX4 배터리 Failsafe 비활성화 필요:\n'
-        '    param set COM_LOW_BAT_ACT 0\n'
-        '    param set COM_DISARM_LAND -1\n'
-        '    param save\n')
+    # ── PX4 배터리 Failsafe는 최초 1회 pxh에서 끄고 저장하면 영구 유지(매 실행 reminder는 노이즈라 제거) ──
+    #     param set COM_LOW_BAT_ACT 0
+    #     param set COM_DISARM_LAND -1
+    #     param save
+    #   (미설정이면 에피소드 중 배터리 failsafe로 disarm될 수 있음)
 
     node.agent.warmup_compile()
 

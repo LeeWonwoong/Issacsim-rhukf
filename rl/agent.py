@@ -96,7 +96,9 @@ class OnlineRHUKFAgent:
             core_mod.forward_bmm = c_bmm
             # ── 더미 워밍업: 실제 shape로 컴파일 트리거 (B=batch) ──
             n_x = self.info['total_params']; num_sigma = 2 * n_x + 1; B = self.cfg.batch_size
-            s_b = torch.zeros(self.cfg.dimS, B, dtype=DTYPE, device=self.device)
+            # 실제 호출 방향과 동일하게 [B, dimS]. (forward_bmm은 내부에서 x.t()→[dimS,B]로 expand;
+            #  학습 경로의 s_batch=batch['s'].t()=[B,dimS]이므로 여기서도 [B,dimS]로 줘야 bmm 차원 일치)
+            s_b = torch.zeros(B, self.cfg.dimS, dtype=DTYPE, device=self.device)
             sig = torch.zeros(num_sigma, n_x, dtype=DTYPE, device=self.device)
             th = self.theta.squeeze()
             with torch.no_grad():

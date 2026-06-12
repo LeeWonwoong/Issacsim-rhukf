@@ -143,7 +143,7 @@ class Config:
     h0_prior_source: str = 'target'
     use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
 
-    N_horizon: int = 5
+    N_horizon: int = 6
     update_interval: int = 1               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
     tau_srrhuif: float = 0.005             # soft target update 비율
     target_update_mode: str = 'soft'       # 'soft'(선택) | 'hard'
@@ -158,12 +158,12 @@ class Config:
     q_init: float = 1e-2
     q_end: float = 1e-2
 
-    r_init: float = 1.5
-    r_end: float = 1.5
-
+    r_init: float = 0.5
+    r_end: float = 0.5
+    
     p_init: float = 0.03                   # 초기 파라미터 공분산
     p_delta_init: float = 0.05             # error-state Δ 초기 공분산
-    huber_c: float = 7.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
+    huber_c: float = 3.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ──
