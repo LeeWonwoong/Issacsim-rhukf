@@ -356,13 +356,16 @@ class OnlineRLNode(Node):
         off.timestamp = 0
         self.pub_offboard.publish(off)
 
-    def _send_attack_cmd(self, active, attack_type='none', intensity=0.0):
+    def _send_attack_cmd(self, active, attack_type='none', intensity=0.0,
+                         bias_torque_xy=None, bias_torque_z=None, bias_thrust_n=None):
+        # bias_* 인자가 주어지면 그 값으로 override(주로 b-sweep용), 아니면 cfg 기본 사용.
+        gx = getattr(self.cfg, 'bias_torque_xy', 0.12) if bias_torque_xy is None else bias_torque_xy
+        gz = getattr(self.cfg, 'bias_torque_z', 0.0)   if bias_torque_z  is None else bias_torque_z
+        gt = getattr(self.cfg, 'bias_thrust_n', 2.0)   if bias_thrust_n  is None else bias_thrust_n
         msg = String(); msg.data = json.dumps({'active': active, 'type': attack_type,
             'intensity': intensity, 'ramp_duration': self.cfg.attack_ramp_duration,
             'form': getattr(self.cfg, 'attack_form', 'additive'),
-            'bias_torque_xy': getattr(self.cfg, 'bias_torque_xy', 0.12),
-            'bias_torque_z': getattr(self.cfg, 'bias_torque_z', 0.0),
-            'bias_thrust_n': getattr(self.cfg, 'bias_thrust_n', 2.0)})
+            'bias_torque_xy': gx, 'bias_torque_z': gz, 'bias_thrust_n': gt})
         self.pub_attack.publish(msg)
 
     def _send_scenario_cmd(self):
@@ -973,7 +976,9 @@ class OnlineRLNode(Node):
             'survived', 'crash_step', 'crash_reason', 'steps'])
         self.get_logger().info(
             f'\n{"#"*60}\n  [SWEEP] {len(cells)} cells × {cfg.sweep_episodes} ep '
-            f'| α={cfg.sweep_alphas}\n  attack: loe_combined @step{cfg.sweep_attack_start}, '
+            f'| form={getattr(cfg,"attack_form","additive")} '
+            f'{"b(Nm)" if getattr(cfg,"attack_form","additive")=="additive" else "α"}={cfg.sweep_alphas}\n'
+            f'  attack: loe_combined @step{cfg.sweep_attack_start}, '
             f'ramp={cfg.attack_ramp_duration}s | q_gate={self._ukf_q_gate}\n{"#"*60}')
 
     def _start_sweep_episode(self):
@@ -1015,10 +1020,15 @@ class OnlineRLNode(Node):
 
         done, term_reason = self._check_done(trajectory_sp)
 
-        # ── 공격 토글 (단일 윈도우; α=0이면 무해) ──
+        # ── 공격 토글 (단일 윈도우; 강도=0이면 무해) ──
         want_attack = self._is_attack_step(self.step_count)
         if want_attack and not self.attack_active_flag:
-            self._send_attack_cmd(True, 'loe_combined', self.sweep_alpha)
+            if getattr(self.cfg, 'attack_form', 'additive') == 'additive':
+                # 가산 b-sweep: sweep 값 = 토크 바이어스 b(Nm) 직접, intensity=1(ramp 풀로), 토크전용
+                self._send_attack_cmd(True, 'loe_combined', 1.0,
+                    bias_torque_xy=self.sweep_alpha, bias_torque_z=0.0, bias_thrust_n=0.0)
+            else:
+                self._send_attack_cmd(True, 'loe_combined', self.sweep_alpha)  # 곱셈: α
             self.attack_active_flag = True
             self._cur_burst_start = self.step_count
         elif (not want_attack) and self.attack_active_flag:

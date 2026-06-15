@@ -238,11 +238,15 @@ class Config:
     # ══════════════════════════════════════════════════════════
     #  α-SWEEP (결과성 밴드 + 탐지가능성 + CUSUM baseline 특성화)
     # ══════════════════════════════════════════════════════════
-    #  sweep_mode=True면 학습 OFF. (α × {track,hover}) 셀을 순회하며 고정정책으로 비행,
+    #  sweep_mode=True면 학습 OFF. (강도 × {track,hover}) 셀을 순회하며 고정정책으로 비행,
     #  raw NIS + 생존/추락을 CSV로 기록. online_rl_main.py --sweep 로 켬.
+    #  ※ sweep 값의 의미 = attack_form에 따라:
+    #     additive       → 토크 바이어스 크기 b(Nm) 직접 (training용 bias_*는 안 건드리고 셀마다 주입, 토크전용)
+    #     multiplicative → LoE 비율 α(0~1)
+    #  → "track 추락 ∧ hover 생존" 밴드 [b_track, b_hover)를 찾는 게 목적.
     sweep_mode: bool = False
     sweep_alphas: List[float] = field(default_factory=lambda: [
-        0.10, 0.20, 0.30, 0.40, 0.50, 0.60])
+        0.10, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00])   # additive: b(Nm) / mult이면 [0.1..0.6]로 교체
     sweep_pattern: str = 'aggressive'      # track 셀의 비행패턴(명령토크 최대=최악조건)
     sweep_episodes: int = 4                # 셀당 반복(RNG 노이즈)
     sweep_attack_start: int = 30           # 공격 ON 스텝(@10Hz). 이후 ramp 1.0s
