@@ -78,37 +78,47 @@ class OnlineRHUKFAgent:
     #  Warmup / Compile (학습 hot path만; act는 eager; startup에서 사전 워밍업)
     # ═════════════════════════════════════════════════════════
     def warmup_compile(self):
-        """use_compile=True면 학습 hot path(forward_single/forward_bmm)만 default 모드로 컴파일하고
-        startup 중 실제 shape 더미로 미리 워밍업(첫 컴파일 지연을 라이브 전에 흡수).
-        act()(제어 경로)는 eager 유지. 실패하면 eager로 자동 폴백(런 안 죽음)."""
+        """use_compile=True면 학습 hot path(forward_single/forward_bmm)를 컴파일하고
+        startup 중 실제 shape 더미로 미리 워밍업(첫 컴파일 지연을 라이브 전에 흡수 = "기다렸다 컴파일 후 실행").
+        백엔드 캐스케이드: inductor(최적) → aot_eager(C++ codegen 불필요) → eager.
+        act()(제어 경로)는 항상 eager 유지. 실패해도 런 안 죽음."""
         if not getattr(self.cfg, 'use_compile', False):
             return
-        try:
-            from . import network as net_mod
-            from . import rhukf_core as core_mod
-            c_single = torch.compile(net_mod.forward_single)   # default mode
-            c_bmm = torch.compile(net_mod.forward_bmm)
-            # 학습 경로가 호출하는 전역 이름 교체 (filter/init_error_horizon/per가 core_mod 전역으로 조회).
-            # agent.py가 import한 forward_single(act 경로)은 건드리지 않음 → 제어는 eager.
-            net_mod.forward_single = c_single
-            net_mod.forward_bmm = c_bmm
-            core_mod.forward_single = c_single
-            core_mod.forward_bmm = c_bmm
-            # ── 더미 워밍업: 실제 shape로 컴파일 트리거 (B=batch) ──
-            n_x = self.info['total_params']; num_sigma = 2 * n_x + 1; B = self.cfg.batch_size
-            # 실제 호출 방향과 동일하게 [B, dimS]. (forward_bmm은 내부에서 x.t()→[dimS,B]로 expand;
-            #  학습 경로의 s_batch=batch['s'].t()=[B,dimS]이므로 여기서도 [B,dimS]로 줘야 bmm 차원 일치)
-            s_b = torch.zeros(B, self.cfg.dimS, dtype=DTYPE, device=self.device)
-            sig = torch.zeros(num_sigma, n_x, dtype=DTYPE, device=self.device)
-            th = self.theta.squeeze()
-            with torch.no_grad():
-                _ = c_bmm(sig, self.info, s_b)        # 학습 hot path (시그마 forward)
-                _ = c_single(th, self.info, s_b)      # filter 내 a_best (B=batch)
-            if self.device == 'cuda':
-                torch.cuda.synchronize()
-            print("  [compile] RHUKF forward_single/forward_bmm 컴파일+워밍업 완료 (default). act는 eager")
-        except Exception as e:
-            print(f"  [compile] RHUKF 컴파일 실패 → eager 유지: {e}")
+        from . import network as net_mod
+        from . import rhukf_core as core_mod
+        import torch._dynamo as _dyn
+        # 워밍업 동안엔 실패를 '잡아서' 다음 백엔드로 넘기려고 suppress_errors를 잠시 끔
+        _prev = getattr(_dyn.config, 'suppress_errors', False)
+        _dyn.config.suppress_errors = False
+
+        n_x = self.info['total_params']; num_sigma = 2 * n_x + 1; B = self.cfg.batch_size
+        # 실제 호출 방향과 동일 [B, dimS] (forward_bmm 내부 x.t()→[dimS,B] expand)
+        s_b = torch.zeros(B, self.cfg.dimS, dtype=DTYPE, device=self.device)
+        sig = torch.zeros(num_sigma, n_x, dtype=DTYPE, device=self.device)
+        th = self.theta.squeeze()
+
+        for backend in ('inductor', 'aot_eager'):
+            try:
+                _dyn.reset()   # 이전 시도 캐시 정리
+                c_single = torch.compile(net_mod.forward_single, backend=backend)
+                c_bmm = torch.compile(net_mod.forward_bmm, backend=backend)
+                with torch.no_grad():
+                    _ = c_bmm(sig, self.info, s_b)        # 시그마 forward (학습 hot path)
+                    _ = c_single(th, self.info, s_b)      # filter 내 a_best (B=batch)
+                if self.device == 'cuda':
+                    torch.cuda.synchronize()
+                # 성공: 학습 경로 전역 이름 교체 (agent.py import한 forward_single=act경로는 eager 유지)
+                net_mod.forward_single = c_single; net_mod.forward_bmm = c_bmm
+                core_mod.forward_single = c_single; core_mod.forward_bmm = c_bmm
+                _dyn.config.suppress_errors = _prev
+                print(f"  [compile] RHUKF 컴파일+워밍업 완료 (backend={backend}). act는 eager")
+                return
+            except Exception as e:
+                _dyn.reset()
+                print(f"  [compile] backend={backend} 실패 → 다음 시도: {str(e)[:160]}")
+                continue
+        _dyn.config.suppress_errors = _prev
+        print("  [compile] inductor/aot_eager 모두 실패 → eager 유지 (런 정상, 레퍼런스도 eager)")
 
     # ═════════════════════════════════════════════════════════
     #  Action Selection

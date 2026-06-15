@@ -27,19 +27,25 @@ class Config:
     headless: bool = False
     sim_launcher: str = 'isim'
     use_tf32_forward: bool = False   # forward(matmul)만 TF32 허용(Ampere+); 행렬연산은 항상 FP32. 전역 기본 FP32.
-    use_compile: bool = True         # torch.compile(default) — warmup_compile에서 학습 hot path만 컴파일+사전워밍업
+    use_compile: bool = True         # startup에서 학습 hot path 컴파일(inductor→aot_eager→eager 캐스케이드)+사전워밍업 후 spin. Isaac 번들 토치는 inductor 실패 시 자동 폴백
     agent_type: str = "rhukf"        # 'rhukf'(제안) | 'adam'(Adam+Huber baseline)
     adam_lr: float = 3e-4            # Adam baseline 학습률
+
+    # ── DynamicsUKF(탐지 필터) 고집/관측가능성 ──
+    #   stubbornness = low Q(현행 유지) + R을 실측 노이즈에 정합(아래 ukf_filter) + ff=1.0.
+    #   maneuver-gated Q: 명령 토크에 비례해 gyro 프로세스노이즈 인플레 → 정상 기동 FP 억제.
+    #   기본 0.0(off). sweep의 baseline-aggressive 셀에서 정상기동 NIS가 높으면 켜기(예: 0.05~0.2).
+    ukf_q_gate_gyro: float = 0.0
 
     # ══════════════════════════════════════════════════════════
     #  에피소드 구조
     # ══════════════════════════════════════════════════════════
     warmup_seconds: float = 3.0
     attack_start_range: Tuple[int, int] = (30, 100)
-    attack_ramp_duration: float = 0.6     # LoE α가 0→목표까지 차오르는 시간(초). 잔차 점진 상승→선제 호버 가능
+    attack_ramp_duration: float = 1.0     # LoE α가 0→목표까지 차오르는 시간(초)=10스텝@10Hz. 잔차 점진 상승→선제 호버 여유
     attack_duration_range: Tuple[int, int] = (50, 120)
 
-    eps_action_probs: List[float] = field(default_factory=lambda: [0.9, 0.1])
+    eps_action_probs: List[float] = field(default_factory=lambda: [0.5, 0.5])  # 50/50: (공격∧hover) 쌍 커버. hover는 안전한 탐험
 
     log_interval: int = 10
 
@@ -65,8 +71,7 @@ class Config:
     # ══════════════════════════════════════════════════════════
     attack_enabled: bool = True
     attack_types: List[str] = field(default_factory=lambda: [
-        'loe_thrust',
-        'loe_combined',
+        'loe_combined',   # 추력+토크 LoE. 토크 결손이 자세붕괴=결과성+탐지가능. (loe_thrust는 PX4가 보상=무해라 제거; FP압력은 기동/바람이 담당)
     ])
     prob_no_attack: float = 0.15
 
@@ -143,8 +148,8 @@ class Config:
     h0_prior_source: str = 'target'
     use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
 
-    N_horizon: int = 6
-    update_interval: int = 1               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
+    N_horizon: int = 5
+    update_interval: int = 4               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
     tau_srrhuif: float = 0.005             # soft target update 비율
     target_update_mode: str = 'soft'       # 'soft'(선택) | 'hard'
     target_update_period: int = 200
@@ -157,10 +162,8 @@ class Config:
     # ── 노이즈/공분산 (eps와 동일 지수 스케줄: init→end) ──
     q_init: float = 1e-2
     q_end: float = 1e-2
-
-    r_init: float = 0.5
-    r_end: float = 0.5
-    
+    r_init: float = 1.5
+    r_end: float = 1.5
     p_init: float = 0.03                   # 초기 파라미터 공분산
     p_delta_init: float = 0.05             # error-state Δ 초기 공분산
     huber_c: float = 3.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
@@ -213,6 +216,18 @@ class Config:
          'attack_intensity': 0.40, 'attack_start_step': 50,
          'disturbance_type': 'none', 'wind_speed': 0.0},
     ])
+
+    # ══════════════════════════════════════════════════════════
+    #  α-SWEEP (결과성 밴드 + 탐지가능성 + CUSUM baseline 특성화)
+    # ══════════════════════════════════════════════════════════
+    #  sweep_mode=True면 학습 OFF. (α × {track,hover}) 셀을 순회하며 고정정책으로 비행,
+    #  raw NIS + 생존/추락을 CSV로 기록. online_rl_main.py --sweep 로 켬.
+    sweep_mode: bool = False
+    sweep_alphas: List[float] = field(default_factory=lambda: [
+        0.10, 0.20, 0.30, 0.40, 0.50, 0.60])
+    sweep_pattern: str = 'aggressive'      # track 셀의 비행패턴(명령토크 최대=최악조건)
+    sweep_episodes: int = 4                # 셀당 반복(RNG 노이즈)
+    sweep_attack_start: int = 30           # 공격 ON 스텝(@10Hz). 이후 ramp 1.0s
 
     def __post_init__(self):
         self.r_inv_sqrt = 1.0 / self.r_init

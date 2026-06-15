@@ -77,22 +77,35 @@ class OnlineAdamAgent:
 
     # ─────────────────────────────────────────────────────────
     def warmup_compile(self):
-        """use_compile=True면 net을 default 모드로 컴파일 + startup 더미 워밍업(학습 B=batch / act B=1).
-        실패 시 eager 폴백. (옵티마이저는 동일 파라미터를 가리키므로 재바인딩 불필요.)"""
+        """use_compile=True면 net을 컴파일 + startup 더미 워밍업(학습 B=batch / act B=1).
+        백엔드 캐스케이드: inductor → aot_eager → eager. 실패해도 런 안 죽음."""
         if not getattr(self.cfg, 'use_compile', False):
             return
-        try:
-            self.net = torch.compile(self.net)          # default mode
-            self.net.train()
-            for B in (self.cfg.batch_size, 1):           # 학습(B=batch) + act(B=1) 경로 컴파일
-                x = torch.zeros(B, self.cfg.dimS, dtype=torch.float32, device=self.device)
-                self.net(x).sum().backward()
-            self.net.zero_grad(set_to_none=True)
-            if self.device == 'cuda':
-                torch.cuda.synchronize()
-            print("  [compile] Adam net 컴파일+워밍업 완료 (default)")
-        except Exception as e:
-            print(f"  [compile] Adam 컴파일 실패 → eager 유지: {e}")
+        import torch._dynamo as _dyn
+        _prev = getattr(_dyn.config, 'suppress_errors', False)
+        _dyn.config.suppress_errors = False
+        base_net = self.net
+        for backend in ('inductor', 'aot_eager'):
+            try:
+                _dyn.reset()
+                compiled = torch.compile(base_net, backend=backend)
+                compiled.train()
+                for B in (self.cfg.batch_size, 1):           # 학습(B=batch) + act(B=1)
+                    x = torch.zeros(B, self.cfg.dimS, dtype=torch.float32, device=self.device)
+                    compiled(x).sum().backward()
+                compiled.zero_grad(set_to_none=True)
+                if self.device == 'cuda':
+                    torch.cuda.synchronize()
+                self.net = compiled
+                _dyn.config.suppress_errors = _prev
+                print(f"  [compile] Adam net 컴파일+워밍업 완료 (backend={backend})")
+                return
+            except Exception as e:
+                _dyn.reset()
+                print(f"  [compile] Adam backend={backend} 실패 → 다음 시도: {str(e)[:160]}")
+                continue
+        _dyn.config.suppress_errors = _prev
+        print("  [compile] Adam inductor/aot_eager 모두 실패 → eager 유지")
 
     def act(self, state, eps):
         self.steps_done += 1

@@ -138,7 +138,8 @@ class OnlineRLNode(Node):
 
         # ── UKF + Agent ──
         self.calib = load_calibration('calibration.json')
-        self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib)
+        self._ukf_q_gate = getattr(cfg, 'ukf_q_gate_gyro', 0.0)
+        self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib, q_gate=self._ukf_q_gate)
         if getattr(cfg, 'agent_type', 'rhukf') == 'adam':
             from rl.agent_adam import OnlineAdamAgent
             self.agent = OnlineAdamAgent(cfg)
@@ -205,6 +206,11 @@ class OnlineRLNode(Node):
         self.timer = self.create_timer(self.step_dt, self._tick)
 
         self.last_z_var = 0.0  # Z 분산 저장용
+
+        # ── α-SWEEP 상태 (sweep_mode일 때만) ──
+        self.sweep_mode = getattr(cfg, 'sweep_mode', False)
+        if self.sweep_mode:
+            self._sweep_setup()
 
         self.get_logger().info(
             f'[INIT] agent={getattr(cfg, "agent_type", "rhukf")} | dimS={cfg.dimS} | '
@@ -352,7 +358,7 @@ class OnlineRLNode(Node):
         self.first_hover_step = None; self.hover_before_attack_count = 0
         self._is_airborne = False; self._hover_pos[:] = 0;  self._hover_yaw = 0.0
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
-        self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib)
+        self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib, q_gate=self._ukf_q_gate)
         self.is_ukf_initialized = False; self.last_res = np.zeros(9); self.last_Pzz = np.eye(9)
         self.continuous_fp_count = 0
         self.drift_counter = 0
@@ -361,6 +367,8 @@ class OnlineRLNode(Node):
         self._last_burst_end = None
 
     def _start_new_episode(self):
+        if self.sweep_mode:
+            self._start_sweep_episode(); return
         if self.eval_mode:
             self.scenario = self.cfg.eval_scenarios[self.eval_scenario_idx]
             label = f'EVAL {self.eval_scenario_idx+1}/{len(self.cfg.eval_scenarios)}'
@@ -626,7 +634,10 @@ class OnlineRLNode(Node):
 
             if self.gps_updated:
                 self.gps_updated = False
-                self._rl_step_10hz(trajectory_sp)
+                if self.sweep_mode:
+                    self._sweep_step_10hz(trajectory_sp)
+                else:
+                    self._rl_step_10hz(trajectory_sp)
 
     # ══════════════════════════════════════════════════════════
     #  UKF Step (50Hz)
@@ -665,8 +676,9 @@ class OnlineRLNode(Node):
     def _rl_step_10hz(self, trajectory_sp):
         cfg = self.cfg
 
-        _, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)
-        _, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)
+        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)
+        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)
+        self._last_nis_raw = (nis_v_raw, nis_g_raw)   # 디버그 로깅용
 
         if self.step_count < cfg.learning_warmup_steps:
             self.step_count += 1
@@ -786,7 +798,8 @@ class OnlineRLNode(Node):
 
             self.get_logger().info(
                 f'  [{self.step_count:3d}] {mode} {atk} {act} | ε={eps:.3f} | '
-                f'NIS v={nis_vel:.3f} g={nis_gyr:.3f} | R={reward:+.1f} (Σ={self.episode_reward:.1f}) | '
+                f'NIS v={nis_vel:.3f} g={nis_gyr:.3f} (raw v={nis_v_raw:.2f} g={nis_g_raw:.2f}) | '
+                f'R={reward:+.1f} (Σ={self.episode_reward:.1f}) | '
                 f'GT={gt_err:.2f}m alt={alt:.1f}m | '
                 f'buf={buf} loss={cur_loss:.4f} Zvar={self.last_z_var:.3f} dt={self.last_learn_dt:.0f}ms')
 
@@ -797,6 +810,9 @@ class OnlineRLNode(Node):
     # ══════════════════════════════════════════════════════════
     def _end_episode(self, reason):
         self._send_attack_cmd(False); self.attack_active_flag = False
+
+        if self.sweep_mode:
+            self._end_sweep_episode(reason); return
 
         # ── EVAL: 결과 기록 후, crash 종류에 맞는 리셋으로 라우팅 ──
         #   (이전엔 무조건 SOFT → 추락/뒤집힘 시 복구 불가 → 드론 사라진 채 무한 대기 버그)
@@ -833,9 +849,155 @@ class OnlineRLNode(Node):
 
         self._apply_reset(reason)
 
+    # ══════════════════════════════════════════════════════════
+    #  α-SWEEP MODE (학습 OFF; 고정정책으로 결과성/탐지가능성 특성화)
+    # ══════════════════════════════════════════════════════════
+    def _sweep_setup(self):
+        """셀 리스트 구성 + CSV 오픈. 셀 = (α, policy, pattern).
+        baseline 2개(무공격 aggressive/hover) + α마다 (track, hover)."""
+        import csv
+        cfg = self.cfg
+        cells = [(0.0, 'track', cfg.sweep_pattern), (0.0, 'hover', 'hover')]
+        for a in cfg.sweep_alphas:
+            cells.append((float(a), 'track', cfg.sweep_pattern))
+            cells.append((float(a), 'hover', 'hover'))
+        self.sweep_cells = cells
+        self.sweep_cell_idx = 0
+        self.sweep_ep_in_cell = 0
+        self.sweep_alpha, self.sweep_policy, self.sweep_pattern_cur = cells[0]
+
+        os.makedirs(cfg.outdir, exist_ok=True)
+        self._sweep_detail_f = open(os.path.join(cfg.outdir, 'sweep_detail.csv'), 'w', newline='')
+        self._sweep_detail_w = csv.writer(self._sweep_detail_f)
+        self._sweep_detail_w.writerow([
+            'cell_idx', 'alpha', 'policy', 'pattern', 'episode', 'step', 'attack_active',
+            'nis_v_raw', 'nis_g_raw', 'nis_v_scaled', 'nis_g_scaled',
+            'gt_err', 'alt', 'action', 'crash_reason'])
+        self._sweep_summary_f = open(os.path.join(cfg.outdir, 'sweep_summary.csv'), 'w', newline='')
+        self._sweep_summary_w = csv.writer(self._sweep_summary_f)
+        self._sweep_summary_w.writerow([
+            'cell_idx', 'alpha', 'policy', 'pattern', 'episode',
+            'survived', 'crash_step', 'crash_reason', 'steps'])
+        self.get_logger().info(
+            f'\n{"#"*60}\n  [SWEEP] {len(cells)} cells × {cfg.sweep_episodes} ep '
+            f'| α={cfg.sweep_alphas}\n  attack: loe_combined @step{cfg.sweep_attack_start}, '
+            f'ramp={cfg.attack_ramp_duration}s | q_gate={self._ukf_q_gate}\n{"#"*60}')
+
+    def _start_sweep_episode(self):
+        cell = self.sweep_cells[self.sweep_cell_idx]
+        self.sweep_alpha, self.sweep_policy, self.sweep_pattern_cur = cell
+        s = self.cfg.sweep_attack_start
+        self.scenario = {
+            'pattern': self.sweep_pattern_cur, 'attack_type': 'loe_combined',
+            'attack_intensity': self.sweep_alpha, 'attack_start_step': s,
+            'attack_end_step': 99999, 'attack_bursts': [(s, 99999)],
+            'disturbance_type': 'none', 'wind_speed': 0.0,
+        }
+        self.get_logger().info(
+            f'\n  [SWEEP] cell {self.sweep_cell_idx+1}/{len(self.sweep_cells)} '
+            f'α={self.sweep_alpha:.2f} policy={self.sweep_policy} pat={self.sweep_pattern_cur} '
+            f'| ep {self.sweep_ep_in_cell+1}/{self.cfg.sweep_episodes}')
+        self._send_scenario_cmd()
+        self._reset_episode_state(); self.home_lat = None; self.init_counter = 0
+        self.attack_bursts = [(s, 99999)]
+        self._cur_burst_start = 0; self._last_burst_end = None
+        # hover 정책이면 원점 고정 호버
+        if self.sweep_policy == 'hover':
+            self._hover_pos[:] = 0.0; self._hover_yaw = 0.0
+            self.prev_action = 1
+        else:
+            self.prev_action = 0
+
+    def _sweep_step_10hz(self, trajectory_sp):
+        """고정정책 1스텝: UKF NIS + 공격토글 + done + CSV. 학습/탐험/push 없음."""
+        cfg = self.cfg
+        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)
+        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)
+
+        if self.step_count < cfg.learning_warmup_steps:
+            self.step_count += 1
+            return
+
+        action = 0 if self.sweep_policy == 'track' else 1
+
+        done, term_reason = self._check_done(trajectory_sp)
+
+        # ── 공격 토글 (단일 윈도우; α=0이면 무해) ──
+        want_attack = self._is_attack_step(self.step_count)
+        if want_attack and not self.attack_active_flag:
+            self._send_attack_cmd(True, 'loe_combined', self.sweep_alpha)
+            self.attack_active_flag = True
+            self._cur_burst_start = self.step_count
+        elif (not want_attack) and self.attack_active_flag:
+            self._send_attack_cmd(False)
+            self.attack_active_flag = False
+
+        # ── 측정 로깅 ──
+        sp = np.array(trajectory_sp[:3])
+        gt_ned = np.array([self.gt_pos[1], self.gt_pos[0], -self.gt_pos[2]])
+        gt_err = float(np.linalg.norm(gt_ned[:2] - sp[:2]))
+        alt = float(-self.cur_pos[2] if self.cur_pos[2] < 0 else 0.0)
+        self._sweep_detail_w.writerow([
+            self.sweep_cell_idx, f'{self.sweep_alpha:.3f}', self.sweep_policy,
+            self.sweep_pattern_cur, self.sweep_ep_in_cell, self.step_count,
+            int(self.attack_active_flag),
+            f'{nis_v_raw:.5f}', f'{nis_g_raw:.5f}', f'{nis_vel:.5f}', f'{nis_gyr:.5f}',
+            f'{gt_err:.4f}', f'{alt:.4f}', action,
+            term_reason if done else ''])
+
+        if self.step_count % cfg.log_interval == 0:
+            atk = '🔴ATK' if self.attack_active_flag else '⚪NRM'
+            act = 'HOVER' if action == 1 else 'TRACK'
+            self.get_logger().info(
+                f'  [SWP {self.step_count:3d}] α={self.sweep_alpha:.2f} {atk} {act} | '
+                f'NISraw v={nis_v_raw:.2f} g={nis_g_raw:.2f} | GT={gt_err:.2f}m alt={alt:.1f}m')
+
+        self.prev_action = action
+        self.step_count += 1
+        if done:
+            self._end_episode(term_reason)
+
+    def _end_sweep_episode(self, reason):
+        survived = (reason == 'timeout')
+        crash_step = -1 if survived else self.step_count
+        self._sweep_summary_w.writerow([
+            self.sweep_cell_idx, f'{self.sweep_alpha:.3f}', self.sweep_policy,
+            self.sweep_pattern_cur, self.sweep_ep_in_cell,
+            int(survived), crash_step, reason, self.step_count])
+        self._sweep_detail_f.flush(); self._sweep_summary_f.flush()
+        surv = '✅survive' if survived else f'❌{reason}@{crash_step}'
+        self.get_logger().info(
+            f'  [SWEEP] α={self.sweep_alpha:.2f} {self.sweep_policy} '
+            f'ep{self.sweep_ep_in_cell+1} → {surv}')
+
+        self.sweep_ep_in_cell += 1
+        if self.sweep_ep_in_cell >= self.cfg.sweep_episodes:
+            self.sweep_ep_in_cell = 0
+            self.sweep_cell_idx += 1
+            if self.sweep_cell_idx >= len(self.sweep_cells):
+                self.get_logger().info(f'\n{"#"*60}\n  [SWEEP] COMPLETE → '
+                    f'{self.cfg.outdir}/sweep_detail.csv, sweep_summary.csv\n'
+                    f'  분석: python sweep_aggregate.py {self.cfg.outdir}\n{"#"*60}')
+                try:
+                    self._sweep_detail_f.close(); self._sweep_summary_f.close()
+                except Exception:
+                    pass
+                self.sim_mgr.stop(); raise SystemExit("Sweep complete")
+        self._apply_reset(reason)
+
 
 def main():
     cfg = Config()
+
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--sweep', action='store_true', help='α-sweep 모드(학습 OFF)')
+    ap.add_argument('--headless', dest='headless', action='store_true', default=None)
+    _args, _ = ap.parse_known_args()
+    if _args.sweep:
+        cfg.sweep_mode = True
+    if _args.headless:
+        cfg.headless = True
 
     import warnings
     warnings.filterwarnings("ignore", category=FutureWarning)
@@ -848,7 +1010,16 @@ def main():
           f"GPU지원={'yes' if _sup else 'no'}) | 행렬연산은 FP32 유지")
 
     if hasattr(torch, '_dynamo'):
-        torch._dynamo.config.suppress_errors = True
+        torch._dynamo.config.suppress_errors = True   # 컴파일 실패해도 eager 폴백(런 안 죽음)
+        # inductor 컴파일 실패 시 찍히는 WARNING 트레이스백 묵음 (Isaac 번들 토치에서 흔함)
+        import logging as _lg
+        for _n in ("torch._dynamo", "torch._inductor", "torch._functorch",
+                   "torch._dynamo.convert_frame", "torch._inductor.compile_fx"):
+            _lg.getLogger(_n).setLevel(_lg.ERROR)
+        try:
+            torch._logging.set_logs(dynamo=_lg.ERROR, inductor=_lg.ERROR)
+        except Exception:
+            pass
 
     import logging
     logging.getLogger('rclpy').setLevel(logging.WARNING)

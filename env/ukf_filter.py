@@ -62,11 +62,14 @@ def compute_nis_scaled(r_sub, Pzz_sub, nz):
 
 
 class DynamicsUKF:
-    def __init__(self, dt=0.02, calib=None, ff=1.02):
+    def __init__(self, dt=0.02, calib=None, ff=1.0, q_gate=0.0):
+        # ff=1.0: fading-memory 끔(P 재팽창=이득↑+NIS분모↑ 둘 다 손해). 고집은 low Q로.
+        # q_gate>0: 명령 토크에 비례해 gyro Q 인플레(정상 기동 FP 억제). 0=off.
         self.nx = 12
         self.nz = 9
         self.dt = dt
         self.ff = ff
+        self.q_gate = float(q_gate)
         d = calib['drone']
         self.m = d['mass']
         self.g = d['g']
@@ -82,7 +85,9 @@ class DynamicsUKF:
         self.Wc[0] = lam / (n + lam) + (1 - 0.6**2 + 2.0)
 
         self.Q = np.diag([1e-3]*3 + [1e-3]*3 + [5e-3]*3 + [1e-3]*3)
-        self.R = np.diag([0.5]*3 + [0.5]*3 + [0.1]*3)
+        # R: 시뮬 실측 노이즈 정합(과대추정 금지). pos수평 var≈0.005/고도≈0.02, vel std0.1→var0.01, gyro.
+        #    예전 0.5/0.5/0.1은 25~100× 과대 → NIS가 분모에 묻힘. (sweep raw-NIS로 미세조정)
+        self.R = np.diag([0.01]*3 + [0.02]*3 + [0.03]*3)
 
         self.x = np.zeros(12)
         self.P = np.eye(12) * 0.1
@@ -144,7 +149,16 @@ class DynamicsUKF:
         pts_f = np.array([self._f(p, u) for p in pts])
         x_bar = self.Wm @ pts_f
         cov_spread = sum(self.Wc[i] * np.outer(pts_f[i]-x_bar, pts_f[i]-x_bar) for i in range(2*n+1))
-        P_bar = self.Q + (self.ff ** 2) * cov_spread
+        # maneuver-gated Q: 명령 토크(|u[1:4]|)만큼 gyro 프로세스노이즈 인플레(off면 q_gate=0).
+        #   명령된 각가속은 '설명'하고(FP↓), 명령 안 한 이탈(공격)만 NIS로 남김.
+        Q_eff = self.Q
+        if self.q_gate > 0.0:
+            Q_eff = self.Q.copy()
+            tau_cmd = np.abs(u[1:4])
+            Q_eff[9, 9]   += self.q_gate * tau_cmd[0]
+            Q_eff[10, 10] += self.q_gate * tau_cmd[1]
+            Q_eff[11, 11] += self.q_gate * tau_cmd[2]
+        P_bar = Q_eff + (self.ff ** 2) * cov_spread
         z_pts = np.array([self._h(p) for p in pts_f])
         z_bar = self.Wm @ z_pts
         Pzz = self.R + sum(self.Wc[i]*np.outer(z_pts[i]-z_bar, z_pts[i]-z_bar) for i in range(2*n+1))
