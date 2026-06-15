@@ -91,3 +91,23 @@ px4_1/2/3 가 여럿이면 이전 실행이 남긴 **좀비 PX4**(포트 점유 
    ```
 3. `swrl_config.py` 의 `px4_namespace` 를 그 값으로 (기본 `'/px4_1'`; bare면 `''`).
    컨트롤러·run_sim 양쪽에 자동 적용됨(`--px4-ns`로 전달).
+
+## 트러블슈팅: heartbeat lost 무한 HARD_RESET의 진짜 원인 (콜드 로딩)
+로그 분석 결과: PX4는 정상 부팅("Ready for takeoff"), 토픽은 **bare `/fmu/...`**(ghost가 /px4_N),
+Isaac 콜드 로딩이 **~3~4분**. 그런데 컨트롤러가 60초(20s 대기+40s heartbeat)에 sim을 죽여
+로딩 중인 sim을 반복적으로 kill → GT가 흐를 새가 없었음.
+
+조치(이 빌드):
+- **첫 GT(/gt/odometry) 수신 전까지 sim을 절대 죽이지 않음.** IDLE에서 무한정(=`sim_startup_timeout` 360s) 대기.
+- heartbeat·HARD_RESET은 **첫 GT 이후에만** 작동 (운행 중 sim 사망 감지용).
+- `/fmu` pub/sub은 첫 GT 이후 생성하며 그때 네임스페이스 auto-detect(살아있는 publisher 기준 → bare `/fmu` 정확히 선택, ghost 제외).
+- `px4_namespace='auto'`(기본). 로그상 실제는 bare `/fmu`. 고정하려면 `''`.
+
+기대 로그 흐름:
+```
+… sim 로딩 대기 Ns (첫 GT 대기 중)         # 콜드 로딩 동안 (안 죽음)
+✅ 첫 GT 수신 — sim 기동 완료. /fmu IO 셋업 진행
+[PX4 ns] /fmu IO 생성 완료 (ns="(bare)")
+→ TAKEOFF → [TAKEOFF] 이륙 감지! → STABILIZE → [SWP ...]
+```
+첫 실행은 셰이더 캐시 미스로 느리고, 이후 실행은 빨라집니다.

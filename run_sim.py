@@ -19,7 +19,7 @@ from isaacsim import SimulationApp
 _pre_parser = argparse.ArgumentParser(add_help=False)
 _pre_parser.add_argument('--headless', dest='headless', action='store_true')
 _pre_parser.add_argument('--no-headless', dest='headless', action='store_false')
-_pre_parser.add_argument('--px4-ns', dest='px4_ns', default='/px4_1')
+_pre_parser.add_argument('--px4-ns', dest='px4_ns', default='auto')
 _pre_parser.set_defaults(headless=False)
 _pre_args, _ = _pre_parser.parse_known_args()
 simulation_app = SimulationApp({"headless": _pre_args.headless})
@@ -152,7 +152,7 @@ class PegasusApp:
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST, depth=5)
-        _ns = _pre_args.px4_ns.rstrip('/')   # 컨트롤러와 동일 네임스페이스
+        _ns = self._resolve_ns(_pre_args.px4_ns)   # 'auto'면 자동감지(best-effort), 아니면 그대로
         self.ros_node.create_subscription(
             VehicleThrustSetpoint, f'{_ns}/fmu/out/vehicle_thrust_setpoint',
             self._cb_thrust, px4_qos)
@@ -232,6 +232,23 @@ class PegasusApp:
 
     def _cb_torque(self, msg):
         self.cmd_torque[:] = msg.xyz[:3]
+
+    def _resolve_ns(self, configured):
+        """'auto'면 ROS 그래프에서 '*/fmu/out/vehicle_odometry'의 살아있는 ns를 best-effort 감지.
+        run_sim __init__ 시점엔 PX4가 막 떠 등록 전일 수 있어 폴백 가능(공격주입용이라 GT엔 무관)."""
+        if configured != 'auto':
+            return configured.rstrip('/')
+        suffix = '/fmu/out/vehicle_odometry'
+        for _ in range(20):   # ~6s best-effort (run_sim 기동 지연 최소화)
+            rclpy.spin_once(self.ros_node, timeout_sec=0.1)
+            topics = self.ros_node.get_topic_names_and_types()
+            live = [t[:-len(suffix)] for t, _ in topics
+                    if t.endswith(suffix) and self.ros_node.count_publishers(t) > 0]
+            if live:
+                return sorted(live)[0]
+            time.sleep(0.2)
+        carb.log_warn("[run_sim] px4 ns auto 감지 실패 → bare '/fmu' 폴백(공격주입만 영향, GT 무관)")
+        return ''
 
     def _setup_body_view(self):
         for path in ["/World/quadrotor/body", "/World/quadrotor"]:
@@ -447,7 +464,7 @@ def main():
     parser = argparse.ArgumentParser(description="Isaac Sim + PX4 Engine")
     parser.add_argument('--headless', dest='headless', action='store_true')
     parser.add_argument('--no-headless', dest='headless', action='store_false')
-    parser.add_argument('--px4-ns', dest='px4_ns', default='/px4_1')
+    parser.add_argument('--px4-ns', dest='px4_ns', default='auto')
     parser.set_defaults(headless=False)
     args = parser.parse_args()
     PegasusApp(args).run()

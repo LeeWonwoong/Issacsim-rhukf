@@ -132,28 +132,27 @@ class OnlineRLNode(Node):
             px4_ns=cfg.px4_namespace,
             kill_stale=getattr(cfg, 'kill_stale_px4_on_start', True))
         self.sim_mgr.start()
-        self.get_logger().info('  Waiting 20s for Isaac Sim + PX4 SITL startup...')
-        pytime.sleep(20)
+        self.get_logger().info(
+            '  Sim 기동 대기: 첫 GT(/gt/odometry) 수신까지 IDLE 유지 '
+            '(헤드리스 콜드 로딩 몇 분 걸려도 죽이지 않음)')
+        self._qos = qos
 
-        # ── PX4 토픽 네임스페이스 프리픽스 (예: '/px4_1' → /px4_1/fmu/...) ──
-        _ns = self.cfg.px4_namespace.rstrip('/')
-        def _fmu(t):  # '/fmu/...' → '<ns>/fmu/...'
-            return f'{_ns}{t}'
+        # ── 첫 GT 전까지 안 죽이기 위한 게이트 ──
+        self._first_gt_received = False
+        self._fmu_ready = False
+        self._startup_t = pytime.time()
 
-        # ── Publishers ──
-        self.pub_offboard = self.create_publisher(OffboardControlMode, _fmu('/fmu/in/offboard_control_mode'), qos)
-        self.pub_traj = self.create_publisher(TrajectorySetpoint, _fmu('/fmu/in/trajectory_setpoint'), qos)
-        self.pub_cmd = self.create_publisher(VehicleCommand, _fmu('/fmu/in/vehicle_command'), qos)
+        # ── /fmu IO는 첫 GT 이후 _setup_fmu_io()에서 생성 (네임스페이스 정확 감지 위해) ──
+        self.pub_offboard = None
+        self.pub_traj = None
+        self.pub_cmd = None
+        self.px4_ns = None
+
+        # ── 비-PX4 토픽 (run_sim 자체 발행/구독; 즉시 생성) ──
         self.pub_attack = self.create_publisher(String, '/attack_config', 10)
         self.pub_scenario = self.create_publisher(String, '/scenario_config', 10)
         self.pub_sim_ctrl = self.create_publisher(String, '/sim_control', 10)
-
-        # ── Subscribers ──
         self.create_subscription(SensorGps, '/sim/sensor_gps', self._cb_gps, qos)
-        self.create_subscription(SensorCombined, _fmu('/fmu/out/sensor_combined'), self._cb_sensor, qos)
-        self.create_subscription(VehicleOdometry, _fmu('/fmu/out/vehicle_odometry'), self._cb_odometry, qos)
-        self.create_subscription(VehicleThrustSetpoint, _fmu('/fmu/out/vehicle_thrust_setpoint'), self._cb_thrust, qos)
-        self.create_subscription(VehicleTorqueSetpoint, _fmu('/fmu/out/vehicle_torque_setpoint'), self._cb_torque, qos)
         self.create_subscription(GroundTruthOdometry, '/gt/odometry', self._cb_gt, qos)
 
         # ── UKF + Agent ──
@@ -240,6 +239,41 @@ class OnlineRLNode(Node):
             f'PER={"ON" if cfg.use_per else "off"}')
 
     # ══════════════════════════════════════════════════════════
+    #  PX4 namespace 자동감지
+    # ══════════════════════════════════════════════════════════
+    def _resolve_px4_ns(self, configured):
+        """configured가 'auto'면 ROS 그래프에서 '*/fmu/out/vehicle_odometry'를 찾아
+        '살아있는 publisher가 있는' 네임스페이스를 고른다(죽은 px4_1 ghost 자동 제외).
+        못 찾으면 bare ''로 폴백. 'auto'가 아니면 그대로 사용."""
+        if configured != 'auto':
+            ns = configured.rstrip('/')
+            self.get_logger().info(f'  [PX4 ns] 고정 사용: "{ns or "(bare /fmu)"}"')
+            return ns
+        suffix = '/fmu/out/vehicle_odometry'
+        cands = []
+        for _ in range(40):   # 최대 ~20s 재시도 (PX4 등록 대기)
+            try:
+                topics = self.get_topic_names_and_types()
+            except Exception:
+                topics = []
+            cands = [t for t, _ in topics if t.endswith(suffix)]
+            live = [t[:-len(suffix)] for t in cands if self.count_publishers(t) > 0]
+            if live:
+                ns = sorted(live)[0]
+                self.get_logger().info(
+                    f'  [PX4 ns] 자동감지: "{ns}" (live publisher) | 후보={cands}')
+                return ns
+            pytime.sleep(0.5)
+        if cands:
+            ns = sorted(cands)[0][:-len(suffix)]
+            self.get_logger().warn(f'  [PX4 ns] live 없음 → 후보 첫번째 "{ns}" 사용 | {cands}')
+            return ns
+        self.get_logger().error(
+            '  [PX4 ns] /fmu/out/vehicle_odometry 토픽을 못 찾음! '
+            'MicroXRCEAgent/PX4 미연결 의심. bare "/fmu"로 폴백.')
+        return ''
+
+    # ══════════════════════════════════════════════════════════
     #  Sensor Callbacks (★ 상태 갱신만, 제어 로직 없음)
     # ══════════════════════════════════════════════════════════
     def _cb_gps(self, msg):
@@ -269,6 +303,28 @@ class OnlineRLNode(Node):
         q = msg.pose.pose.orientation
         self.cur_euler[:] = self._quat_to_euler(q.w, q.x, q.y, q.z)
         self.last_gt_time = pytime.time()
+        if not self._first_gt_received:
+            self._first_gt_received = True
+            self.get_logger().info('  ✅ 첫 GT 수신 — sim 기동 완료. /fmu IO 셋업 진행')
+
+    def _setup_fmu_io(self):
+        """첫 GT 이후 호출: PX4 네임스페이스 확정(live publisher 기준) + /fmu pub/sub 생성."""
+        if self._fmu_ready:
+            return
+        ns = self._resolve_px4_ns(self.cfg.px4_namespace)
+        self.px4_ns = ns
+        q = self._qos
+        def _fmu(t):
+            return f'{ns}{t}'
+        self.pub_offboard = self.create_publisher(OffboardControlMode, _fmu('/fmu/in/offboard_control_mode'), q)
+        self.pub_traj = self.create_publisher(TrajectorySetpoint, _fmu('/fmu/in/trajectory_setpoint'), q)
+        self.pub_cmd = self.create_publisher(VehicleCommand, _fmu('/fmu/in/vehicle_command'), q)
+        self.create_subscription(SensorCombined, _fmu('/fmu/out/sensor_combined'), self._cb_sensor, q)
+        self.create_subscription(VehicleOdometry, _fmu('/fmu/out/vehicle_odometry'), self._cb_odometry, q)
+        self.create_subscription(VehicleThrustSetpoint, _fmu('/fmu/out/vehicle_thrust_setpoint'), self._cb_thrust, q)
+        self.create_subscription(VehicleTorqueSetpoint, _fmu('/fmu/out/vehicle_torque_setpoint'), self._cb_torque, q)
+        self._fmu_ready = True
+        self.get_logger().info(f'  [PX4 ns] /fmu IO 생성 완료 (ns="{ns or "(bare)"}")')
 
     # ══════════════════════════════════════════════════════════
     #  Utilities
@@ -521,8 +577,8 @@ class OnlineRLNode(Node):
     #  Main Tick (★ 50Hz 타이머 — 규칙적 제어)
     # ══════════════════════════════════════════════════════════
     def _tick(self):
-        # ── Heartbeat ──
-        if self.flight_state not in ('IDLE', 'HARD_RESET'):
+        # ── Heartbeat (첫 GT 수신 이후에만 작동 = 콜드 로딩 중엔 절대 안 죽임) ──
+        if self._first_gt_received and self.flight_state not in ('IDLE', 'HARD_RESET'):
             if not self._check_heartbeat():
                 self.get_logger().error('  💀 Heartbeat lost → HARD_RESET')
                 self._trigger_hard_reset(); return
@@ -531,8 +587,20 @@ class OnlineRLNode(Node):
         if self.flight_state in ('SOFT_RECOVERY', 'TAKEOFF', 'STABILIZE', 'LEARNING'):
             self._publish_offboard()
 
-        # ── IDLE ──
+        # ── IDLE: sim이 GT를 흘릴 때까지 대기(헤드리스 콜드 로딩 ~수분) → 준비되면 시작 ──
         if self.flight_state == 'IDLE':
+            if not self._first_gt_received:
+                waited = pytime.time() - self._startup_t
+                if int(waited) % 10 == 0 and waited >= 10:
+                    self.get_logger().info(f'  … sim 로딩 대기 {int(waited)}s (첫 GT 대기 중)')
+                if waited > self.cfg.sim_startup_timeout:
+                    self.get_logger().error(
+                        f'  sim 기동 {self.cfg.sim_startup_timeout:.0f}s 초과 → HARD_RESET')
+                    self._trigger_hard_reset()
+                return
+            if not self._fmu_ready:
+                self._setup_fmu_io()
+                self.last_gt_time = pytime.time()
             self._start_new_episode()
             self.flight_state = 'TAKEOFF'
             self.get_logger().info('  → TAKEOFF')
@@ -570,17 +638,18 @@ class OnlineRLNode(Node):
         elif self.flight_state == 'HARD_RESET':
             self.init_counter += 1
             if self.init_counter == 1:
-                self.get_logger().warn('  [HARD] Restarting simulator...')
+                self.get_logger().warn('  [HARD] Restarting simulator... (첫 GT까지 대기)')
                 self.sim_mgr.restart(); self.hard_reset_count += 1
+                self._first_gt_received = False    # 재로딩 동안 안 죽이게 게이트 리셋
+                self._startup_t = pytime.time()
                 self.last_gt_time = pytime.time()
-            if self.init_counter >= int(20.0 / self.step_dt):
-                if self._check_heartbeat():
-                    self._vehicle_cmd(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0)
-                    self._vehicle_cmd(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0)
-                    self._start_new_episode()
-                    self.flight_state = 'TAKEOFF'
-                elif self.init_counter >= int(40.0 / self.step_dt):
-                    self.get_logger().error('  [HARD] Retry...'); self.init_counter = 0
+            if self._first_gt_received:
+                self._vehicle_cmd(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0)
+                self._vehicle_cmd(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0)
+                self._start_new_episode()
+                self.flight_state = 'TAKEOFF'
+            elif (pytime.time() - self._startup_t) > self.cfg.sim_startup_timeout:
+                self.get_logger().error('  [HARD] 재기동 타임아웃 → 재시도'); self.init_counter = 0
 
         # ── TAKEOFF ──
         elif self.flight_state == 'TAKEOFF':

@@ -26,11 +26,11 @@ class Config:
     outdir: str = "./results"
     headless: bool = False
     sim_launcher: str = 'isim'
-    # ── PX4 토픽 네임스페이스. uXRCE-DDS가 /px4_1/fmu/... 로 발행하면 '/px4_1'.
-    #    '' 면 bare /fmu/... . 깨끗한 단일 인스턴스 띄운 뒤
-    #    `ros2 topic list | grep fmu/out/vehicle_odometry` 로 실제값 확인해 맞추세요.
-    px4_namespace: str = '/px4_1'
+    # ── PX4 토픽 네임스페이스. 'auto'=런타임 자동감지(살아있는 publisher 있는 ns).
+    #    인스턴스 번호가 실행마다 비결정적(px4_1/px4_20…)이라 auto 권장. 고정하려면 '/px4_1' 등.
+    px4_namespace: str = 'auto'
     kill_stale_px4_on_start: bool = True   # 새 sim 띄우기 전 좀비 PX4(bin/px4) 정리(포트충돌 방지)
+    sim_startup_timeout: float = 360.0     # 첫 GT 수신까지 허용 시간(초). 헤드리스 Isaac 콜드 로딩 ~수분
     # ── uXRCE-DDS agent (PX4 /fmu/* ↔ ROS2 브리지). 직접 실행 시 isim이 안 켜줄 수 있어 자동 보장 ──
     xrce_autostart: bool = True
     xrce_agent_cmd: str = 'MicroXRCEAgent udp4 -p 8888'
