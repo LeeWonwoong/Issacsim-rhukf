@@ -306,10 +306,14 @@ class PegasusApp:
         render_interval = max(1, int(physics_hz / render_fps))
         step_counter = 0
 
+        # ── 실시간 페이싱 앵커 (headless엔 렌더 스로틀이 없어 루프가 폭주→PX4 lockstep 붕괴) ──
+        wall_start = time.time()
+
         while simulation_app.is_running() and not self.stop_sim:
 
             if self.needs_reset:
                 self._do_reset()
+                wall_start = time.time() - self.sim_time   # 리셋 동안 흐른 wall-time 보정(재앵커)
                 continue
 
             wf = self.wind.get_force(self.sim_time, self.physics_dt)
@@ -422,6 +426,13 @@ class PegasusApp:
                 self.last_gps_time = self.sim_time
 
             rclpy.spin_once(self.ros_node, timeout_sec=0)
+
+            # ── 실시간 페이싱: sim_time이 wall-clock을 앞서면 그만큼 sleep ──
+            #   (GUI는 렌더가 ~60fps로 묶어주지만 headless는 폭주 → 여기서 캡.
+            #    루프가 이미 실시간보다 느리면 sleep=0이라 무해.)
+            _ahead = (wall_start + self.sim_time) - time.time()
+            if _ahead > 0:
+                time.sleep(_ahead)
 
         carb.log_warn("PegasusApp closing.")
         self.timeline.stop()

@@ -189,7 +189,7 @@ class OnlineRLNode(Node):
 
         # ── Heartbeat ──
         self.last_gt_time = pytime.time()
-        self.heartbeat_timeout = 20.0
+        self.heartbeat_timeout = 40.0   # 20→40: headless 기동/리셋 여유(GT 첫 수신 지연 흡수)
         self._is_airborne = False
 
         # ── Async Learning ──

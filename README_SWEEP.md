@@ -50,3 +50,14 @@ sweep_attack_start = 30         # step@10Hz, 이후 ramp 1.0s
 - **logical_done = False 유지**: 강제호버+결과성 공격이면 행동이 플랜트를 바꿔 이미 MDP.
   logical_done은 행동이 세상을 안 바꿀 때(per-step O/X) 쓰는 크러치라 불필요(이중처벌 방지).
 - **RHUKF 학습기 하이퍼는 그대로**(CartPole/LunarLander 검증분 — 과제만 고침).
+
+## 트러블슈팅: headless에서 "Heartbeat lost" 무한 HARD_RESET
+- 원인: 헤드리스는 렌더 스로틀이 없어 `run_sim` 루프가 실시간보다 폭주 → PX4 SITL lockstep 붕괴 → GT odometry 미발행 → heartbeat 타임아웃.
+- 조치(이 빌드 적용됨):
+  1. `run_sim.py run()` 루프를 **실시간 페이싱**(sim_time이 wall-clock 앞서면 sleep). GUI의 60fps 스로틀과 동일 효과를 헤드리스에서 재현.
+  2. `online_rl_main.py` heartbeat_timeout **20→40초**(기동/리셋 여유).
+- 그래도 GT가 아예 안 오면 `run_sim`가 헤드리스에서 죽은 것 → 로그 확인:
+  ```bash
+  cat ./results/sim_process.log
+  ```
+  (PX4 SITL 미연결/포트 충돌/USD 에러 등이 여기 찍힘.)
