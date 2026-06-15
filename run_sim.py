@@ -5,7 +5,7 @@ run_sim.py — Isaac Sim + PX4 물리 엔진 구동
   1. PhysX 물리 시뮬레이션 (250Hz)
   2. GPS 센서 퍼블리시 (10Hz) — 순수 노이즈만, 센서 공격 없음
   3. Ground Truth Odometry 퍼블리시 (250Hz)
-  4. 액추에이터 공격 주입 (곱셈형 LoE: actual=(1-α)·u_ref, -α·u_ref 외력/토크 주입 + Ramp)
+  4. 액추에이터 공격 주입 (config attack_form: additive 가산바이어스[기본] | multiplicative 곱셈LoE, + Ramp)
   5. 환경 외란 (바람, 충돌)
   6. 에피소드 리셋 제어
 
@@ -50,7 +50,7 @@ from geometry_msgs.msg import Vector3Stamped
 from std_msgs.msg import String
 from px4_msgs.msg import SensorGps, VehicleThrustSetpoint, VehicleTorqueSetpoint
 
-from swrl_config import compute_attack_ramp
+from swrl_config import compute_attack_ramp, compute_attack_forces
 from env.ukf_filter import load_calibration
 
 
@@ -111,9 +111,15 @@ class PegasusApp:
 
         self.attack_active = False
         self.attack_type = 'none'
-        self.attack_intensity = 0.0       # 이제 LoE 비율 α (0~1)
+        self.attack_intensity = 0.0       # ramp 목표 강도(0~1). additive=바이어스 스케일 / mult=LoE 비율 α
         self.attack_start_time = 0.0
         self.attack_ramp_duration = 0.1
+
+        # 공격 형태 + 가산 바이어스 크기 (online_rl_main이 /attack_config로 전달; 기본=가산)
+        self.attack_form = 'additive'
+        self.bias_torque_xy = 0.12
+        self.bias_torque_z = 0.0
+        self.bias_thrust_n = 2.0
 
         # 곱셈형 LoE용: PX4가 명령한 추력/토크 (u_ref) + calib 계수
         self.cmd_thrust = np.zeros(3)
@@ -205,6 +211,10 @@ class PegasusApp:
             self.attack_type = cfg.get('type', 'none')
             self.attack_intensity = float(cfg.get('intensity', 0.0))
             self.attack_ramp_duration = float(cfg.get('ramp_duration', 0.1))
+            self.attack_form = cfg.get('form', 'additive')
+            self.bias_torque_xy = float(cfg.get('bias_torque_xy', self.bias_torque_xy))
+            self.bias_torque_z = float(cfg.get('bias_torque_z', self.bias_torque_z))
+            self.bias_thrust_n = float(cfg.get('bias_thrust_n', self.bias_thrust_n))
             if self.attack_active:
                 self.attack_start_time = self.sim_time
             carb.log_warn(f"[ATTACK] {cfg}")
@@ -313,6 +323,7 @@ class PegasusApp:
         self.attack_active = False
         self.attack_type = 'none'
         self.attack_intensity = 0.0
+        # attack_form / bias_* 는 다음 _cb_attack_config에서 갱신되므로 유지(리셋 불필요)
 
         self.world.reset()
         self.needs_reset = False
@@ -343,20 +354,27 @@ class PegasusApp:
 
             if self.attack_active and self.attack_type != 'none':
                 t_since = self.sim_time - self.attack_start_time
-                alpha = compute_attack_ramp(
+                intensity = compute_attack_ramp(
                     t_since, self.attack_intensity, self.attack_ramp_duration)
-                # ── 곱셈형 LoE: 플랜트가 (1-α)·u_ref 에 반응하도록 -α·u_ref 주입 ──
-                #   u_ref(물리량) = PX4 명령 setpoint × calib. (덧셈 고정크기 → 명령 비례로 변경)
-                #   주입 프레임/적용방식은 기존(월드, is_global=True)과 동일 유지.
-                #   ※ 부호 규약: 원본 loe_thrust가 force[2]=-mag(하향=고도손실)였던 것과 동일.
-                #     만약 너 환경에서 원본이 상향이었다면 부호만 뒤집으면 됨.
-                f_thrust = abs(self.cmd_thrust[2]) * self._C_thrust   # 명령 추력 크기(N)
-                attack_force[2] = -alpha * f_thrust                   # 추력 LoE (월드 z 하향)
-                if self.attack_type == 'loe_combined':
-                    # 토크 채널에도 동일 LoE: -α·(명령 토크). 명령 비례라 크기가 자동 유계.
-                    attack_torque[0] = -alpha * (self.cmd_torque[0] * self._C_torque_xy)
-                    attack_torque[1] = -alpha * (self.cmd_torque[1] * self._C_torque_xy)
-                    attack_torque[2] = -alpha * (self.cmd_torque[2] * self._C_torque_z)
+
+                if self.attack_form == 'multiplicative':
+                    # ── 곱셈형 LoE: 플랜트가 (1-α)·u_ref 에 반응하도록 -α·u_ref 주입 ──
+                    #   u_ref(물리량)=PX4 명령 setpoint×calib. 호버서 소실+PX4 보상=무해(sweep 확인).
+                    alpha = intensity
+                    f_thrust = abs(self.cmd_thrust[2]) * self._C_thrust
+                    attack_force[2] = -alpha * f_thrust
+                    if self.attack_type == 'loe_combined':
+                        attack_torque[0] = -alpha * (self.cmd_torque[0] * self._C_torque_xy)
+                        attack_torque[1] = -alpha * (self.cmd_torque[1] * self._C_torque_xy)
+                        attack_torque[2] = -alpha * (self.cmd_torque[2] * self._C_torque_z)
+                else:
+                    # ── 가산(additive) 바이어스 [기본]: 명령 무관 고정 토크/추력 오프셋(intensity로 스케일) ──
+                    #   호버서도 잔차 지속(검출) + 권한 추가점유로 결과성 생성 가능. b는 b-sweep으로 확정.
+                    af, at = compute_attack_forces(
+                        self.attack_type, intensity,
+                        self.bias_torque_xy, self.bias_torque_z, self.bias_thrust_n)
+                    attack_force[:] = af
+                    attack_torque[:] = at
 
             total_force = wf + attack_force
 

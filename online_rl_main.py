@@ -358,7 +358,11 @@ class OnlineRLNode(Node):
 
     def _send_attack_cmd(self, active, attack_type='none', intensity=0.0):
         msg = String(); msg.data = json.dumps({'active': active, 'type': attack_type,
-            'intensity': intensity, 'ramp_duration': self.cfg.attack_ramp_duration})
+            'intensity': intensity, 'ramp_duration': self.cfg.attack_ramp_duration,
+            'form': getattr(self.cfg, 'attack_form', 'additive'),
+            'bias_torque_xy': getattr(self.cfg, 'bias_torque_xy', 0.12),
+            'bias_torque_z': getattr(self.cfg, 'bias_torque_z', 0.0),
+            'bias_thrust_n': getattr(self.cfg, 'bias_thrust_n', 2.0)})
         self.pub_attack.publish(msg)
 
     def _send_scenario_cmd(self):

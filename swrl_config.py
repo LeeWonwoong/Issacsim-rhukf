@@ -89,6 +89,16 @@ class Config:
     attack_burst_on_range: Tuple[int, int] = (15, 35)           # 각 버스트 ON 길이 (RL steps@10Hz)
     attack_burst_off_range: Tuple[int, int] = (20, 50)          # 버스트 사이 OFF 길이
 
+    # ── 공격 '형태': 가산 바이어스(기본) vs 곱셈형 LoE — 둘 다 살림, config로 선택 ──
+    #   additive       : 명령 무관 고정 토크/추력 바이어스(ramp·intensity로 스케일).
+    #                    → 호버서도 잔차 지속(검출가능) + 권한 추가점유로 결과성 생성 가능. [기본]
+    #   multiplicative : actual=(1-α)·u_ref. 호버서 소실 + PX4 완전보상=무해(sweep로 확인됨).
+    attack_form: str = 'additive'                               # 'additive'(기본) | 'multiplicative'
+    #   가산 바이어스 full-intensity 크기. "붕괴 직전" 값은 b-sweep으로 확정(아래는 시작 추정치, 토크 위주).
+    bias_torque_xy: float = 0.12     # roll/pitch 토크 바이어스(Nm) @intensity=1
+    bias_torque_z:  float = 0.0      # yaw 토크 바이어스(Nm) @intensity=1
+    bias_thrust_n:  float = 2.0      # 추력 바이어스(N, 하향) @intensity=1
+
     # ══════════════════════════════════════════════════════════
     #  커리큘럼
     # ══════════════════════════════════════════════════════════
@@ -319,20 +329,27 @@ def compute_attack_ramp(t_since_attack: float, target_intensity: float,
     return target_intensity * (t_since_attack / ramp_duration)
 
 
-def compute_attack_forces(attack_type: str, intensity: float) -> Tuple[np.ndarray, np.ndarray]:
+def compute_attack_forces(attack_type: str, intensity: float,
+                          bias_torque_xy: float = 0.12,
+                          bias_torque_z: float = 0.0,
+                          bias_thrust_n: float = 2.0) -> Tuple[np.ndarray, np.ndarray]:
+    """가산(additive) 바이어스: 명령 무관 고정 토크/추력 오프셋을 intensity(0~1, ramp 출력)로 스케일.
+       크기는 config(bias_*)로 결정 → b-sweep으로 '붕괴 직전' 값 탐색 가능.
+       (곱셈형 LoE는 명령(u_ref) 의존이라 run_sim에서 인라인 처리.)"""
     force = np.zeros(3)
     torque = np.zeros(3)
-    mag = intensity * 100
     if attack_type == 'loe_thrust':
-        force[2] = -mag
+        force[2] = -intensity * bias_thrust_n
     elif attack_type == 'loe_roll':
-        torque[0] = mag * 0.8
+        torque[0] = intensity * bias_torque_xy
     elif attack_type == 'loe_pitch':
-        torque[1] = -mag * 0.8
+        torque[1] = -intensity * bias_torque_xy
     elif attack_type == 'loe_yaw':
-        torque[2] = mag * 0.8
+        torque[2] = intensity * bias_torque_z
     elif attack_type == 'loe_combined':
-        torque[0] = mag * 0.4
-        torque[1] = -mag * 0.4
-        force[2] = -mag * 0.5
+        # 원본 결합 형태(roll+, pitch-, 추력 하향)를 config 크기로 스케일.
+        torque[0] =  intensity * bias_torque_xy
+        torque[1] = -intensity * bias_torque_xy
+        torque[2] =  intensity * bias_torque_z
+        force[2]  = -intensity * bias_thrust_n
     return force, torque
