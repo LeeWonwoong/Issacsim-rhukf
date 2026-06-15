@@ -61,3 +61,33 @@ sweep_attack_start = 30         # step@10Hz, 이후 ramp 1.0s
   cat ./results/sim_process.log
   ```
   (PX4 SITL 미연결/포트 충돌/USD 에러 등이 여기 찍힘.)
+
+## 트러블슈팅: 이륙 안 함 / 공격 주입 0 → MicroXRCEAgent 확인
+- `/gt/odometry`(heartbeat)는 run_sim이 직접 발행 → XRCE 무관.
+- `/fmu/out/*`(sensor, **thrust/torque setpoint**), `/fmu/in/*`(arm, setpoint)는 **uXRCE-DDS=MicroXRCEAgent 경유**.
+  죽어 있으면 이륙 안 되고 LoE 공격 주입도 0이 됨.
+- 판별:
+  ```bash
+  ros2 topic hz /gt/odometry              # 안 나오면 sim/GT 문제(페이싱·sim 로그)
+  pgrep -af MicroXRCEAgent                # 떠 있나
+  ros2 topic hz /fmu/out/vehicle_odometry # XRCE 경유 토픽
+  ```
+- 이 빌드는 `online_rl_main.py`가 시작 시 **MicroXRCEAgent를 자동 기동**(이미 실행 중이면 skip).
+  명령/포트는 `swrl_config.py`의 `xrce_agent_cmd`(기본 `MicroXRCEAgent udp4 -p 8888`)에서 조정.
+
+## 트러블슈팅: /fmu 토픽이 /px4_N/fmu 로 보임 (네임스페이스) + 좀비 PX4
+증상: `ros2 topic list | grep fmu` 가 `/px4_1/fmu/...`(또는 px4_2/3)로 나오고
+`/fmu/out/vehicle_odometry`는 "not published". 코드는 `/fmu/...`라 컨트롤러↔PX4 미연결 → 이륙·공격주입 실패.
+px4_1/2/3 가 여럿이면 이전 실행이 남긴 **좀비 PX4**(포트 점유 → 새 PX4 lockstep 정지 → GT 멈춤).
+
+조치:
+1. 좀비 정리(이 빌드는 sim 시작 시 `bin/px4` 자동 pkill — `kill_stale_px4_on_start`):
+   ```bash
+   pkill -9 -f 'bin/px4'; pkill -9 -f run_sim
+   ```
+2. 깨끗한 단일 인스턴스로 실제 네임스페이스 확인:
+   ```bash
+   ros2 topic list | grep fmu/out/vehicle_odometry   # 예: /px4_1/fmu/out/vehicle_odometry
+   ```
+3. `swrl_config.py` 의 `px4_namespace` 를 그 값으로 (기본 `'/px4_1'`; bare면 `''`).
+   컨트롤러·run_sim 양쪽에 자동 적용됨(`--px4-ns`로 전달).

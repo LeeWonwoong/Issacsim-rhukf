@@ -52,22 +52,35 @@ PHYSICAL_TERMINALS = ('crash_altitude', 'crash_flip')
 # ══════════════════════════════════════════════════════════════
 class SimProcessManager:
     def __init__(self, sim_script='run_sim.py', headless=True,
-                 log_dir='./results', sim_launcher='~/isaacsim/python.sh'):
+                 log_dir='./results', sim_launcher='~/isaacsim/python.sh',
+                 px4_ns='', kill_stale=True):
         self.sim_script = sim_script
         self.headless = headless
         self.log_dir = log_dir
         self.sim_launcher = os.path.expanduser(sim_launcher)
+        self.px4_ns = px4_ns
+        self.kill_stale = kill_stale
         self.process = None
         self._log_file = None
         os.makedirs(log_dir, exist_ok=True)
 
     def start(self):
+        # ── 좀비 PX4 정리 (이전 실행이 남긴 bin/px4가 포트 잡으면 새 PX4가 못 붙음→GT 정지) ──
+        if self.kill_stale:
+            for pat in ('bin/px4',):
+                try:
+                    subprocess.run(['pkill', '-9', '-f', pat],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            pytime.sleep(1.0)
         launcher_path = os.path.expanduser('~/isaacsim/python.sh')
         cmd = [launcher_path, self.sim_script]
         if self.headless:
             cmd.append('--headless')
         else:
             cmd.append('--no-headless')
+        cmd += ['--px4-ns', self.px4_ns]   # 항상 전달(빈 값이면 bare /fmu)→컨트롤러와 정합 보장
         log_path = os.path.join(self.log_dir, 'sim_process.log')
         self._log_file = open(log_path, 'w')
         self.process = subprocess.Popen(
@@ -115,25 +128,32 @@ class OnlineRLNode(Node):
         # ── Simulator ──
         self.sim_mgr = SimProcessManager(
             'run_sim.py', cfg.headless,
-            log_dir=cfg.outdir, sim_launcher=cfg.sim_launcher)
+            log_dir=cfg.outdir, sim_launcher=cfg.sim_launcher,
+            px4_ns=cfg.px4_namespace,
+            kill_stale=getattr(cfg, 'kill_stale_px4_on_start', True))
         self.sim_mgr.start()
         self.get_logger().info('  Waiting 20s for Isaac Sim + PX4 SITL startup...')
         pytime.sleep(20)
 
+        # ── PX4 토픽 네임스페이스 프리픽스 (예: '/px4_1' → /px4_1/fmu/...) ──
+        _ns = self.cfg.px4_namespace.rstrip('/')
+        def _fmu(t):  # '/fmu/...' → '<ns>/fmu/...'
+            return f'{_ns}{t}'
+
         # ── Publishers ──
-        self.pub_offboard = self.create_publisher(OffboardControlMode, '/fmu/in/offboard_control_mode', qos)
-        self.pub_traj = self.create_publisher(TrajectorySetpoint, '/fmu/in/trajectory_setpoint', qos)
-        self.pub_cmd = self.create_publisher(VehicleCommand, '/fmu/in/vehicle_command', qos)
+        self.pub_offboard = self.create_publisher(OffboardControlMode, _fmu('/fmu/in/offboard_control_mode'), qos)
+        self.pub_traj = self.create_publisher(TrajectorySetpoint, _fmu('/fmu/in/trajectory_setpoint'), qos)
+        self.pub_cmd = self.create_publisher(VehicleCommand, _fmu('/fmu/in/vehicle_command'), qos)
         self.pub_attack = self.create_publisher(String, '/attack_config', 10)
         self.pub_scenario = self.create_publisher(String, '/scenario_config', 10)
         self.pub_sim_ctrl = self.create_publisher(String, '/sim_control', 10)
 
         # ── Subscribers ──
         self.create_subscription(SensorGps, '/sim/sensor_gps', self._cb_gps, qos)
-        self.create_subscription(SensorCombined, '/fmu/out/sensor_combined', self._cb_sensor, qos)
-        self.create_subscription(VehicleOdometry, '/fmu/out/vehicle_odometry', self._cb_odometry, qos)
-        self.create_subscription(VehicleThrustSetpoint, '/fmu/out/vehicle_thrust_setpoint', self._cb_thrust, qos)
-        self.create_subscription(VehicleTorqueSetpoint, '/fmu/out/vehicle_torque_setpoint', self._cb_torque, qos)
+        self.create_subscription(SensorCombined, _fmu('/fmu/out/sensor_combined'), self._cb_sensor, qos)
+        self.create_subscription(VehicleOdometry, _fmu('/fmu/out/vehicle_odometry'), self._cb_odometry, qos)
+        self.create_subscription(VehicleThrustSetpoint, _fmu('/fmu/out/vehicle_thrust_setpoint'), self._cb_thrust, qos)
+        self.create_subscription(VehicleTorqueSetpoint, _fmu('/fmu/out/vehicle_torque_setpoint'), self._cb_torque, qos)
         self.create_subscription(GroundTruthOdometry, '/gt/odometry', self._cb_gt, qos)
 
         # ── UKF + Agent ──
@@ -986,6 +1006,35 @@ class OnlineRLNode(Node):
         self._apply_reset(reason)
 
 
+def _ensure_xrce_agent(cfg):
+    """MicroXRCEAgent(PX4↔ROS2 브리지)가 떠 있도록 보장. 이미 실행 중이면 skip.
+    isim으로 띄우든 직접 실행하든 /fmu/* 토픽이 보장됨. 실패해도 비치명(경고만)."""
+    import shutil
+    if not getattr(cfg, 'xrce_autostart', True):
+        return
+    try:
+        r = subprocess.run(['pgrep', '-f', 'MicroXRCEAgent'],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if r.returncode == 0:
+            print('[XRCE] MicroXRCEAgent 이미 실행 중 → skip')
+            return
+    except Exception:
+        pass
+    exe = cfg.xrce_agent_cmd.split()[0]
+    if shutil.which(exe) is None:
+        print(f'[XRCE] ⚠ "{exe}" 를 PATH에서 못 찾음. /fmu 토픽이 안 뜰 수 있음.\n'
+              f'        먼저 수동/`isim`으로 켜세요:  {cfg.xrce_agent_cmd}')
+        return
+    try:
+        subprocess.Popen(cfg.xrce_agent_cmd.split(),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         preexec_fn=os.setsid)
+        print(f'[XRCE] started: {cfg.xrce_agent_cmd}')
+        pytime.sleep(2.0)
+    except Exception as e:
+        print(f'[XRCE] 기동 실패(무시하고 진행): {e}')
+
+
 def main():
     cfg = Config()
 
@@ -1023,6 +1072,8 @@ def main():
 
     import logging
     logging.getLogger('rclpy').setLevel(logging.WARNING)
+
+    _ensure_xrce_agent(cfg)   # PX4 /fmu/* ↔ ROS2 브리지 보장 (이륙/공격주입/센서에 필수)
 
     rclpy.init()
     node = OnlineRLNode(cfg)

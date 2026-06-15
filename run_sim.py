@@ -19,6 +19,7 @@ from isaacsim import SimulationApp
 _pre_parser = argparse.ArgumentParser(add_help=False)
 _pre_parser.add_argument('--headless', dest='headless', action='store_true')
 _pre_parser.add_argument('--no-headless', dest='headless', action='store_false')
+_pre_parser.add_argument('--px4-ns', dest='px4_ns', default='/px4_1')
 _pre_parser.set_defaults(headless=False)
 _pre_args, _ = _pre_parser.parse_known_args()
 simulation_app = SimulationApp({"headless": _pre_args.headless})
@@ -151,12 +152,14 @@ class PegasusApp:
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST, depth=5)
+        _ns = _pre_args.px4_ns.rstrip('/')   # 컨트롤러와 동일 네임스페이스
         self.ros_node.create_subscription(
-            VehicleThrustSetpoint, '/fmu/out/vehicle_thrust_setpoint',
+            VehicleThrustSetpoint, f'{_ns}/fmu/out/vehicle_thrust_setpoint',
             self._cb_thrust, px4_qos)
         self.ros_node.create_subscription(
-            VehicleTorqueSetpoint, '/fmu/out/vehicle_torque_setpoint',
+            VehicleTorqueSetpoint, f'{_ns}/fmu/out/vehicle_torque_setpoint',
             self._cb_torque, px4_qos)
+        carb.log_warn(f"[run_sim] PX4 namespace = '{_ns}' (thrust/torque 구독)")
 
         self.timeline = omni.timeline.get_timeline_interface()
         self.pg = PegasusInterface()
@@ -444,6 +447,7 @@ def main():
     parser = argparse.ArgumentParser(description="Isaac Sim + PX4 Engine")
     parser.add_argument('--headless', dest='headless', action='store_true')
     parser.add_argument('--no-headless', dest='headless', action='store_false')
+    parser.add_argument('--px4-ns', dest='px4_ns', default='/px4_1')
     parser.set_defaults(headless=False)
     args = parser.parse_args()
     PegasusApp(args).run()

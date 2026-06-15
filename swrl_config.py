@@ -26,6 +26,14 @@ class Config:
     outdir: str = "./results"
     headless: bool = False
     sim_launcher: str = 'isim'
+    # ── PX4 토픽 네임스페이스. uXRCE-DDS가 /px4_1/fmu/... 로 발행하면 '/px4_1'.
+    #    '' 면 bare /fmu/... . 깨끗한 단일 인스턴스 띄운 뒤
+    #    `ros2 topic list | grep fmu/out/vehicle_odometry` 로 실제값 확인해 맞추세요.
+    px4_namespace: str = '/px4_1'
+    kill_stale_px4_on_start: bool = True   # 새 sim 띄우기 전 좀비 PX4(bin/px4) 정리(포트충돌 방지)
+    # ── uXRCE-DDS agent (PX4 /fmu/* ↔ ROS2 브리지). 직접 실행 시 isim이 안 켜줄 수 있어 자동 보장 ──
+    xrce_autostart: bool = True
+    xrce_agent_cmd: str = 'MicroXRCEAgent udp4 -p 8888'
     use_tf32_forward: bool = False   # forward(matmul)만 TF32 허용(Ampere+); 행렬연산은 항상 FP32. 전역 기본 FP32.
     use_compile: bool = True         # startup에서 학습 hot path 컴파일(inductor→aot_eager→eager 캐스케이드)+사전워밍업 후 spin. Isaac 번들 토치는 inductor 실패 시 자동 폴백
     agent_type: str = "rhukf"        # 'rhukf'(제안) | 'adam'(Adam+Huber baseline)
