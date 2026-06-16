@@ -1,50 +1,53 @@
 #!/usr/bin/env bash
 # ============================================================
-# run_all_sweeps.sh — combined / torque / thrust 3개 모드를
-#   순차로 sweep하고 각각 집계까지 자동 실행 (퇴근용).
-#
-# 사용:
-#   chmod +x run_all_sweeps.sh
-#   ./run_all_sweeps.sh            # 백그라운드로 돌리려면:
+# run_all_sweeps.sh — combined / torque / thrust 순차 sweep + 집계 (퇴근용)
 #   nohup ./run_all_sweeps.sh > sweep_all.log 2>&1 &
 #
-# 결과:
-#   results_combined/ , results_torque/ , results_thrust/
-#   각 폴더에 sweep_summary.csv, sweep_detail.csv, aggregate.txt
-#   + 최상위 sweep_all.log 에 전체 진행 로그
+# - 각 python을 setsid로 '독립 세션'에서 실행 → 한 모드가 자기 그룹을
+#   정리해도 이 스크립트는 안 죽음(안전).
+# - 이미 끝난 모드(results_<mode>/sweep_summary.csv 존재)는 건너뜀 → 재실행 안전.
+# 결과: results_{combined,torque,thrust}/ 에 sweep_*.csv + aggregate.txt + run.log
 # ============================================================
 set -u
 PY=python3
-STAMP=$(date +%Y%m%d_%H%M%S)
-echo "########## SWEEP ALL 시작: $STAMP ##########"
+echo "########## SWEEP ALL 시작: $(date +%Y%m%d_%H%M%S) ##########"
 
-for MODE in combined torque thrust; do
-    OUT="results_${MODE}"
+# setsid --wait 지원 여부 (있으면 세션 격리하며 대기)
+RUNNER=""
+if command -v setsid >/dev/null 2>&1 && setsid --help 2>&1 | grep -q -- '--wait'; then
+    RUNNER="setsid --wait"
+fi
+
+run_one() {
+    local mode="$1" out="$2"
+    mkdir -p "${out}"
+    if [ -s "${out}/sweep_summary.csv" ]; then
+        echo " [$(date +%H:%M:%S)] ${mode} 이미 완료됨(${out}/sweep_summary.csv) → 건너뜀"
+        return 0
+    fi
     echo ""
     echo "==================================================="
-    echo " [$(date +%H:%M:%S)] MODE=${MODE} → ${OUT}"
+    echo " [$(date +%H:%M:%S)] MODE=${mode} → ${out}"
     echo "==================================================="
-    mkdir -p "${OUT}"
-
-    # sweep 실행 (모드별 권장 grid 자동 적용; 값 바꾸려면 --sweep-values 0,0.5,... 추가)
-    ${PY} online_rl_main.py --sweep --headless \
-        --sweep-mode "${MODE}" --outdir "${OUT}" \
-        > "${OUT}/run.log" 2>&1
-    RC=$?
-    echo " [$(date +%H:%M:%S)] ${MODE} sweep 종료 (exit=${RC})"
-
-    # 집계 (실패해도 다음 모드 진행)
-    if [ -f "${OUT}/sweep_summary.csv" ]; then
-        ${PY} sweep_aggregate.py "${OUT}" > "${OUT}/aggregate.txt" 2>&1
-        echo " [$(date +%H:%M:%S)] ${MODE} 집계 완료 → ${OUT}/aggregate.txt"
+    ${RUNNER} ${PY} online_rl_main.py --sweep --headless \
+        --sweep-mode "${mode}" --outdir "${out}" \
+        > "${out}/run.log" 2>&1
+    echo " [$(date +%H:%M:%S)] ${mode} sweep 종료 (exit=$?)"
+    if [ -s "${out}/sweep_summary.csv" ]; then
+        ${PY} sweep_aggregate.py "${out}" > "${out}/aggregate.txt" 2>&1
+        echo " [$(date +%H:%M:%S)] ${mode} 집계 완료 → ${out}/aggregate.txt"
     else
-        echo " [!] ${OUT}/sweep_summary.csv 없음 — sweep 실패? run.log 확인"
+        echo " [!] ${out}/sweep_summary.csv 없음 — ${out}/run.log 확인"
     fi
-done
+}
+
+run_one combined results_combined
+run_one torque   results_torque
+run_one thrust   results_thrust
 
 echo ""
-echo "########## 전부 완료. 아침에 확인: ##########"
-for MODE in combined torque thrust; do
-    echo "----- results_${MODE}/aggregate.txt -----"
-    sed -n '1,40p' "results_${MODE}/aggregate.txt" 2>/dev/null || echo "  (없음)"
+echo "########## 전부 완료. 요약: ##########"
+for m in combined torque thrust; do
+    echo "----- results_${m}/aggregate.txt -----"
+    sed -n '1,45p' "results_${m}/aggregate.txt" 2>/dev/null || echo "  (없음)"
 done

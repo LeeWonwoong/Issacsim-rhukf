@@ -1210,10 +1210,6 @@ def main():
         except Exception:
             pass
         try:
-            os.killpg(os.getpgrp(), signal.SIGTERM)
-        except Exception:
-            pass
-        try:
             node.destroy_node()
         except Exception:
             pass
