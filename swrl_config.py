@@ -89,15 +89,15 @@ class Config:
     attack_burst_on_range: Tuple[int, int] = (15, 35)           # 각 버스트 ON 길이 (RL steps@10Hz)
     attack_burst_off_range: Tuple[int, int] = (20, 50)          # 버스트 사이 OFF 길이
 
-    # ── 공격 '형태': 가산 바이어스(기본) vs 곱셈형 LoE — 둘 다 살림, config로 선택 ──
-    #   additive       : 명령 무관 고정 토크/추력 바이어스(ramp·intensity로 스케일).
-    #                    → 호버서도 잔차 지속(검출가능) + 권한 추가점유로 결과성 생성 가능. [기본]
-    #   multiplicative : actual=(1-α)·u_ref. 호버서 소실 + PX4 완전보상=무해(sweep로 확인됨).
-    attack_form: str = 'additive'                               # 'additive'(기본) | 'multiplicative'
-    #   가산 바이어스 full-intensity 크기. "붕괴 직전" 값은 b-sweep으로 확정(아래는 시작 추정치, 토크 위주).
-    bias_torque_xy: float = 0.12     # roll/pitch 토크 바이어스(Nm) @intensity=1
-    bias_torque_z:  float = 0.0      # yaw 토크 바이어스(Nm) @intensity=1
-    bias_thrust_n:  float = 2.0      # 추력 바이어스(N, 하향) @intensity=1
+    # ── 공격 = 가산(additive) 복합 바이어스 (유일 형태; 곱셈형 LoE는 무해·미검출로 폐기) ──
+    #   명령 무관 고정 오프셋을 ramp·intensity로 스케일해 플랜트에 주입.
+    #   torque_xy→roll/pitch(gyro NIS), torque_z→yaw(gyro NIS), thrust_n→추력(vel NIS).
+    #   복합이라 vel·gyro 두 관측채널 다 반응 + 실패모드 둘(flip/고도상실).
+    attack_form: str = 'additive'    # (호환용 필드; additive만 지원)
+    #   아래 = intensity(=sweep scale)=1.0 에서의 복합 바이어스 크기. "붕괴 직전"은 sweep로 확정.
+    bias_torque_xy: float = 0.5      # roll/pitch 토크(Nm) @scale=1
+    bias_torque_z:  float = 0.1      # yaw 토크(Nm) @scale=1
+    bias_thrust_n:  float = 2.5      # 추력(N, 하향) @scale=1  ← 이게 vel NIS를 만든다(옛날엔 있었음)
 
     # ══════════════════════════════════════════════════════════
     #  커리큘럼
@@ -238,15 +238,14 @@ class Config:
     # ══════════════════════════════════════════════════════════
     #  α-SWEEP (결과성 밴드 + 탐지가능성 + CUSUM baseline 특성화)
     # ══════════════════════════════════════════════════════════
-    #  sweep_mode=True면 학습 OFF. (강도 × {track,hover}) 셀을 순회하며 고정정책으로 비행,
-    #  raw NIS + 생존/추락을 CSV로 기록. online_rl_main.py --sweep 로 켬.
-    #  ※ sweep 값의 의미 = attack_form에 따라:
-    #     additive       → 토크 바이어스 크기 b(Nm) 직접 (training용 bias_*는 안 건드리고 셀마다 주입, 토크전용)
-    #     multiplicative → LoE 비율 α(0~1)
-    #  → "track 추락 ∧ hover 생존" 밴드 [b_track, b_hover)를 찾는 게 목적.
+    #  sweep_mode=True면 학습 OFF. (scale × {track,hover}) 셀 순회, 고정정책 비행,
+    #  raw NIS + 생존/추락 CSV 기록. online_rl_main.py --sweep 로 켬.
+    #  ※ sweep 값 = 복합 가산바이어스 [bias_torque_xy, bias_torque_z, bias_thrust_n]의 스케일 배수.
+    #     실제 주입 = scale × [0.5Nm, 0.1Nm, 2.5N]. → vel·gyro 두 채널 다 반응.
+    #  → "track 추락 ∧ hover 생존" 밴드와 NIS 분리를 동시에 확인.
     sweep_mode: bool = False
     sweep_alphas: List[float] = field(default_factory=lambda: [
-        0.10, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00])   # additive: b(Nm) / mult이면 [0.1..0.6]로 교체
+        0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0])   # 복합 바이어스 스케일 배수
     sweep_pattern: str = 'aggressive'      # track 셀의 비행패턴(명령토크 최대=최악조건)
     sweep_episodes: int = 4                # 셀당 반복(RNG 노이즈)
     sweep_attack_start: int = 30           # 공격 ON 스텝(@10Hz). 이후 ramp 1.0s

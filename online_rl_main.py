@@ -976,8 +976,7 @@ class OnlineRLNode(Node):
             'survived', 'crash_step', 'crash_reason', 'steps'])
         self.get_logger().info(
             f'\n{"#"*60}\n  [SWEEP] {len(cells)} cells × {cfg.sweep_episodes} ep '
-            f'| form={getattr(cfg,"attack_form","additive")} '
-            f'{"b(Nm)" if getattr(cfg,"attack_form","additive")=="additive" else "α"}={cfg.sweep_alphas}\n'
+            f'| additive 복합바이어스 scale={cfg.sweep_alphas}\n'
             f'  attack: loe_combined @step{cfg.sweep_attack_start}, '
             f'ramp={cfg.attack_ramp_duration}s | q_gate={self._ukf_q_gate}\n{"#"*60}')
 
@@ -1023,12 +1022,9 @@ class OnlineRLNode(Node):
         # ── 공격 토글 (단일 윈도우; 강도=0이면 무해) ──
         want_attack = self._is_attack_step(self.step_count)
         if want_attack and not self.attack_active_flag:
-            if getattr(self.cfg, 'attack_form', 'additive') == 'additive':
-                # 가산 b-sweep: sweep 값 = 토크 바이어스 b(Nm) 직접, intensity=1(ramp 풀로), 토크전용
-                self._send_attack_cmd(True, 'loe_combined', 1.0,
-                    bias_torque_xy=self.sweep_alpha, bias_torque_z=0.0, bias_thrust_n=0.0)
-            else:
-                self._send_attack_cmd(True, 'loe_combined', self.sweep_alpha)  # 곱셈: α
+            # 가산 복합 b-sweep: sweep 값 = 복합 바이어스 스케일. cfg의 [torque_xy,torque_z,thrust_n]을
+            #   intensity=sweep_alpha 로 스케일 → vel·gyro 두 채널 다 반응. (토크전용 아님)
+            self._send_attack_cmd(True, 'loe_combined', self.sweep_alpha)
             self.attack_active_flag = True
             self._cur_burst_start = self.step_count
         elif (not want_attack) and self.attack_active_flag:

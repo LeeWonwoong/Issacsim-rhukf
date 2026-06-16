@@ -356,25 +356,14 @@ class PegasusApp:
                 t_since = self.sim_time - self.attack_start_time
                 intensity = compute_attack_ramp(
                     t_since, self.attack_intensity, self.attack_ramp_duration)
-
-                if self.attack_form == 'multiplicative':
-                    # ── 곱셈형 LoE: 플랜트가 (1-α)·u_ref 에 반응하도록 -α·u_ref 주입 ──
-                    #   u_ref(물리량)=PX4 명령 setpoint×calib. 호버서 소실+PX4 보상=무해(sweep 확인).
-                    alpha = intensity
-                    f_thrust = abs(self.cmd_thrust[2]) * self._C_thrust
-                    attack_force[2] = -alpha * f_thrust
-                    if self.attack_type == 'loe_combined':
-                        attack_torque[0] = -alpha * (self.cmd_torque[0] * self._C_torque_xy)
-                        attack_torque[1] = -alpha * (self.cmd_torque[1] * self._C_torque_xy)
-                        attack_torque[2] = -alpha * (self.cmd_torque[2] * self._C_torque_z)
-                else:
-                    # ── 가산(additive) 바이어스 [기본]: 명령 무관 고정 토크/추력 오프셋(intensity로 스케일) ──
-                    #   호버서도 잔차 지속(검출) + 권한 추가점유로 결과성 생성 가능. b는 b-sweep으로 확정.
-                    af, at = compute_attack_forces(
-                        self.attack_type, intensity,
-                        self.bias_torque_xy, self.bias_torque_z, self.bias_thrust_n)
-                    attack_force[:] = af
-                    attack_torque[:] = at
+                # ── 가산(additive) 복합 바이어스: 명령 무관 고정 토크+추력 오프셋(intensity로 스케일) ──
+                #   torque_xy→roll/pitch(gyro NIS), torque_z→yaw(gyro NIS), thrust_n→추력(vel NIS).
+                #   복합이라 vel·gyro 두 채널 다 반응. ramp로 0→intensity·bias 까지 상승.
+                af, at = compute_attack_forces(
+                    self.attack_type, intensity,
+                    self.bias_torque_xy, self.bias_torque_z, self.bias_thrust_n)
+                attack_force[:] = af
+                attack_torque[:] = at
 
             total_force = wf + attack_force
 
