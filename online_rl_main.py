@@ -1131,13 +1131,34 @@ def main():
 
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument('--sweep', action='store_true', help='α-sweep 모드(학습 OFF)')
+    ap.add_argument('--sweep', action='store_true', help='bias-sweep 모드(학습 OFF)')
     ap.add_argument('--headless', dest='headless', action='store_true', default=None)
+    ap.add_argument('--sweep-mode', choices=['combined', 'torque', 'thrust'], default=None,
+                    help='sweep 공격 채널(미지정 시 config값)')
+    ap.add_argument('--sweep-values', default=None,
+                    help='쉼표구분 bias값 (미지정 시 모드별 권장 grid)')
+    ap.add_argument('--outdir', default=None, help='결과 폴더(미지정 시 config값)')
     _args, _ = ap.parse_known_args()
+
+    # 모드별 권장 grid (값 미지정 시)
+    _grids = {
+        'combined': [0.0, 0.3, 0.5, 0.6, 0.65, 0.7, 0.8],   # Nm (추력=ft_ratio·b)
+        'torque':   [0.0, 0.5, 1.0, 1.3, 1.5, 1.7, 2.0],    # Nm
+        'thrust':   [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0],  # N
+    }
     if _args.sweep:
         cfg.sweep_mode = True
     if _args.headless:
         cfg.headless = True
+    if _args.sweep_mode:
+        cfg.sweep_attack_mode = _args.sweep_mode
+        if _args.sweep_values is None:
+            cfg.sweep_values = _grids[_args.sweep_mode]
+    if _args.sweep_values:
+        cfg.sweep_values = [float(x) for x in _args.sweep_values.split(',')]
+    if _args.outdir:
+        cfg.outdir = _args.outdir
+        os.makedirs(cfg.outdir, exist_ok=True)
 
     import warnings
     warnings.filterwarnings("ignore", category=FutureWarning)
