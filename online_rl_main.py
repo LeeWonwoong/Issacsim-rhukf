@@ -37,7 +37,7 @@ from nav_msgs.msg import Odometry as GroundTruthOdometry
 from std_msgs.msg import String
 
 import torch
-from swrl_config import Config, sample_episode_scenario
+from swrl_config import Config, sample_episode_scenario, sweep_bias_vector
 from env.ukf_filter import DynamicsUKF, compute_nis_scaled, load_calibration, to_physical_u
 from env.reward import calculate_reward
 from rl.agent import OnlineRHUKFAgent
@@ -949,50 +949,59 @@ class OnlineRLNode(Node):
     #  α-SWEEP MODE (학습 OFF; 고정정책으로 결과성/탐지가능성 특성화)
     # ══════════════════════════════════════════════════════════
     def _sweep_setup(self):
-        """셀 리스트 구성 + CSV 오픈. 셀 = (α, policy, pattern).
-        baseline 2개(무공격 aggressive/hover) + α마다 (track, hover)."""
+        """셀 리스트 구성 + CSV 오픈. 셀 = (bias값, policy, pattern).
+        baseline 2개(무공격 track/hover) + bias값마다 (track, hover)."""
         import csv
         cfg = self.cfg
         cells = [(0.0, 'track', cfg.sweep_pattern), (0.0, 'hover', 'hover')]
-        for a in cfg.sweep_alphas:
+        for a in cfg.sweep_values:
             cells.append((float(a), 'track', cfg.sweep_pattern))
             cells.append((float(a), 'hover', 'hover'))
         self.sweep_cells = cells
         self.sweep_cell_idx = 0
         self.sweep_ep_in_cell = 0
-        self.sweep_alpha, self.sweep_policy, self.sweep_pattern_cur = cells[0]
+        self.sweep_value, self.sweep_policy, self.sweep_pattern_cur = cells[0]
+        self._sweep_bias = (0.0, 0.0, 0.0)
 
         os.makedirs(cfg.outdir, exist_ok=True)
         self._sweep_detail_f = open(os.path.join(cfg.outdir, 'sweep_detail.csv'), 'w', newline='')
         self._sweep_detail_w = csv.writer(self._sweep_detail_f)
         self._sweep_detail_w.writerow([
-            'cell_idx', 'alpha', 'policy', 'pattern', 'episode', 'step', 'attack_active',
+            'cell_idx', 'mode', 'bias', 'tq_xy', 'th_n', 'policy', 'pattern', 'episode', 'step', 'attack_active',
             'nis_v_raw', 'nis_g_raw', 'nis_v_scaled', 'nis_g_scaled',
             'gt_err', 'alt', 'action', 'crash_reason'])
         self._sweep_summary_f = open(os.path.join(cfg.outdir, 'sweep_summary.csv'), 'w', newline='')
         self._sweep_summary_w = csv.writer(self._sweep_summary_f)
         self._sweep_summary_w.writerow([
-            'cell_idx', 'alpha', 'policy', 'pattern', 'episode',
+            'cell_idx', 'mode', 'bias', 'tq_xy', 'th_n', 'policy', 'pattern', 'episode',
             'survived', 'crash_step', 'crash_reason', 'steps'])
+        _unit = 'N' if cfg.sweep_attack_mode == 'thrust' else 'Nm'
         self.get_logger().info(
             f'\n{"#"*60}\n  [SWEEP] {len(cells)} cells × {cfg.sweep_episodes} ep '
-            f'| additive 복합바이어스 scale={cfg.sweep_alphas}\n'
-            f'  attack: loe_combined @step{cfg.sweep_attack_start}, '
+            f'| mode={cfg.sweep_attack_mode} bias({_unit})={cfg.sweep_values}\n'
+            f'  attack: additive @step{cfg.sweep_attack_start}, '
             f'ramp={cfg.attack_ramp_duration}s | q_gate={self._ukf_q_gate}\n{"#"*60}')
 
     def _start_sweep_episode(self):
         cell = self.sweep_cells[self.sweep_cell_idx]
-        self.sweep_alpha, self.sweep_policy, self.sweep_pattern_cur = cell
+        self.sweep_value, self.sweep_policy, self.sweep_pattern_cur = cell
+        # 모드+값 → 실제 물리 바이어스 벡터 (이번 셀에서 주입할 값)
+        self._sweep_bias = sweep_bias_vector(
+            self.cfg.sweep_attack_mode, self.sweep_value,
+            self.cfg.sweep_combined_ft_ratio, self.cfg.sweep_torque_yaw_ratio)
         s = self.cfg.sweep_attack_start
         self.scenario = {
             'pattern': self.sweep_pattern_cur, 'attack_type': 'loe_combined',
-            'attack_intensity': self.sweep_alpha, 'attack_start_step': s,
+            'attack_intensity': 1.0, 'attack_start_step': s,
             'attack_end_step': 99999, 'attack_bursts': [(s, 99999)],
             'disturbance_type': 'none', 'wind_speed': 0.0,
         }
+        _u = 'N' if self.cfg.sweep_attack_mode == 'thrust' else 'Nm'
         self.get_logger().info(
             f'\n  [SWEEP] cell {self.sweep_cell_idx+1}/{len(self.sweep_cells)} '
-            f'α={self.sweep_alpha:.2f} policy={self.sweep_policy} pat={self.sweep_pattern_cur} '
+            f'{self.cfg.sweep_attack_mode} b={self.sweep_value:.3f}{_u} '
+            f'(tq_xy={self._sweep_bias[0]:.3f} th_n={self._sweep_bias[2]:.3f}) '
+            f'policy={self.sweep_policy} pat={self.sweep_pattern_cur} '
             f'| ep {self.sweep_ep_in_cell+1}/{self.cfg.sweep_episodes}')
         self._send_scenario_cmd()
         self._reset_episode_state(); self.home_lat = None; self.init_counter = 0
@@ -1019,12 +1028,13 @@ class OnlineRLNode(Node):
 
         done, term_reason = self._check_done(trajectory_sp)
 
-        # ── 공격 토글 (단일 윈도우; 강도=0이면 무해) ──
+        # ── 공격 토글 (단일 윈도우; b=0이면 무해) ──
         want_attack = self._is_attack_step(self.step_count)
         if want_attack and not self.attack_active_flag:
-            # 가산 복합 b-sweep: sweep 값 = 복합 바이어스 스케일. cfg의 [torque_xy,torque_z,thrust_n]을
-            #   intensity=sweep_alpha 로 스케일 → vel·gyro 두 채널 다 반응. (토크전용 아님)
-            self._send_attack_cmd(True, 'loe_combined', self.sweep_alpha)
+            # 이번 셀의 물리 바이어스 벡터를 그대로 주입(intensity=1 → ramp로 0→full).
+            tq_xy, tq_z, th_n = self._sweep_bias
+            self._send_attack_cmd(True, 'loe_combined', 1.0,
+                bias_torque_xy=tq_xy, bias_torque_z=tq_z, bias_thrust_n=th_n)
             self.attack_active_flag = True
             self._cur_burst_start = self.step_count
         elif (not want_attack) and self.attack_active_flag:
@@ -1037,7 +1047,8 @@ class OnlineRLNode(Node):
         gt_err = float(np.linalg.norm(gt_ned[:2] - sp[:2]))
         alt = float(-self.cur_pos[2] if self.cur_pos[2] < 0 else 0.0)
         self._sweep_detail_w.writerow([
-            self.sweep_cell_idx, f'{self.sweep_alpha:.3f}', self.sweep_policy,
+            self.sweep_cell_idx, self.cfg.sweep_attack_mode, f'{self.sweep_value:.3f}',
+            f'{self._sweep_bias[0]:.3f}', f'{self._sweep_bias[2]:.3f}', self.sweep_policy,
             self.sweep_pattern_cur, self.sweep_ep_in_cell, self.step_count,
             int(self.attack_active_flag),
             f'{nis_v_raw:.5f}', f'{nis_g_raw:.5f}', f'{nis_vel:.5f}', f'{nis_gyr:.5f}',
@@ -1048,7 +1059,7 @@ class OnlineRLNode(Node):
             atk = '🔴ATK' if self.attack_active_flag else '⚪NRM'
             act = 'HOVER' if action == 1 else 'TRACK'
             self.get_logger().info(
-                f'  [SWP {self.step_count:3d}] α={self.sweep_alpha:.2f} {atk} {act} | '
+                f'  [SWP {self.step_count:3d}] b={self.sweep_value:.3f} {atk} {act} | '
                 f'NISraw v={nis_v_raw:.2f} g={nis_g_raw:.2f} | GT={gt_err:.2f}m alt={alt:.1f}m')
 
         self.prev_action = action
@@ -1060,13 +1071,14 @@ class OnlineRLNode(Node):
         survived = (reason == 'timeout')
         crash_step = -1 if survived else self.step_count
         self._sweep_summary_w.writerow([
-            self.sweep_cell_idx, f'{self.sweep_alpha:.3f}', self.sweep_policy,
+            self.sweep_cell_idx, self.cfg.sweep_attack_mode, f'{self.sweep_value:.3f}',
+            f'{self._sweep_bias[0]:.3f}', f'{self._sweep_bias[2]:.3f}', self.sweep_policy,
             self.sweep_pattern_cur, self.sweep_ep_in_cell,
             int(survived), crash_step, reason, self.step_count])
         self._sweep_detail_f.flush(); self._sweep_summary_f.flush()
         surv = '✅survive' if survived else f'❌{reason}@{crash_step}'
         self.get_logger().info(
-            f'  [SWEEP] α={self.sweep_alpha:.2f} {self.sweep_policy} '
+            f'  [SWEEP] b={self.sweep_value:.3f} {self.sweep_policy} '
             f'ep{self.sweep_ep_in_cell+1} → {surv}')
 
         self.sweep_ep_in_cell += 1

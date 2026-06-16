@@ -238,17 +238,30 @@ class Config:
     # ══════════════════════════════════════════════════════════
     #  α-SWEEP (결과성 밴드 + 탐지가능성 + CUSUM baseline 특성화)
     # ══════════════════════════════════════════════════════════
-    #  sweep_mode=True면 학습 OFF. (scale × {track,hover}) 셀 순회, 고정정책 비행,
-    #  raw NIS + 생존/추락 CSV 기록. online_rl_main.py --sweep 로 켬.
-    #  ※ sweep 값 = 복합 가산바이어스 [bias_torque_xy, bias_torque_z, bias_thrust_n]의 스케일 배수.
-    #     실제 주입 = scale × [0.5Nm, 0.1Nm, 2.5N]. → vel·gyro 두 채널 다 반응.
-    #  → "track 추락 ∧ hover 생존" 밴드와 NIS 분리를 동시에 확인.
+    #  BIAS SWEEP (sweep_mode=True면 학습 OFF, 고정정책 비행, raw NIS+생존 CSV 기록)
+    #  online_rl_main.py --sweep 로 켬.
+    #  ───────────────────────────────────────────────────────────
+    #  sweep_attack_mode = 어느 채널로 공격이 들어오나:
+    #    'combined' : 토크+추력 동시.   sweep값 = roll/pitch 토크 b(Nm), 추력=ft_ratio·b, yaw=yaw_ratio·b
+    #    'torque'   : 토크만.           sweep값 = roll/pitch 토크 b(Nm), yaw=yaw_ratio·b, 추력=0
+    #    'thrust'   : 추력만.           sweep값 = 추력 b(N), 토크=0
+    #  sweep_values = 그 채널에서 휩쓸 물리 바이어스 크기(모드에 따라 Nm 또는 N).
+    #  → 각 모드별 "track 추락 ∧ hover 생존" 밴드 = 감당 가능 한계를 찾는다.
+    #
+    #  [권장 grid]
+    #    combined : [0.0, 0.3, 0.5, 0.6, 0.65, 0.7, 0.8]  (Nm; 추력=5·b → ~0~4N, 밴드 b≈0.65 부근)
+    #    torque   : [0.0, 0.5, 1.0, 1.3, 1.5, 1.7, 2.0]   (Nm; flip 임계 ~1.5)
+    #    thrust   : [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0] (N;  중량≈13.5N 대비)
+    # ══════════════════════════════════════════════════════════
     sweep_mode: bool = False
-    sweep_alphas: List[float] = field(default_factory=lambda: [
-        0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0])   # 복합 바이어스 스케일 배수
-    sweep_pattern: str = 'aggressive'      # track 셀의 비행패턴(명령토크 최대=최악조건)
-    sweep_episodes: int = 4                # 셀당 반복(RNG 노이즈)
-    sweep_attack_start: int = 30           # 공격 ON 스텝(@10Hz). 이후 ramp 1.0s
+    sweep_attack_mode: str = 'combined'        # 'combined' | 'torque' | 'thrust'
+    sweep_values: List[float] = field(default_factory=lambda: [
+        0.0, 0.3, 0.5, 0.6, 0.65, 0.7, 0.8])   # 기본=combined의 토크 b(Nm)
+    sweep_combined_ft_ratio: float = 5.0       # combined에서 추력/토크_xy 비 (3.25N/0.65Nm≈5)
+    sweep_torque_yaw_ratio:  float = 0.2       # yaw/roll·pitch 비 (검출 보조)
+    sweep_pattern: str = 'aggressive'          # track 셀 비행패턴(명령토크 최대=최악조건)
+    sweep_episodes: int = 4                    # 셀당 반복(RNG 노이즈)
+    sweep_attack_start: int = 30               # 공격 ON 스텝(@10Hz). 이후 ramp
 
     def __post_init__(self):
         self.r_inv_sqrt = 1.0 / self.r_init
@@ -356,3 +369,19 @@ def compute_attack_forces(attack_type: str, intensity: float,
         torque[2] =  intensity * bias_torque_z
         force[2]  = -intensity * bias_thrust_n
     return force, torque
+
+
+def sweep_bias_vector(mode: str, value: float,
+                      ft_ratio: float = 5.0,
+                      yaw_ratio: float = 0.2) -> Tuple[float, float, float]:
+    """sweep 모드+물리값 → (bias_torque_xy, bias_torque_z, bias_thrust_n).
+       torque  : value=roll/pitch 토크 b(Nm), yaw=yaw_ratio·b, thrust=0
+       thrust  : value=추력 b(N), torque=0
+       combined: value=roll/pitch 토크 b(Nm), yaw=yaw_ratio·b, thrust=ft_ratio·b
+    """
+    if mode == 'torque':
+        return (float(value), yaw_ratio * float(value), 0.0)
+    elif mode == 'thrust':
+        return (0.0, 0.0, float(value))
+    else:  # 'combined'
+        return (float(value), yaw_ratio * float(value), ft_ratio * float(value))
