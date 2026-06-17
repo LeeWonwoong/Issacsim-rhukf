@@ -24,6 +24,7 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
     outdir: str = "./results"
+    sim_speed_factor: float = 1.0   # >1이면 실시간보다 빠르게(헤드리스). PX4 lockstep이 못 따라오면(폭주) 낮추세요. 2~4부터 시도.
     headless: bool = False
     sim_launcher: str = 'isim'
     # ── PX4 토픽 네임스페이스. 'auto'=런타임 자동감지(살아있는 publisher 있는 ns).

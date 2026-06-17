@@ -53,13 +53,14 @@ PHYSICAL_TERMINALS = ('crash_altitude', 'crash_flip')
 class SimProcessManager:
     def __init__(self, sim_script='run_sim.py', headless=True,
                  log_dir='./results', sim_launcher='~/isaacsim/python.sh',
-                 px4_ns='', kill_stale=True):
+                 px4_ns='', kill_stale=True, speed_factor=1.0):
         self.sim_script = sim_script
         self.headless = headless
         self.log_dir = log_dir
         self.sim_launcher = os.path.expanduser(sim_launcher)
         self.px4_ns = px4_ns
         self.kill_stale = kill_stale
+        self.speed_factor = float(speed_factor)
         self.process = None
         self._log_file = None
         os.makedirs(log_dir, exist_ok=True)
@@ -81,6 +82,8 @@ class SimProcessManager:
         else:
             cmd.append('--no-headless')
         cmd += ['--px4-ns', self.px4_ns]   # 항상 전달(빈 값이면 bare /fmu)→컨트롤러와 정합 보장
+        if self.speed_factor and self.speed_factor != 1.0:
+            cmd += ['--speed', str(self.speed_factor)]
         log_path = os.path.join(self.log_dir, 'sim_process.log')
         self._log_file = open(log_path, 'w')
         self.process = subprocess.Popen(
@@ -130,7 +133,8 @@ class OnlineRLNode(Node):
             'run_sim.py', cfg.headless,
             log_dir=cfg.outdir, sim_launcher=cfg.sim_launcher,
             px4_ns=cfg.px4_namespace,
-            kill_stale=getattr(cfg, 'kill_stale_px4_on_start', True))
+            kill_stale=getattr(cfg, 'kill_stale_px4_on_start', True),
+            speed_factor=getattr(cfg, 'sim_speed_factor', 1.0))
         self.sim_mgr.start()
         self.get_logger().info(
             '  Sim 기동 대기: 첫 GT(/gt/odometry) 수신까지 IDLE 유지 '
@@ -448,6 +452,9 @@ class OnlineRLNode(Node):
         self.attack_bursts = []
         self._cur_burst_start = 0
         self._last_burst_end = None
+        # 에피소드 confusion/지연 메트릭 (TP=공격중hover, FP=평시hover, FN=공격중track, TN=평시track)
+        self._ep_tp = self._ep_fp = self._ep_fn = self._ep_tn = 0
+        self._ep_det_delay = None
 
     def _start_new_episode(self):
         if self.sweep_mode:
@@ -505,7 +512,22 @@ class OnlineRLNode(Node):
         if self.eval_history:
             np.savez(os.path.join(self.cfg.outdir, 'eval_history.npz'),
                      eval_history=self.eval_history)
+        self._autoplot()
         self.sim_mgr.stop(); raise SystemExit("Training complete")
+
+    def _autoplot(self):
+        """학습 종료 시 단일-에이전트 plot 자동 생성 (plot_results.py 서브프로세스)."""
+        try:
+            import subprocess
+            agent = getattr(self.cfg, 'agent_type', 'rhukf')
+            mpath = os.path.join(self.cfg.outdir, f'metrics_{agent}.csv')
+            if not os.path.exists(mpath):
+                return
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'plot_results.py')
+            subprocess.run(['python3', script, mpath, '--outdir', self.cfg.outdir], timeout=120)
+            self.get_logger().info(f'[PLOT] 자동 생성 → {self.cfg.outdir}/metrics_{agent}.png')
+        except Exception as e:
+            self.get_logger().warn(f'[PLOT] 자동 plot 실패(무시): {e}')
 
     def _trigger_hard_reset(self):
         self._send_attack_cmd(False)
@@ -807,11 +829,14 @@ class OnlineRLNode(Node):
                     self.continuous_fp_count = 0
 
         # ── 2. 퓨어한 보상 계산 ──
+        # FP 인자: 공격직후 recovery는 recovery_delay(offset grace); 순수오탐은 연속 hover 카운트(첫스텝 -1 점증).
+        fp_rec_arg = (min(recovery_delay, 5) if self._last_burst_end is not None
+                      else min(self.continuous_fp_count, 5))
         reward = calculate_reward(
             self.prev_action if self.prev_action is not None else 0,
             self.attack_active_flag,
-            min(attack_delay, 5),      # Phase0: escalation 캡 (분산 폭주 차단; -1-0.2·5²=-6에서 포화)
-            min(recovery_delay, 5),    # Phase0: escalation 캡 (raw delay는 logical_done 판정에 그대로 사용)
+            min(attack_delay, 5),      # FN: attack_delay (onset grace + 에스컬레이션)
+            fp_rec_arg,                # FP: recovery_delay (offset grace) or 큰값(순수오탐)
             rc=self.cfg.reward,
         )
         # 물리적 crash = 결과 기반 종단 페널티 (추종오차 대신 '추락=나쁨' outcome anchor).
@@ -819,6 +844,21 @@ class OnlineRLNode(Node):
         if done and term_reason in PHYSICAL_TERMINALS:
             reward += self.cfg.reward.terminal_penalty
         self.episode_reward += reward
+
+        # ── confusion/지연 메트릭 누적 (prev_action vs 공격상태) ──
+        _a = self.prev_action if self.prev_action is not None else 0
+        if self.attack_active_flag:
+            if _a == 1:
+                self._ep_tp += 1
+                if self._ep_det_delay is None:
+                    self._ep_det_delay = max(0, self.step_count - self._cur_burst_start)
+            else:
+                self._ep_fn += 1
+        else:
+            if _a == 1:
+                self._ep_fp += 1
+            else:
+                self._ep_tn += 1
 
         # ── 3. 논리적 종료 (use_logical_done=True일 때만; 기본 False=물리 crash만) ──
         if cfg.use_logical_done and not done:
@@ -906,6 +946,42 @@ class OnlineRLNode(Node):
         self.prev_state = state; self.prev_action = action; self.step_count += 1
 
     # ══════════════════════════════════════════════════════════
+    #  학습 에피소드 메트릭 CSV (reward/loss/F1/delay 등) → plot_results.py 용
+    # ══════════════════════════════════════════════════════════
+    def _write_train_metrics(self, reason, avg_loss, eps):
+        import csv, os
+        tp, fp, fn, tn = self._ep_tp, self._ep_fp, self._ep_fn, self._ep_tn
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+        fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        det_delay = self._ep_det_delay if self._ep_det_delay is not None else -1
+        crashed = 1 if reason in ('crash_altitude', 'crash_flip', 'crash_drift') else 0
+        try:
+            td = self.agent.td_kurtosis()
+            td_exkurt = float(td[2])
+        except Exception:
+            td_exkurt = 0.0
+        row = {
+            'episode': self.episode, 'agent': getattr(self.cfg, 'agent_type', 'rhukf'),
+            'reward': round(self.episode_reward, 3), 'loss': round(float(avg_loss), 5),
+            'steps': self.step_count, 'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
+            'precision': round(prec, 4), 'recall': round(rec, 4), 'f1': round(f1, 4),
+            'fp_rate': round(fp_rate, 4), 'det_delay': det_delay, 'crashed': crashed,
+            'td_exkurt': round(td_exkurt, 4), 'epsilon': round(float(eps), 4),
+        }
+        if getattr(self, '_metrics_w', None) is None:
+            os.makedirs(self.cfg.outdir, exist_ok=True)
+            path = os.path.join(self.cfg.outdir,
+                                f'metrics_{getattr(self.cfg, "agent_type", "rhukf")}.csv')
+            self._metrics_f = open(path, 'w', newline='')
+            self._metrics_w = csv.DictWriter(self._metrics_f, fieldnames=list(row.keys()))
+            self._metrics_w.writeheader()
+            self.get_logger().info(f'[METRICS] 학습 메트릭 기록 → {path}')
+        self._metrics_w.writerow(row)
+        self._metrics_f.flush()
+
+    # ══════════════════════════════════════════════════════════
     #  Episode End
     # ══════════════════════════════════════════════════════════
     def _end_episode(self, reason):
@@ -927,6 +1003,7 @@ class OnlineRLNode(Node):
         self.agent.end_episode(self.episode_reward, self.step_count)
         avg_loss = np.mean(self.episode_losses) if self.episode_losses else 0
         eps = self.agent.get_epsilon(); p_init = self.agent._compute_adaptive_p()
+        self._write_train_metrics(reason, avg_loss, eps)
         emojis = {'crash_drift': '⚠️ DRIFT', 'crash_altitude': '💀 CRASH',
                   'crash_flip': '🔥 FLIP', 'timeout': '⏱️ TIMEOUT',
                   'detection_failed': '🙈 MISS', 'recovery_failed': '🔒 STUCK',
@@ -1142,6 +1219,10 @@ def main():
     ap.add_argument('--sweep-values', default=None,
                     help='쉼표구분 bias값 (미지정 시 모드별 권장 grid)')
     ap.add_argument('--outdir', default=None, help='결과 폴더(미지정 시 config값)')
+    ap.add_argument('--agent', choices=['rhukf', 'adam'], default=None,
+                    help='학습 옵티마이저 선택 (rhukf=제안 | adam=Adam+Huber baseline)')
+    ap.add_argument('--speed', type=float, default=None,
+                    help='sim 속도배율(>1=실시간보다 빠름; lockstep 한계까지. 2~4부터)')
     _args, _ = ap.parse_known_args()
 
     # 모드별 권장 grid (값 미지정 시) — 각 모드의 '붕괴 경계'를 브래킷
@@ -1160,6 +1241,12 @@ def main():
             cfg.sweep_values = _grids[_args.sweep_mode]
     if _args.sweep_values:
         cfg.sweep_values = [float(x) for x in _args.sweep_values.split(',')]
+    if _args.agent:
+        cfg.agent_type = _args.agent
+        if _args.outdir is None:                 # 미지정 시 에이전트별 폴더로 분리(비교용)
+            cfg.outdir = f'results_{_args.agent}'
+    if _args.speed is not None:
+        cfg.sim_speed_factor = float(_args.speed)
     if _args.outdir:
         cfg.outdir = _args.outdir
         os.makedirs(cfg.outdir, exist_ok=True)
