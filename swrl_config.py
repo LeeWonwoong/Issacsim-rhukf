@@ -49,13 +49,13 @@ class Config:
     #  에피소드 구조
     # ══════════════════════════════════════════════════════════
     warmup_seconds: float = 3.0
-    attack_start_range: Tuple[int, int] = (30, 100)
+    attack_start_range: Tuple[int, int] = (50, 150)
     attack_ramp_duration: float = 1.0     # LoE α가 0→목표까지 차오르는 시간(초)=10스텝@10Hz. 잔차 점진 상승→선제 호버 여유
-    attack_duration_range: Tuple[int, int] = (50, 120)
+    attack_duration_range: Tuple[int, int] = (50, 100)
 
     eps_action_probs: List[float] = field(default_factory=lambda: [0.8, 0.2])  # 탐험 track:hover=80:20 (50/50은 평시 FP폭증·교란)
 
-    log_interval: int = 10
+    log_interval: int = 5
 
     # ══════════════════════════════════════════════════════════
     #  드론 물리 (보상/판정용)
@@ -84,7 +84,7 @@ class Config:
     prob_no_attack: float = 0.15
 
     # ── 공격 시간 구조: burst(on-off-on 반복)로 비정상성 강조 — FIR이 이기는 regime ──
-    attack_mode: str = 'burst'                                  # 'burst' | 'single'
+    attack_mode: str = 'single'                                  # 'burst' | 'single'
     attack_burst_count_range: Tuple[int, int] = (2, 4)          # 에피소드당 버스트 개수
     attack_burst_on_range: Tuple[int, int] = (15, 35)           # 각 버스트 ON 길이 (RL steps@10Hz)
     attack_burst_off_range: Tuple[int, int] = (20, 50)          # 버스트 사이 OFF 길이
@@ -98,7 +98,7 @@ class Config:
     #     결정밴드 s∈[1.2,1.3] (track→추락 / hover→생존), s<1.2=둘다생존, s>1.3=hover도 추락.
     #   독립 박스는 ray를 벗어나 추락이 안 나므로(예: tor=1.3인데 thr=4) scale 하나로 묶어 tube 샘플.
     sample_bias_box: bool = True                                # True: combined-ray tube 샘플 / False: (bias_*×intensity)
-    bias_scale_range: Tuple[float, float] = (1.12, 1.34)        # tube 중심축 s — 밴드[1.2,1.3]을 감싸도록 ↓↑ 스프레드
+    bias_scale_range: Tuple[float, float] = (1.0, 1.33)        # tube 중심축 s — 밴드[1.2,1.3]을 감싸도록 ↓↑ 스프레드
     bias_ft_ratio: float = 5.0                                  # thrust = ft_ratio · s  (sweep와 동일 비율)
     bias_yaw_ratio: float = 0.2                                 # torque_z = yaw_ratio · s
     bias_jitter: float = 0.10                                   # 각 성분 ±10% 지터(tube 두께=공격 다양성)
@@ -158,9 +158,9 @@ class Config:
     buffer_size: int = 20000
 
     # ── 탐험 ──
-    eps_start: float = 0.99
-    eps_end: float = 0.001
-    eps_decay_steps: int = 3000
+    eps_start: float = 0.9
+    eps_end: float = 0.01
+    eps_decay_steps: int = 6000
 
     # ══════════════════════════════════════════════════════════
     #  D3QN 네트워크 구조
@@ -182,33 +182,35 @@ class Config:
     measurement_mode: str = 'q_target'     # z = r + γ^n·Q_target
     anchor_type: str = 'target'            # error-state θ_anchor
     ddqn_argmax: str = 'online_moving'
-    h0_online_moving_init: str = 'theta_target'
+    h0_online_moving_init: str = 'prev_est'
     h0_prior_source: str = 'target'
     use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
 
     N_horizon: int = 5
-    update_interval: int = 4               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
+    update_interval: int = 1               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
     tau_srrhuif: float = 0.005             # soft target update 비율
     target_update_mode: str = 'soft'       # 'soft'(선택) | 'hard'
     target_update_period: int = 200
 
     # ── UKF 시그마포인트 ──
-    alpha: float = 0.3                     # Phase0: 0.9→0.3 (n_x≈514에서 σ스프레드 3배 축소→발산 억제)
+    alpha: float = 0.1                     # Phase0: 0.9→0.3 (n_x≈514에서 σ스프레드 3배 축소→발산 억제)
     beta: float = 2.0
     kappa: float = 0.0
 
     # ── 노이즈/공분산 (eps와 동일 지수 스케줄: init→end) ──
     q_init: float = 1e-2
     q_end: float = 1e-2
-    r_init: float = 1.5
-    r_end: float = 1.5
-    p_init: float = 0.03                   # 초기 파라미터 공분산
+
+    r_init: float = 2.0
+    r_end: float = 2.0
+
+    p_init: float = 0.05                   # 초기 파라미터 공분산
     p_delta_init: float = 0.05             # error-state Δ 초기 공분산
-    huber_c: float = 3.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
+    huber_c: float = 8.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ──
-    use_n_step: bool = True
+    use_n_step: bool = False
     n_step_size: int = 3
 
     # ── PER (이번 실험: PER off → Huber-R 단독 outlier 방어로 FIR 기여 isolate) ──
@@ -244,14 +246,31 @@ class Config:
     # ══════════════════════════════════════════════════════════
     eval_interval: int = 20
     eval_scenarios: List[dict] = field(default_factory=lambda: [
+        # ★ 학습과 동일한 combined-ray bias (s, 0.2·s, 5·s)를 고정 scale로 — intensity=1.0(ramp로 full).
+        #   학습 tube span [1.0,1.33]에 정렬, 결정밴드[1.2,1.3] 포함. pattern=aggressive(학습 공격조건 일치).
+        # 1) 무공격 (FP/TN baseline — aggressive 기동의 어려운 FP 케이스)
         {'pattern': 'aggressive', 'attack_type': 'none',
          'attack_intensity': 0.0, 'attack_start_step': 0,
          'disturbance_type': 'none', 'wind_speed': 0.0},
-        {'pattern': 'circle', 'attack_type': 'loe_combined',
-         'attack_intensity': 0.25, 'attack_start_step': 50,
+        # 2) 밴드 아래 s=1.05 (둘다 생존; 약공격 FN 거동)
+        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 50,
+         'bias_torque_xy': 1.05, 'bias_torque_z': 0.210, 'bias_thrust_n': 5.25,
          'disturbance_type': 'none', 'wind_speed': 0.0},
-        {'pattern': 'figure8', 'attack_type': 'loe_combined',
-         'attack_intensity': 0.40, 'attack_start_step': 50,
+        # 3) 밴드 하단 s=1.20 (b_track; track→추락 / hover→생존: 결정-critical)
+        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 50,
+         'bias_torque_xy': 1.20, 'bias_torque_z': 0.240, 'bias_thrust_n': 6.00,
+         'disturbance_type': 'none', 'wind_speed': 0.0},
+        # 4) 밴드 상단 s=1.28 (결정-critical, 더 어려움)
+        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 50,
+         'bias_torque_xy': 1.28, 'bias_torque_z': 0.256, 'bias_thrust_n': 6.40,
+         'disturbance_type': 'none', 'wind_speed': 0.0},
+        # 5) tube 상단 s=1.33 (hover도 한계; 강공격 terminal)
+        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 50,
+         'bias_torque_xy': 1.33, 'bias_torque_z': 0.266, 'bias_thrust_n': 6.65,
          'disturbance_type': 'none', 'wind_speed': 0.0},
     ])
 

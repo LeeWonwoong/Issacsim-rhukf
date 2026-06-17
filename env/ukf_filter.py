@@ -77,17 +77,17 @@ class DynamicsUKF:
         self.drag = np.array(calib['drag'])
 
         n = self.nx
-        lam = 0.6**2 * n - n
+        lam = 0.5**2 * n - n
         self.lam = lam
         self.Wm = np.full(2 * n + 1, 1.0 / (2 * (n + lam)))
         self.Wc = np.full(2 * n + 1, 1.0 / (2 * (n + lam)))
         self.Wm[0] = lam / (n + lam)
-        self.Wc[0] = lam / (n + lam) + (1 - 0.6**2 + 2.0)
+        self.Wc[0] = lam / (n + lam) + (1 - 0.5**2 + 2.0)
 
         self.Q = np.diag([1e-3]*3 + [1e-3]*3 + [5e-3]*3 + [1e-3]*3)
         # R: 시뮬 실측 노이즈 정합(과대추정 금지). pos수평 var≈0.005/고도≈0.02, vel std0.1→var0.01, gyro.
         #    예전 0.5/0.5/0.1은 25~100× 과대 → NIS가 분모에 묻힘. (sweep raw-NIS로 미세조정)
-        self.R = np.diag([0.01]*3 + [0.02]*3 + [0.03]*3)
+        self.R = np.diag([0.1]*3 + [0.2]*3 + [0.1]*3)
 
         self.x = np.zeros(12)
         self.P = np.eye(12) * 0.1
