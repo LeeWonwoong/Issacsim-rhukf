@@ -94,15 +94,22 @@ class Config:
     #   torque_xy→roll/pitch(gyro NIS), torque_z→yaw(gyro NIS), thrust_n→추력(vel NIS).
     #   복합이라 vel·gyro 두 관측채널 다 반응 + 실패모드 둘(flip/고도상실).
     attack_form: str = 'additive'    # (호환용 필드; additive만 지원)
-    #   학습 시 매 에피소드 아래 박스에서 3성분을 독립 샘플(고정 ray×intensity 아님 → 공격 다양체=면).
-    sample_bias_box: bool = True                                # True면 박스 랜덤, False면 (bias_* × intensity)
-    bias_torque_xy_range: Tuple[float, float] = (0.8, 1.3)      # roll/pitch 토크(Nm) — 밴드 1.2~1.28 포함
-    bias_torque_z_range:  Tuple[float, float] = (0.05, 0.30)    # yaw 토크(Nm)
-    bias_thrust_n_range:  Tuple[float, float] = (3.0, 7.0)      # 추력(N, 하향)
+    #   ★ sweep 검증: combined 추락 = ray (torque_xy=s, torque_z=0.2·s, thrust=5·s).
+    #     결정밴드 s∈[1.2,1.3] (track→추락 / hover→생존), s<1.2=둘다생존, s>1.3=hover도 추락.
+    #   독립 박스는 ray를 벗어나 추락이 안 나므로(예: tor=1.3인데 thr=4) scale 하나로 묶어 tube 샘플.
+    sample_bias_box: bool = True                                # True: combined-ray tube 샘플 / False: (bias_*×intensity)
+    bias_scale_range: Tuple[float, float] = (1.12, 1.34)        # tube 중심축 s — 밴드[1.2,1.3]을 감싸도록 ↓↑ 스프레드
+    bias_ft_ratio: float = 5.0                                  # thrust = ft_ratio · s  (sweep와 동일 비율)
+    bias_yaw_ratio: float = 0.2                                 # torque_z = yaw_ratio · s
+    bias_jitter: float = 0.10                                   # 각 성분 ±10% 지터(tube 두께=공격 다양성)
     #   (sweep/호환용 단일값 — 박스 OFF일 때만 사용)
     bias_torque_xy: float = 0.5
     bias_torque_z:  float = 0.1
     bias_thrust_n:  float = 2.5
+
+    # ── 공격 에피소드 기동: 추락 밴드는 aggressive에서 검증됨 → 공격시 그 패턴으로 결합 ──
+    #    (평시 에피소드는 flight_patterns 전체 사용; 타 패턴 밴드는 추후 재검증)
+    attack_flight_patterns: List[str] = field(default_factory=lambda: ['aggressive'])
 
     # ── 탐험 편향은 eps_action_probs(=[0.8,0.2])로 처리 ──
     # ── TD-오차 첨도 로깅(무거운 꼬리 = Huber/유계영향 이점 근거) ──
@@ -319,12 +326,18 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
     }
     if cfg.attack_enabled and random.random() > cfg.prob_no_attack:
         scenario['attack_type'] = random.choice(cfg.attack_types)
+        # 공격 에피소드는 추락밴드가 검증된 기동으로 (sweep=aggressive)
+        scenario['pattern'] = random.choice(getattr(cfg, 'attack_flight_patterns', ['aggressive']))
         if getattr(cfg, 'sample_bias_box', True):
-            # 3성분 독립 박스 샘플 → 공격 다양체=면. intensity=1.0(ramp로 0→full bias).
+            # combined 추락 ray (s, 0.2·s, 5·s) 주변 tube 샘플 — scale 하나로 묶어야 ray를 안 벗어남.
             scenario['attack_intensity'] = 1.0
-            scenario['bias_torque_xy'] = random.uniform(*cfg.bias_torque_xy_range)
-            scenario['bias_torque_z']  = random.uniform(*cfg.bias_torque_z_range)
-            scenario['bias_thrust_n']  = random.uniform(*cfg.bias_thrust_n_range)
+            s = random.uniform(*cfg.bias_scale_range)
+            j = cfg.bias_jitter
+            jit = lambda: random.uniform(1.0 - j, 1.0 + j)
+            scenario['bias_torque_xy'] = s * jit()
+            scenario['bias_torque_z']  = cfg.bias_yaw_ratio * s * jit()
+            scenario['bias_thrust_n']  = cfg.bias_ft_ratio  * s * jit()
+            scenario['bias_scale'] = s          # 로깅/분석용 (밴드 대비 위치)
         else:
             lo, hi = get_curriculum_intensity(episode, cfg)
             scenario['attack_intensity'] = random.uniform(lo, hi)
