@@ -427,9 +427,9 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
 #  PER priority recompute (horizon 종료 후)
 # ═════════════════════════════════════════════════════════════
 @torch.no_grad()
-def compute_per_priorities(theta, theta_target, batch_hist, sp, cfg):
-    """최신 theta로 |TD| 재계산 → (indices, |td|). PER off면 (None, None)."""
-    if not cfg.use_per:
+def compute_per_priorities(theta, theta_target, batch_hist, sp, cfg, force=False):
+    """최신 theta로 |TD| 재계산 → (indices, |td|). PER off & not force면 (None, None)."""
+    if not cfg.use_per and not force:
         return None, None
     device, info = sp['device'], sp['info']
     normalizer = sp.get('normalizer')

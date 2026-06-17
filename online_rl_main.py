@@ -868,7 +868,11 @@ class OnlineRLNode(Node):
         # ── Attack burst on/off (버스트 경계에서 토글) ──
         want_attack = (self.scenario['attack_type'] != 'none') and self._is_attack_step(self.step_count)
         if want_attack and not self.attack_active_flag:
-            self._send_attack_cmd(True, self.scenario['attack_type'], self.scenario['attack_intensity'])
+            sc = self.scenario
+            self._send_attack_cmd(True, sc['attack_type'], sc.get('attack_intensity', 1.0),
+                bias_torque_xy=sc.get('bias_torque_xy', None),
+                bias_torque_z=sc.get('bias_torque_z', None),
+                bias_thrust_n=sc.get('bias_thrust_n', None))
             self.attack_active_flag = True
             self._cur_burst_start = self.step_count
             self.get_logger().warn(
@@ -932,7 +936,7 @@ class OnlineRLNode(Node):
         self.get_logger().info(
             f'\n  ┌─ Ep {self.episode}: {emojis.get(reason, reason)} → {reset_label} reset\n'
             f'  │ R={self.episode_reward:.1f} Steps={self.step_count} Loss={avg_loss:.4f}\n'
-            f'  │ ε={eps:.3f} P={p_init:.5f}\n'
+            f'  │ ε={eps:.3f} P={p_init:.5f} | TD|n,μ,exkurt|={self.agent.td_kurtosis()}\n'
             f'  │ Atk: {self.scenario["attack_type"]}(int={self.scenario["attack_intensity"]:.3f}, '
             f'start={self.scenario["attack_start_step"]}) | {self.scenario["pattern"]} | '
             f'{self.scenario.get("disturbance_type","none")}\n  └─{"─"*50}')
@@ -1140,11 +1144,11 @@ def main():
     ap.add_argument('--outdir', default=None, help='결과 폴더(미지정 시 config값)')
     _args, _ = ap.parse_known_args()
 
-    # 모드별 권장 grid (값 미지정 시)
+    # 모드별 권장 grid (값 미지정 시) — 각 모드의 '붕괴 경계'를 브래킷
     _grids = {
-        'combined': [0.0, 0.3, 0.5, 0.6, 0.65, 0.7, 0.8],   # Nm (추력=ft_ratio·b)
-        'torque':   [0.0, 0.5, 1.0, 1.3, 1.5, 1.7, 2.0],    # Nm
-        'thrust':   [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0],  # N
+        'combined': [0.8, 1.0, 1.2, 1.3, 1.5, 1.7],          # Nm 토크 (추력=ft_ratio·b:4~8.5N); 토크를 flip영역까지
+        'torque':   [1.0, 1.2, 1.3, 1.4, 1.5, 1.7],          # Nm; 밴드 [1.3,1.5) 정밀화
+        'thrust':   [8.0, 12.0, 14.0, 16.0, 20.0, 25.0],     # N; 고도붕괴(~14N=권한포화) 브래킷
     }
     if _args.sweep:
         cfg.sweep_mode = True

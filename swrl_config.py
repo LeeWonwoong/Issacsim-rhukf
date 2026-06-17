@@ -53,7 +53,7 @@ class Config:
     attack_ramp_duration: float = 1.0     # LoE α가 0→목표까지 차오르는 시간(초)=10스텝@10Hz. 잔차 점진 상승→선제 호버 여유
     attack_duration_range: Tuple[int, int] = (50, 120)
 
-    eps_action_probs: List[float] = field(default_factory=lambda: [0.5, 0.5])  # 50/50: (공격∧hover) 쌍 커버. hover는 안전한 탐험
+    eps_action_probs: List[float] = field(default_factory=lambda: [0.8, 0.2])  # 탐험 track:hover=80:20 (50/50은 평시 FP폭증·교란)
 
     log_interval: int = 10
 
@@ -94,17 +94,30 @@ class Config:
     #   torque_xy→roll/pitch(gyro NIS), torque_z→yaw(gyro NIS), thrust_n→추력(vel NIS).
     #   복합이라 vel·gyro 두 관측채널 다 반응 + 실패모드 둘(flip/고도상실).
     attack_form: str = 'additive'    # (호환용 필드; additive만 지원)
-    #   아래 = intensity(=sweep scale)=1.0 에서의 복합 바이어스 크기. "붕괴 직전"은 sweep로 확정.
-    bias_torque_xy: float = 0.5      # roll/pitch 토크(Nm) @scale=1
-    bias_torque_z:  float = 0.1      # yaw 토크(Nm) @scale=1
-    bias_thrust_n:  float = 2.5      # 추력(N, 하향) @scale=1  ← 이게 vel NIS를 만든다(옛날엔 있었음)
+    #   학습 시 매 에피소드 아래 박스에서 3성분을 독립 샘플(고정 ray×intensity 아님 → 공격 다양체=면).
+    sample_bias_box: bool = True                                # True면 박스 랜덤, False면 (bias_* × intensity)
+    bias_torque_xy_range: Tuple[float, float] = (0.8, 1.3)      # roll/pitch 토크(Nm) — 밴드 1.2~1.28 포함
+    bias_torque_z_range:  Tuple[float, float] = (0.05, 0.30)    # yaw 토크(Nm)
+    bias_thrust_n_range:  Tuple[float, float] = (3.0, 7.0)      # 추력(N, 하향)
+    #   (sweep/호환용 단일값 — 박스 OFF일 때만 사용)
+    bias_torque_xy: float = 0.5
+    bias_torque_z:  float = 0.1
+    bias_thrust_n:  float = 2.5
+
+    # ── 탐험 편향은 eps_action_probs(=[0.8,0.2])로 처리 ──
+    # ── TD-오차 첨도 로깅(무거운 꼬리 = Huber/유계영향 이점 근거) ──
+    log_td_kurtosis: bool = True
+    td_hist_size: int = 5000
 
     # ══════════════════════════════════════════════════════════
-    #  커리큘럼
+    #  커리큘럼 (OFF — 비커리큘럼: 매 에피소드 난이도 급변 = FIR 적응 이점 regime)
     # ══════════════════════════════════════════════════════════
-    # 강도 = LoE 비율 α (0~1). "track하면 추락 / hover하면 생존" 밴드로 한정.
-    #   ※ TWR 의존이라 실제 상한은 sweep로 검증 필요 (호버 시 (1-α)·hover_thrust ≥ weight).
-    curriculum_enabled: bool = True
+    curriculum_enabled: bool = False
+    curriculum_fixed_min: float = 0.15
+    curriculum_start_max: float = 0.20
+    curriculum_end_max: float = 0.45
+    curriculum_warmup_episodes: int = 50
+    curriculum_full_episodes: int = 150
     curriculum_fixed_min: float = 0.15
     curriculum_start_max: float = 0.20
     curriculum_end_max: float = 0.45
@@ -248,15 +261,15 @@ class Config:
     #  sweep_values = 그 채널에서 휩쓸 물리 바이어스 크기(모드에 따라 Nm 또는 N).
     #  → 각 모드별 "track 추락 ∧ hover 생존" 밴드 = 감당 가능 한계를 찾는다.
     #
-    #  [권장 grid]
-    #    combined : [0.0, 0.3, 0.5, 0.6, 0.65, 0.7, 0.8]  (Nm; 추력=5·b → ~0~4N, 밴드 b≈0.65 부근)
-    #    torque   : [0.0, 0.5, 1.0, 1.3, 1.5, 1.7, 2.0]   (Nm; flip 임계 ~1.5)
-    #    thrust   : [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0] (N;  중량≈13.5N 대비)
+    #  [권장 grid] — 각 모드의 '붕괴 경계'를 브래킷 (baseline b=0은 자동 추가됨)
+    #    combined : [0.8, 1.0, 1.2, 1.3, 1.5, 1.7]      (Nm; 추력=5·b → 4~8.5N; 토크를 flip영역까지)
+    #    torque   : [1.0, 1.2, 1.3, 1.4, 1.5, 1.7]      (Nm; 밴드 [1.3,1.5) 정밀화)
+    #    thrust   : [8.0, 12.0, 14.0, 16.0, 20.0, 25.0] (N;  ~14N=권한포화→고도붕괴 브래킷)
     # ══════════════════════════════════════════════════════════
     sweep_mode: bool = False
     sweep_attack_mode: str = 'combined'        # 'combined' | 'torque' | 'thrust'
     sweep_values: List[float] = field(default_factory=lambda: [
-        0.0, 0.3, 0.5, 0.6, 0.65, 0.7, 0.8])   # 기본=combined의 토크 b(Nm)
+        0.8, 1.0, 1.2, 1.3, 1.5, 1.7])         # 기본=combined의 토크 b(Nm)
     sweep_combined_ft_ratio: float = 5.0       # combined에서 추력/토크_xy 비 (3.25N/0.65Nm≈5)
     sweep_torque_yaw_ratio:  float = 0.2       # yaw/roll·pitch 비 (검출 보조)
     sweep_pattern: str = 'aggressive'          # track 셀 비행패턴(명령토크 최대=최악조건)
@@ -306,8 +319,18 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
     }
     if cfg.attack_enabled and random.random() > cfg.prob_no_attack:
         scenario['attack_type'] = random.choice(cfg.attack_types)
-        lo, hi = get_curriculum_intensity(episode, cfg)
-        scenario['attack_intensity'] = random.uniform(lo, hi)
+        if getattr(cfg, 'sample_bias_box', True):
+            # 3성분 독립 박스 샘플 → 공격 다양체=면. intensity=1.0(ramp로 0→full bias).
+            scenario['attack_intensity'] = 1.0
+            scenario['bias_torque_xy'] = random.uniform(*cfg.bias_torque_xy_range)
+            scenario['bias_torque_z']  = random.uniform(*cfg.bias_torque_z_range)
+            scenario['bias_thrust_n']  = random.uniform(*cfg.bias_thrust_n_range)
+        else:
+            lo, hi = get_curriculum_intensity(episode, cfg)
+            scenario['attack_intensity'] = random.uniform(lo, hi)
+            scenario['bias_torque_xy'] = cfg.bias_torque_xy
+            scenario['bias_torque_z']  = cfg.bias_torque_z
+            scenario['bias_thrust_n']  = cfg.bias_thrust_n
 
         if getattr(cfg, 'attack_mode', 'single') == 'burst':
             # 버스트 일정: ON 구간을 여러 번 (on-off-on …) → 반복적 빠른 적응 요구

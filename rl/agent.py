@@ -49,6 +49,7 @@ class OnlineRHUKFAgent:
         # ── 버퍼 ──
         self.buffer = TensorReplayBuffer(cfg.buffer_size, cfg.dimS, cfg.device, cfg)
         self.batch_hist = deque(maxlen=cfg.N_horizon)
+        self._td_hist = deque(maxlen=getattr(cfg, 'td_hist_size', 5000))
 
         # ── 공유 파라미터 dict (필터 step 입력) ──
         self.sp = {
@@ -198,12 +199,21 @@ class OnlineRHUKFAgent:
         # ── Soft target update ──
         self.theta_target = (1.0 - cfg.tau_srrhuif) * self.theta_target + cfg.tau_srrhuif * self.theta
 
-        # ── PER priority 갱신 ──
+        # ── PER priority 갱신 + TD-오차 첨도 로깅(무거운 꼬리 증거) ──
+        td = None
         if cfg.use_per:
             idx, td = compute_per_priorities(self.theta, self.theta_target,
                                              list(self.batch_hist), self.sp, cfg)
             if idx is not None:
                 self.buffer.update_priorities(idx, td)
+        elif getattr(cfg, 'log_td_kurtosis', True):
+            _, td = compute_per_priorities(self.theta, self.theta_target,
+                                           list(self.batch_hist), self.sp, cfg, force=True)
+        if td is not None:
+            try:
+                self._td_hist.extend(td.detach().cpu().numpy().ravel().tolist())
+            except Exception:
+                pass
 
         dt_ms = (pytime.perf_counter() - t0) * 1000.0
         avg_z = z_var_sum / cfg.N_horizon
@@ -213,6 +223,17 @@ class OnlineRHUKFAgent:
     # 로깅 호환 (기존 _compute_adaptive_p 자리)
     def _compute_adaptive_p(self, *args, **kwargs) -> float:
         return self.cfg.p_init
+
+    def td_kurtosis(self):
+        """누적 |TD|의 (n, mean, excess_kurtosis). 무거운 꼬리(>0)면 Huber/유계영향 이점 근거."""
+        if len(self._td_hist) < 50:
+            return (len(self._td_hist), 0.0, 0.0)
+        x = np.asarray(self._td_hist, dtype=np.float64)
+        m, s = x.mean(), x.std()
+        if s < 1e-9:
+            return (len(x), float(m), 0.0)
+        exkurt = float(np.mean(((x - m) / s) ** 4) - 3.0)
+        return (len(x), float(m), exkurt)
 
     def get_q_values(self, state: np.ndarray) -> np.ndarray:
         with torch.no_grad():
