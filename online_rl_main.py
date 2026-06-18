@@ -455,6 +455,7 @@ class OnlineRLNode(Node):
         # 에피소드 confusion/지연 메트릭 (TP=공격중hover, FP=평시hover, FN=공격중track, TN=평시track)
         self._ep_tp = self._ep_fp = self._ep_fn = self._ep_tn = 0
         self._ep_det_delay = None
+        self._ep_learn_dts = []   # 에피소드 내 learn-step 시간(ms) — speed 한계 판단용
 
     def _start_new_episode(self):
         if self.sweep_mode:
@@ -783,6 +784,9 @@ class OnlineRLNode(Node):
                 self.episode_losses.append(loss)
                 self.last_learn_dt = dt_ms
                 self.last_z_var = z_var  # ★ 추가
+                if not hasattr(self, '_ep_learn_dts'):
+                    self._ep_learn_dts = []
+                self._ep_learn_dts.append(dt_ms)
         except Exception as e:
             self.get_logger().error(f"  [LEARN ERROR] {e}")
         finally:
@@ -1010,10 +1014,19 @@ class OnlineRLNode(Node):
                   'excessive_fp': '🤡 PANIC'}
         reset_label = {'crash_flip': 'HARD', 'crash_altitude': 'WARM'}.get(reason, 'SOFT')
 
+        _ld = self._ep_learn_dts
+        _sf = getattr(self.cfg, 'sim_speed_factor', 1.0)
+        _tdk = getattr(self.agent, 'td_kurtosis', lambda: (0, 0.0, 0.0))()
+        _learn_str = (
+            f'  │ learn-step: mean={np.mean(_ld):.1f}ms max={np.max(_ld):.1f}ms (n={len(_ld)}) '
+            f'| step예산={100.0/max(_sf,0.01):.0f}ms@speed{_sf:.1f}\n'
+            if _ld else '')
+
         self.get_logger().info(
             f'\n  ┌─ Ep {self.episode}: {emojis.get(reason, reason)} → {reset_label} reset\n'
             f'  │ R={self.episode_reward:.1f} Steps={self.step_count} Loss={avg_loss:.4f}\n'
-            f'  │ ε={eps:.3f} P={p_init:.5f} | TD|n,μ,exkurt|={self.agent.td_kurtosis()}\n'
+            f'  │ ε={eps:.3f} P={p_init:.5f} | TD|n,μ,exkurt|={_tdk}\n'
+            f'{_learn_str}'
             f'  │ Atk: {self.scenario["attack_type"]}(int={self.scenario["attack_intensity"]:.3f}, '
             f'start={self.scenario["attack_start_step"]}) | {self.scenario["pattern"]} | '
             f'{self.scenario.get("disturbance_type","none")}\n  └─{"─"*50}')

@@ -16,6 +16,7 @@ learn()은 (loss, dt_ms, z_var) 3-튜플 반환 → online_rl_main 언팩과 일
 """
 import time as pytime
 import copy
+from collections import deque
 
 import numpy as np
 import torch
@@ -67,6 +68,7 @@ class OnlineAdamAgent:
         self.episode_rewards = []
         self.episode_lengths = []
         self._learn_call_count = 0
+        self._td_hist = deque(maxlen=getattr(cfg, 'td_hist_size', 5000))  # TD-오차 첨도(공정 비교용)
         self.target_gamma = (cfg.gamma ** cfg.n_step_size) if cfg.use_n_step else cfg.gamma
 
         n = sum(p.numel() for p in self.net.parameters())
@@ -159,6 +161,11 @@ class OnlineAdamAgent:
             q_next = self.target_net(s_next).gather(1, a_best.unsqueeze(1)).squeeze(1)
             q_target = r + self.target_gamma * (1 - term) * q_next
         td = q_target - q_a
+        if getattr(cfg, 'log_td_kurtosis', True):
+            try:
+                self._td_hist.extend(td.detach().abs().cpu().numpy().ravel().tolist())
+            except Exception:
+                pass
         # Huber(smooth_l1) per-sample + (PER off면 is_w=1)
         loss = (is_w * F.smooth_l1_loss(q_a, q_target, reduction='none')).mean()
         self.optimizer.zero_grad()
@@ -179,6 +186,17 @@ class OnlineAdamAgent:
     def get_epsilon(self):
         return self.cfg.eps_end + (self.cfg.eps_start - self.cfg.eps_end) * \
             np.exp(-self.steps_done / self.cfg.eps_decay_steps)
+
+    def td_kurtosis(self):
+        """누적 |TD|의 (n, mean, excess_kurtosis) — RHUKF와 동일 정의(공정 비교)."""
+        if len(self._td_hist) < 50:
+            return (len(self._td_hist), 0.0, 0.0)
+        x = np.asarray(self._td_hist, dtype=np.float64)
+        m, s = x.mean(), x.std()
+        if s < 1e-9:
+            return (len(x), float(m), 0.0)
+        exkurt = float(np.mean(((x - m) / s) ** 4) - 3.0)
+        return (len(x), float(m), exkurt)
 
     def end_episode(self, total_reward, episode_length):
         self.episode_count += 1

@@ -390,6 +390,20 @@ class PegasusApp:
                 self._update_chase_cam(self.vehicle.state.position)
             self.world.step(render=do_render)
 
+            # ── 달성 배속(RTF) 주기 로그: 요청 speed 대비 실제 도달 배속(=compute 한계 지표) ──
+            if step_counter % (physics_hz * 2) == 0:   # 2 sim-초마다
+                _now = time.time()
+                if not hasattr(self, '_rtf_t0'):
+                    self._rtf_t0 = _now; self._rtf_sim0 = self.sim_time
+                else:
+                    _dw = _now - self._rtf_t0; _ds = self.sim_time - self._rtf_sim0
+                    if _dw > 0.5:
+                        _rtf = _ds / _dw
+                        _flag = '' if _rtf >= 0.95 * self.speed_factor else '  ← compute 한계(요청 미달)'
+                        print(f'[RTF] 달성={_rtf:.2f}x / 요청={self.speed_factor:.1f}x '
+                              f'(sim={self.sim_time:.0f}s){_flag}', flush=True)
+                    self._rtf_t0 = _now; self._rtf_sim0 = self.sim_time
+
             self.sim_time += self.physics_dt
             step_counter += 1
             if step_counter % 5 == 0:
