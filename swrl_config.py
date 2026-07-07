@@ -287,7 +287,9 @@ class Config:
     sweep_combined_ft_ratio: float = 2.0       # 추력/토크_xy 비. 파일럿1: 5.0에선 th=6.5N@b=1.3이 hover까지
                                                # crash_altitude로 죽여 결과성 밴드 소멸 → 토크 우세(2.0)로 하향.
     sweep_torque_yaw_ratio:  float = 0.2       # yaw/roll·pitch 비 (검출 보조)
-    sweep_pattern: str = 'aggressive'          # track 셀 비행패턴(명령토크 최대=최악조건)
+    sweep_pattern: str = 'aggressive'          # track 셀 비행패턴(명령토크 최대=최악조건). --sweep-pattern 로 override
+    sweep_wind_type: str = 'none'              # sweep 외란 타입 none/wind_constant/wind_gust/wind_turbulence. --sweep-wind-type
+    sweep_wind_speed: float = 0.0              # sweep 바람 속도(m/s); force≈0.031·v² N. --sweep-wind-speed
     sweep_episodes: int = 8                    # 셀당 반복(RNG 노이즈)
     sweep_attack_start: int = 30               # 공격 ON 스텝(@10Hz). 이후 ramp
     # ── 조건 C: 지연 호버(delayed hover) — "공격 시작 후 d스텝 뒤 호버 전환" 정책 ──

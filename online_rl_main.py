@@ -1149,7 +1149,8 @@ class OnlineRLNode(Node):
             'pattern': self.sweep_pattern_cur, 'attack_type': 'loe_combined',
             'attack_intensity': 1.0, 'attack_start_step': s,
             'attack_end_step': 99999, 'attack_bursts': [(s, 99999)],
-            'disturbance_type': 'none', 'wind_speed': 0.0,
+            'disturbance_type': getattr(self.cfg, 'sweep_wind_type', 'none'),
+            'wind_speed': float(getattr(self.cfg, 'sweep_wind_speed', 0.0)),
         }
         _u = 'N' if self.cfg.sweep_attack_mode == 'thrust' else 'Nm'
         self.get_logger().info(
@@ -1320,6 +1321,13 @@ def main():
                     help='쉼표구분 dhover 지연 스텝 목록 override (예: 1,2,3)')
     ap.add_argument('--log-zu', dest='log_zu', action='store_true',
                     help='UKF 오프라인 튜닝용 (z,u) 시계열을 outdir/zu_log.npz로 저장')
+    ap.add_argument('--sweep-pattern', dest='sweep_pattern', default=None,
+                    help='track/dhover 셀 비행패턴 override (aggressive|circle|figure8|waypoint)')
+    ap.add_argument('--sweep-wind-type', dest='sweep_wind_type', default=None,
+                    choices=['none', 'wind_constant', 'wind_gust', 'wind_turbulence'],
+                    help='sweep 외란 타입 override (기본 none)')
+    ap.add_argument('--sweep-wind-speed', dest='sweep_wind_speed', type=float, default=None,
+                    help='sweep 바람 속도 m/s override (force≈0.031·v²N; 8≈2N 15≈7N)')
     _args, _ = ap.parse_known_args()
 
     # 모드별 권장 grid (값 미지정 시) — 각 모드의 '붕괴 경계'를 브래킷
@@ -1354,6 +1362,12 @@ def main():
         cfg.sweep_hover_delays = tuple(int(x) for x in _args.hover_delays.split(','))
     if getattr(_args, 'log_zu', False):
         cfg.log_zu = True
+    if _args.sweep_pattern is not None:
+        cfg.sweep_pattern = _args.sweep_pattern
+    if _args.sweep_wind_type is not None:
+        cfg.sweep_wind_type = _args.sweep_wind_type
+    if _args.sweep_wind_speed is not None:
+        cfg.sweep_wind_speed = float(_args.sweep_wind_speed)
     if _args.outdir:
         cfg.outdir = _args.outdir
         os.makedirs(cfg.outdir, exist_ok=True)
