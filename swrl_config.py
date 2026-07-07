@@ -95,14 +95,16 @@ class Config:
     #   torque_xy→roll/pitch(gyro NIS), torque_z→yaw(gyro NIS), thrust_n→추력(vel NIS).
     #   복합이라 vel·gyro 두 관측채널 다 반응 + 실패모드 둘(flip/고도상실).
     attack_form: str = 'additive'    # (호환용 필드; additive만 지원)
-    #   ★ 동결(2026-07-07): 공격채널 = TORQUE-ONLY. combined는 기각 — vel 유의 활성화 구간(ft20~35)에서
-    #     dhover3가 0으로 붕괴("탐지신호 ∩ 대응유지" = 공집합, 추력채널 crash_altitude는 호버 흡수불가·물리#4).
-    #   torque tube = ray (torque_xy=s, torque_z=0.2·s, thrust=0). 결과성 밴드 s∈[1.30,1.32]Nm (track추락 ∧ hover생존),
-    #     하단 onset 1.28(track0.90)까지 스프레드해 그래디언트 확보. s≥1.34 제외(hover도 붕괴=회복불가).
-    #   ⚠ 관측 벡터 [nis_vel,nis_gyro,action]는 불변 — vel_NIS는 torque 공격에서도 정상 대비 4~7배↑ 보조신호.
-    sample_bias_box: bool = True                                # True: torque tube 샘플 / False: (bias_*×intensity)
-    bias_scale_range: Tuple[float, float] = (1.28, 1.32)       # tube 중심축 s(Nm) — 동결 밴드[1.30,1.32]+onset마진 1.28
-    bias_ft_ratio: float = 0.0                                  # thrust = ft_ratio · s (=0: combined 기각, torque-only)
+    #   ★ 동결(2026-07-07 갱신): 공격채널 = COMBINED ft_ratio=1.5 (torque:thrust = 1:1.5, T≈2N).
+    #     이전 torque-only 동결은 철회 — 당시 기각은 vel 채널 미확인 상태 판단이었음.
+    #     채널분리 압축(vel=log(x+0.5)·gyro=log1p) + thrust 소량 추가로 vel d′ 1.5→2.2 상승,
+    #     gyro d′는 3.0→2.5 소폭 하락하나 건재(운용 95pct 신호는 torque와 동등). 순이득 +0.7−0.5>0 → combined 채택.
+    #   combined tube = (torque_xy=s, torque_z=0.2·s, thrust=1.5·s). 결과성 밴드 s∈[1.34,1.40]Nm (track추락 ∧ hover생존),
+    #     ramp 0.0. s≥1.42 제외(hover도 붕괴=회복불가).
+    #   ⚠ 관측 벡터 [nis_vel,nis_gyro,action]는 불변 — 압축 함수만 채널분리(_rl_step_10hz/_sweep_step_10hz 통일).
+    sample_bias_box: bool = True                                # True: combined tube 샘플 / False: (bias_*×intensity)
+    bias_scale_range: Tuple[float, float] = (1.34, 1.40)       # tube 중심축 s(Nm) — 동결 combined 밴드[1.34,1.40]
+    bias_ft_ratio: float = 1.5                                  # thrust = ft_ratio · s (=1.5: combined 채택, T≈2N@s=1.34)
     bias_yaw_ratio: float = 0.2                                 # torque_z = yaw_ratio · s (동결 sweep torque 모드와 동일)
     bias_jitter: float = 0.10                                   # 각 성분 ±10% 지터(tube 두께=공격 다양성)
     #   (sweep/호환용 단일값 — 박스 OFF일 때만 사용)

@@ -163,6 +163,9 @@ class OnlineRLNode(Node):
         self.calib = load_calibration('calibration.json')
         self._ukf_q_gate = getattr(cfg, 'ukf_q_gate_gyro', 0.0)
         self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib, q_gate=self._ukf_q_gate)
+        # ── UKF 오프라인 튜닝용 (z,u) 로깅 (opt-in; sim 1회만 돌려 수집) ──
+        self._log_zu = bool(getattr(cfg, 'log_zu', False))
+        self._zu_rows = []
         if getattr(cfg, 'agent_type', 'rhukf') == 'adam':
             from rl.agent_adam import OnlineAdamAgent
             self.agent = OnlineAdamAgent(cfg)
@@ -198,6 +201,7 @@ class OnlineRLNode(Node):
 
         # ── HOVER 위치 고정 (★ 떨림 방지) ──
         self._hover_pos = np.zeros(2)  # HOVER 전환 시 위치 저장
+        self._hover_alt = 0.0          # ★ HOVER 전환 시 고도 저장 (고도 스냅 과도 제거)
         self._hover_yaw = 0.0  # ★ HOVER 전환 시 Yaw 저장용
 
         # ── Detection tracking ──
@@ -444,6 +448,7 @@ class OnlineRLNode(Node):
         self.window_buffer.clear(); self.gps_updated = False
         self.first_hover_step = None; self.hover_before_attack_count = 0
         self._is_airborne = False; self._hover_pos[:] = 0;  self._hover_yaw = 0.0
+        self._hover_alt = -abs(self.cfg.flight_altitude)  # ★ 기본값(미전환 상태용)
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
         self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib, q_gate=self._ukf_q_gate)
         self.is_ukf_initialized = False; self.last_res = np.zeros(9); self.last_Pzz = np.eye(9)
@@ -741,7 +746,7 @@ class OnlineRLNode(Node):
         elif self.flight_state == 'LEARNING':
             if self.prev_action == 1:
                 control_sp = (float(self._hover_pos[0]), float(self._hover_pos[1]),
-                              -abs(self.cfg.flight_altitude), self._hover_yaw, 0.0, 0.0, 0.0)
+                              float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
                 trajectory_sp = control_sp
             else:
                 trajectory_sp = self._compute_setpoint()
@@ -766,11 +771,29 @@ class OnlineRLNode(Node):
         vel_ned = [self.obs_gps_vel[1], self.obs_gps_vel[0], -self.obs_gps_vel[2]]
         z_9d = np.concatenate([gps_ned, vel_ned, self.cur_gyro])
         u_phys = to_physical_u(np.array([self.cur_thrust]), np.array([self.cur_torque]), self.calib)[0]
+        _was_init = not self.is_ukf_initialized
         if not self.is_ukf_initialized:
             self.ukf.x[0:3] = gps_ned; self.ukf.x[3:6] = self.cur_euler
             self.ukf.x[6:9] = vel_ned; self.ukf.x[9:12] = self.cur_gyro
             self.is_ukf_initialized = True
         self.last_res, self.last_Pzz = self.ukf.step(z_9d, u_phys)
+        # ── 오프라인 UKF 튜닝용 로깅: [ep, reset, attack, action, z(9), u(4), euler(3), atk_scale, atk_delay] ──
+        if self._log_zu:
+            try:
+                _atk_on = bool(getattr(self, 'attack_active_flag', False))
+                _scale = float(self.scenario.get('bias_scale', 0.0)) if (self.scenario and _atk_on) else 0.0
+                _delay = float(self.step_count - self._cur_burst_start) if _atk_on else -1.0
+                self._zu_rows.append(np.concatenate([
+                    [float(self.episode),
+                     1.0 if _was_init else 0.0,
+                     1.0 if _atk_on else 0.0,
+                     float(self.prev_action if self.prev_action is not None else 0.0)],
+                    np.asarray(z_9d, dtype=float),
+                    np.asarray(u_phys, dtype=float),
+                    np.asarray(self.cur_euler, dtype=float),
+                    [_scale, _delay]]))    # ★ 공격강도 s(밴드대비) + 공격경과스텝
+            except Exception:
+                pass
 
     # ══════════════════════════════════════════════════════════
     #  Async Learning (비동기 — 제어 블로킹 없음)
@@ -798,8 +821,8 @@ class OnlineRLNode(Node):
     def _rl_step_10hz(self, trajectory_sp):
         cfg = self.cfg
 
-        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)
-        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)
+        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0, offset=0.5)  # vel 저압축(log0.5)
+        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)              # gyro log1p 유지
         self._last_nis_raw = (nis_v_raw, nis_g_raw)   # 디버그 로깅용
 
         if self.step_count < cfg.learning_warmup_steps:
@@ -900,6 +923,7 @@ class OnlineRLNode(Node):
         # ── HOVER 전환 시 위치 고정 (★ 떨림 방지) ──
         if action == 1 and (self.prev_action != 1 or self.prev_action is None):
             self._hover_pos[:] = self.cur_pos[:2]
+            self._hover_alt = float(self.cur_pos[2])   # ★ 현재 고도에서 호버 (스냅 과도 제거)
             self._hover_yaw = float(self.cur_euler[2])
 
         # ── Detection tracking ──
@@ -919,9 +943,15 @@ class OnlineRLNode(Node):
                 bias_thrust_n=sc.get('bias_thrust_n', None))
             self.attack_active_flag = True
             self._cur_burst_start = self.step_count
+            # 실제 물리 강도 = intensity × bias (loe_combined: τ=int·bias_torque, thrust=int·bias_thrust)
+            _int = sc.get('attack_intensity', 1.0)
+            _gx = sc.get('bias_torque_xy', getattr(self.cfg, 'bias_torque_xy', 0.12))
+            _gz = sc.get('bias_torque_z',  getattr(self.cfg, 'bias_torque_z', 0.0))
+            _gt = sc.get('bias_thrust_n',  getattr(self.cfg, 'bias_thrust_n', 2.0))
             self.get_logger().warn(
                 f'  🚨 Attack ON (burst) @ step {self.step_count}: {self.scenario["attack_type"]} '
-                f'(int={self.scenario["attack_intensity"]:.3f})')
+                f'| int={_int:.2f} → τxy={_int*_gx:+.3f} τz={_int*_gz:+.3f} N·m, '
+                f'thrust={_int*_gt:+.2f} N')
         elif (not want_attack) and self.attack_active_flag:
             self._send_attack_cmd(False)
             self.attack_active_flag = False
@@ -935,6 +965,12 @@ class OnlineRLNode(Node):
             gt_err = np.linalg.norm(gt_ned[:2] - sp[:2])
             alt = -self.cur_pos[2] if self.cur_pos[2] < 0 else 0.0
             atk = '🔴ATK' if self.attack_active_flag else '⚪NRM'
+            if self.attack_active_flag:
+                _sc = self.scenario
+                _i = _sc.get('attack_intensity', 1.0)
+                _txy = _i * _sc.get('bias_torque_xy', getattr(self.cfg, 'bias_torque_xy', 0.12))
+                _th  = _i * _sc.get('bias_thrust_n',  getattr(self.cfg, 'bias_thrust_n', 2.0))
+                atk = f'🔴ATK(τ{_txy:.2f} T{_th:.1f})'   # 실제 강도: 토크xy[N·m] 추력[N]
             act = 'HOVER' if action == 1 else 'TRACK'
             mode = 'EVAL' if self.eval_mode else 'TRAIN'
             buf = self.agent.buffer.current_size
@@ -985,11 +1021,30 @@ class OnlineRLNode(Node):
         self._metrics_w.writerow(row)
         self._metrics_f.flush()
 
+    def _flush_zu(self):
+        """(z,u) 로그를 zu_log.npz로 누적 저장 (UKF 오프라인 튜닝용). 매 에피소드 덮어씀."""
+        if not self._log_zu or not self._zu_rows:
+            return
+        try:
+            import os
+            arr = np.asarray(self._zu_rows, dtype=np.float64)
+            path = os.path.join(self.cfg.outdir, 'zu_log.npz')
+            np.savez(path, data=arr, dt=float(self.step_dt),
+                     q_gate=float(self._ukf_q_gate),
+                     cols='episode,reset,attack,action,z0_gpsN,z1_gpsE,z2_gpsD,'
+                          'z3_velN,z4_velE,z5_velD,z6_gyrx,z7_gyry,z8_gyrz,'
+                          'u0_thrust,u1_tx,u2_ty,u3_tz,euler_phi,euler_th,euler_psi,'
+                          'atk_scale,atk_delay')
+            self.get_logger().info(f'[ZU] (z,u) 로그 저장 → {path}  (rows={len(arr)})')
+        except Exception as e:
+            self.get_logger().warn(f'[ZU] 저장 실패(무시): {e}')
+
     # ══════════════════════════════════════════════════════════
     #  Episode End
     # ══════════════════════════════════════════════════════════
     def _end_episode(self, reason):
         self._send_attack_cmd(False); self.attack_active_flag = False
+        self._flush_zu()
 
         if self.sweep_mode:
             self._end_sweep_episode(reason); return
@@ -1051,6 +1106,9 @@ class OnlineRLNode(Node):
         for a in cfg.sweep_values:
             cells.append((float(a), 'track', cfg.sweep_pattern))
             cells.append((float(a), 'hover', 'hover'))
+            # 조건 C: 추적 패턴으로 비행하다 공격 시작 +d 스텝에 호버 전환 (전이 케이스)
+            for d in getattr(cfg, 'sweep_hover_delays', ()):
+                cells.append((float(a), f'dhover{int(d)}', cfg.sweep_pattern))
         self.sweep_cells = cells
         self.sweep_cell_idx = 0
         self.sweep_ep_in_cell = 0
@@ -1070,9 +1128,12 @@ class OnlineRLNode(Node):
             'cell_idx', 'mode', 'bias', 'tq_xy', 'th_n', 'policy', 'pattern', 'episode',
             'survived', 'crash_step', 'crash_reason', 'steps'])
         _unit = 'N' if cfg.sweep_attack_mode == 'thrust' else 'Nm'
+        _ftr = (f' ft_ratio={cfg.sweep_combined_ft_ratio}'
+                if cfg.sweep_attack_mode == 'combined' else '')
         self.get_logger().info(
             f'\n{"#"*60}\n  [SWEEP] {len(cells)} cells × {cfg.sweep_episodes} ep '
-            f'| mode={cfg.sweep_attack_mode} bias({_unit})={cfg.sweep_values}\n'
+            f'| mode={cfg.sweep_attack_mode}{_ftr} bias({_unit})={cfg.sweep_values}'
+            f' delays={getattr(cfg, "sweep_hover_delays", ())}\n'
             f'  attack: additive @step{cfg.sweep_attack_start}, '
             f'ramp={cfg.attack_ramp_duration}s | q_gate={self._ukf_q_gate}\n{"#"*60}')
 
@@ -1104,6 +1165,7 @@ class OnlineRLNode(Node):
         # hover 정책이면 원점 고정 호버
         if self.sweep_policy == 'hover':
             self._hover_pos[:] = 0.0; self._hover_yaw = 0.0
+            self._hover_alt = -abs(self.cfg.flight_altitude)  # hover 셀은 기준고도 유지
             self.prev_action = 1
         else:
             self.prev_action = 0
@@ -1111,14 +1173,26 @@ class OnlineRLNode(Node):
     def _sweep_step_10hz(self, trajectory_sp):
         """고정정책 1스텝: UKF NIS + 공격토글 + done + CSV. 학습/탐험/push 없음."""
         cfg = self.cfg
-        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)
-        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)
+        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0, offset=0.5)  # vel 저압축(log0.5)
+        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)              # gyro log1p 유지
 
         if self.step_count < cfg.learning_warmup_steps:
             self.step_count += 1
             return
 
-        action = 0 if self.sweep_policy == 'track' else 1
+        if self.sweep_policy == 'track':
+            action = 0
+        elif self.sweep_policy == 'hover':
+            action = 1
+        else:  # 'dhover{d}': 공격 시작 +d 스텝부터 호버 (b=0 셀은 track과 동일 동작)
+            d = int(self.sweep_policy[6:])
+            action = 1 if self.step_count >= self.cfg.sweep_attack_start + d else 0
+
+        # 0→1 전환 순간 현재 위치/고도/요를 호버 셋포인트로 캡처 (본 RL 루프와 동일 semantics)
+        if action == 1 and self.prev_action == 0:
+            self._hover_pos[:] = self.cur_pos[:2]
+            self._hover_alt = float(self.cur_pos[2])
+            self._hover_yaw = float(self.cur_euler[2])
 
         done, term_reason = self._check_done(trajectory_sp)
 
@@ -1236,6 +1310,16 @@ def main():
                     help='학습 옵티마이저 선택 (rhukf=제안 | adam=Adam+Huber baseline)')
     ap.add_argument('--speed', type=float, default=None,
                     help='sim 속도배율(>1=실시간보다 빠름; lockstep 한계까지. 2~4부터)')
+    ap.add_argument('--ramp', type=float, default=None,
+                    help='attack_ramp_duration(s) override (미지정 시 config값)')
+    ap.add_argument('--episodes', type=int, default=None,
+                    help='sweep_episodes(셀당 반복) override (미지정 시 config값)')
+    ap.add_argument('--ft-ratio', dest='ft_ratio', type=float, default=None,
+                    help='combined 모드 추력/토크비 sweep_combined_ft_ratio override (th_n=ft_ratio·b)')
+    ap.add_argument('--hover-delays', dest='hover_delays', default=None,
+                    help='쉼표구분 dhover 지연 스텝 목록 override (예: 1,2,3)')
+    ap.add_argument('--log-zu', dest='log_zu', action='store_true',
+                    help='UKF 오프라인 튜닝용 (z,u) 시계열을 outdir/zu_log.npz로 저장')
     _args, _ = ap.parse_known_args()
 
     # 모드별 권장 grid (값 미지정 시) — 각 모드의 '붕괴 경계'를 브래킷
@@ -1260,6 +1344,16 @@ def main():
             cfg.outdir = f'results_{_args.agent}'
     if _args.speed is not None:
         cfg.sim_speed_factor = float(_args.speed)
+    if _args.ramp is not None:
+        cfg.attack_ramp_duration = float(_args.ramp)
+    if _args.episodes is not None:
+        cfg.sweep_episodes = int(_args.episodes)
+    if _args.ft_ratio is not None:
+        cfg.sweep_combined_ft_ratio = float(_args.ft_ratio)
+    if _args.hover_delays is not None:
+        cfg.sweep_hover_delays = tuple(int(x) for x in _args.hover_delays.split(','))
+    if getattr(_args, 'log_zu', False):
+        cfg.log_zu = True
     if _args.outdir:
         cfg.outdir = _args.outdir
         os.makedirs(cfg.outdir, exist_ok=True)

@@ -51,18 +51,20 @@ def to_physical_u(thrust, torque, calib):
     return u
 
 
-def compute_nis_scaled(r_sub, Pzz_sub, nz):
+def compute_nis_scaled(r_sub, Pzz_sub, nz, offset=1.0):
+    """NIS 압축. offset=1.0 → log1p(기존, gyro 유지). offset<1.0 → 저압축(vel).
+    채널별 offset이 다르므로 호출부에서 vel=0.5 / gyro=1.0 로 분리 적용한다."""
     try:
         nis_raw = r_sub @ np.linalg.solve(Pzz_sub, r_sub) / nz
     except np.linalg.LinAlgError:
         nis_raw = 0.0
-    log_nis = np.log1p(nis_raw)
+    log_nis = np.log(nis_raw + offset)   # offset=1.0: log1p / offset=0.5: log(x+0.5) 저압축
     nis_scaled = log_nis / (log_nis + 1.0)
     return nis_raw, nis_scaled
 
 
 class DynamicsUKF:
-    def __init__(self, dt=0.02, calib=None, ff=1.0, q_gate=0.0):
+    def __init__(self, dt=0.02, calib=None, ff=1.00, q_gate=0.0):
         # ff=1.0: fading-memory 끔(P 재팽창=이득↑+NIS분모↑ 둘 다 손해). 고집은 low Q로.
         # q_gate>0: 명령 토크에 비례해 gyro Q 인플레(정상 기동 FP 억제). 0=off.
         self.nx = 12
@@ -84,10 +86,18 @@ class DynamicsUKF:
         self.Wm[0] = lam / (n + lam)
         self.Wc[0] = lam / (n + lam) + (1 - 0.5**2 + 2.0)
 
-        self.Q = np.diag([1e-3]*3 + [1e-3]*3 + [5e-3]*3 + [1e-3]*3)
-        # R: 시뮬 실측 노이즈 정합(과대추정 금지). pos수평 var≈0.005/고도≈0.02, vel std0.1→var0.01, gyro.
-        #    예전 0.5/0.5/0.1은 25~100× 과대 → NIS가 분모에 묻힘. (sweep raw-NIS로 미세조정)
-        self.R = np.diag([0.1]*3 + [0.2]*3 + [0.1]*3)
+        self.Q = np.diag([
+        1e-3, 1e-3, 1e-3,    # pos    (무효, 유지)
+        5e-4, 5e-4, 5e-4,    # euler  1e-3 → 5e-4 (d'v↑)
+        5e-3, 5e-3, 5e-3,    # vel    (유지; velQ는 R로 대체)
+        5e-4, 5e-4, 5e-4,    # gyro   1e-3 → 5e-4 (3박자 개선)
+        ])
+        
+        self.R = np.diag([
+        0.1, 0.1, 0.1,       # pos    (무효, 유지)
+        0.3, 0.3, 0.3,       # vel    0.5 → 1.0 (d'v↑ 지속↑ p90↓)
+        0.5, 0.5, 0.5,       # gyro   0.5 → 1.0 (d'v↑ 지속↑ p90↓)
+        ])
 
         self.x = np.zeros(12)
         self.P = np.eye(12) * 0.1

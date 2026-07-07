@@ -200,7 +200,7 @@ class PegasusApp:
 
         # ── GUI 보기용: chase-cam + 컬러 조명 (headless엔 무영향, 실패해도 무해) ──
         self._cam_follow = (not args.headless)
-        self._cam_offset = np.array([-7.0, -7.0, 4.0])   # 드론 뒤·위 오프셋(ENU)
+        self._cam_offset = np.array([-10.0, -10.0, 10.0])   # 드론 뒤·위 오프셋(ENU)
         self._cam_eye = None
         self._add_colored_lights()
 
@@ -490,6 +490,7 @@ def main():
     parser.add_argument('--headless', dest='headless', action='store_true')
     parser.add_argument('--no-headless', dest='headless', action='store_false')
     parser.add_argument('--px4-ns', dest='px4_ns', default='auto')
+    parser.add_argument('--speed', dest='speed', type=float, default=1.0)  # ★ pre_parser와 동일하게(없으면 strict parse 에러)
     parser.set_defaults(headless=False)
     args = parser.parse_args()
     PegasusApp(args).run()

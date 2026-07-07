@@ -84,6 +84,40 @@ def main():
         print("  ⚠ 없음! track이 안 추락(결과성↓)하거나 bias=track≈hover(정책무관). "
               "다른 mode/값범위 또는 더 날카로운 기동 검토.")
 
+    # ── 1b. 탐지 데드라인: 지연 호버(dhover{d}) 생존율 vs d ──────────
+    #   실측 탐지지연(≈3스텝)에서 생존해야 "탐지→호버" 프레이밍이 성립.
+    dh_pols = sorted({r['policy'] for r in summ if r['policy'].startswith('dhover')},
+                     key=lambda p: int(p[6:]))
+    if dh_pols:
+        delays = [int(p[6:]) for p in dh_pols]
+        print("\n=== (1b) 탐지 데드라인 — 지연 호버 생존율 (rows: bias, cols: d) ===")
+        hdr = f"{'bias':>7} | " + " ".join(f"d={d:>2}" for d in delays) + \
+              f" | {'track':>5} {'hover':>5}"
+        print(hdr)
+        for b in biases:
+            if b == 0.0:
+                continue
+            row = []
+            for p in dh_pols:
+                s = cell_surv.get((b, p), [])
+                row.append(f"{np.mean(s):4.2f}" if s else "  — ")
+            ts = np.mean(cell_surv.get((b, 'track'), [np.nan]))
+            hs = np.mean(cell_surv.get((b, 'hover'), [np.nan]))
+            print(f"{b:7.3f} | " + " ".join(row) + f" | {ts:5.2f} {hs:5.2f}")
+        # 데드라인 = 생존율이 0.5 아래로 처음 떨어지는 d (bias별)
+        print("  [판독] 밴드 내 bias에서 d=2~3 생존율이 hover 셀에 근접해야 step 공격 채택 OK.")
+        print("         d=2~3에서 이미 붕괴하면 → ramp 부분 복원(예: 0.3s) 또는 bias 상한 하향.")
+        for b in biases:
+            if b == 0.0:
+                continue
+            deadline = None
+            for p in dh_pols:
+                s = cell_surv.get((b, p), [])
+                if s and np.mean(s) < 0.5:
+                    deadline = int(p[6:]); break
+            if deadline is not None:
+                print(f"    bias={b:.3f}: 생존율<0.5 최초 d = {deadline} (데드라인 ≈ {deadline-1}스텝 이내 전환 필요)")
+
     # ── 2. NIS 정상분포 (bias=0, track, attack-window) ───────────
     def nis_pick(pred):
         v, g = [], []
@@ -104,9 +138,14 @@ def main():
     print("  ※ 이 값이 높으면 정상 기동 자체가 NIS를 튀게 함 → ukf_q_gate_gyro 검토")
 
     # ── 3. 공격 NIS 분리도 (vel+gyr, track & hover) ──────────────
+    # 압축 후 d′: vel=log(x+0.5) 저압축 / gyr=log(x+1)=log1p 유지 (관측 채널별 offset).
+    def _logc(x, off):
+        return np.log(np.asarray(x, dtype=float) + off)
+    blv, blg = _logc(base_v, 0.5), _logc(base_g, 1.0)   # 정상(bias0 track) 압축 후 baseline
     print("\n=== (3) 공격 NIS 분리도 (track / hover, attack-on) ===")
+    print("  d′ = (공격평균-정상평균)/정상std,  압축 후(vel:log0.5 / gyr:log1p).  판정: vel d′≥2.0, gyr d′ 훼손 없음")
     print(f"{'bias':>7} {'pol':>6} | {'vel mean':>9} {'gyr mean':>9} "
-          f"{'gyr d_prime':>11} {'gyr>99pct%':>10}")
+          f"{'vel d′(l.5)':>11} {'gyr d′(l1p)':>11} {'gyr>99pct%':>10}")
     for b in biases:
         if b == 0:
             continue
@@ -115,10 +154,12 @@ def main():
                               and r['policy'] == pol and r['attack_active'] == '1')
             if len(ag) == 0:
                 continue
-            dprime = (ag.mean() - base_g.mean()) / (base_g.std() + 1e-9)
+            alv, alg = _logc(av, 0.5), _logc(ag, 1.0)
+            dpv = (alv.mean() - blv.mean()) / (blv.std() + 1e-9)   # vel d′ (log0.5 압축 후)
+            dpg = (alg.mean() - blg.mean()) / (blg.std() + 1e-9)   # gyr d′ (log1p 압축 후)
             frac = float(np.mean(ag > thr_g)) * 100
             print(f"{b:7.3f} {pol:>6} | {av.mean():9.3f} {ag.mean():9.3f} "
-                  f"{dprime:11.2f} {frac:9.1f}%")
+                  f"{dpv:11.2f} {dpg:11.2f} {frac:9.1f}%")
 
     # ── 4. CUSUM 비학습 baseline (gyr, track) ────────────────────
     k = float(base_g.mean() + base_g.std())
