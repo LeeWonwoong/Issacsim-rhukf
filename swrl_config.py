@@ -24,7 +24,6 @@ class Config:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
     outdir: str = "./results"
-    sim_speed_factor: float = 1.0   # >1이면 실시간보다 빠르게(헤드리스). PX4 lockstep이 못 따라오면(폭주) 낮추세요. 2~4부터 시도.
     headless: bool = False
     sim_launcher: str = 'isim'
     # ── PX4 토픽 네임스페이스. 'auto'=런타임 자동감지(살아있는 publisher 있는 ns).
@@ -51,7 +50,8 @@ class Config:
     # ══════════════════════════════════════════════════════════
     warmup_seconds: float = 3.0
     attack_start_range: Tuple[int, int] = (50, 150)
-    attack_ramp_duration: float = 1.0     # LoE α가 0→목표까지 차오르는 시간(초)=10스텝@10Hz. 잔차 점진 상승→선제 호버 여유
+    attack_ramp_duration: float = 0.3     # 0.0 = step 공격(즉시 full). EADR 논거(효과적 액추에이터 공격은 abrupt/고진폭) + 상승엣지 선명화.
+                                          # 주의: step은 crash 데드라인을 줄임 → sweep의 dhover(지연 호버) 생존곡선으로 대응가능성 검증 후 확정.
     attack_duration_range: Tuple[int, int] = (50, 100)
 
     eps_action_probs: List[float] = field(default_factory=lambda: [0.8, 0.2])  # 탐험 track:hover=80:20 (50/50은 평시 FP폭증·교란)
@@ -95,13 +95,15 @@ class Config:
     #   torque_xy→roll/pitch(gyro NIS), torque_z→yaw(gyro NIS), thrust_n→추력(vel NIS).
     #   복합이라 vel·gyro 두 관측채널 다 반응 + 실패모드 둘(flip/고도상실).
     attack_form: str = 'additive'    # (호환용 필드; additive만 지원)
-    #   ★ sweep 검증: combined 추락 = ray (torque_xy=s, torque_z=0.2·s, thrust=5·s).
-    #     결정밴드 s∈[1.2,1.3] (track→추락 / hover→생존), s<1.2=둘다생존, s>1.3=hover도 추락.
-    #   독립 박스는 ray를 벗어나 추락이 안 나므로(예: tor=1.3인데 thr=4) scale 하나로 묶어 tube 샘플.
-    sample_bias_box: bool = True                                # True: combined-ray tube 샘플 / False: (bias_*×intensity)
-    bias_scale_range: Tuple[float, float] = (1.0, 1.33)        # tube 중심축 s — 밴드[1.2,1.3]을 감싸도록 ↓↑ 스프레드
-    bias_ft_ratio: float = 5.0                                  # thrust = ft_ratio · s  (sweep와 동일 비율)
-    bias_yaw_ratio: float = 0.2                                 # torque_z = yaw_ratio · s
+    #   ★ 동결(2026-07-07): 공격채널 = TORQUE-ONLY. combined는 기각 — vel 유의 활성화 구간(ft20~35)에서
+    #     dhover3가 0으로 붕괴("탐지신호 ∩ 대응유지" = 공집합, 추력채널 crash_altitude는 호버 흡수불가·물리#4).
+    #   torque tube = ray (torque_xy=s, torque_z=0.2·s, thrust=0). 결과성 밴드 s∈[1.30,1.32]Nm (track추락 ∧ hover생존),
+    #     하단 onset 1.28(track0.90)까지 스프레드해 그래디언트 확보. s≥1.34 제외(hover도 붕괴=회복불가).
+    #   ⚠ 관측 벡터 [nis_vel,nis_gyro,action]는 불변 — vel_NIS는 torque 공격에서도 정상 대비 4~7배↑ 보조신호.
+    sample_bias_box: bool = True                                # True: torque tube 샘플 / False: (bias_*×intensity)
+    bias_scale_range: Tuple[float, float] = (1.28, 1.32)       # tube 중심축 s(Nm) — 동결 밴드[1.30,1.32]+onset마진 1.28
+    bias_ft_ratio: float = 0.0                                  # thrust = ft_ratio · s (=0: combined 기각, torque-only)
+    bias_yaw_ratio: float = 0.2                                 # torque_z = yaw_ratio · s (동결 sweep torque 모드와 동일)
     bias_jitter: float = 0.10                                   # 각 성분 ±10% 지터(tube 두께=공격 다양성)
     #   (sweep/호환용 단일값 — 박스 OFF일 때만 사용)
     bias_torque_xy: float = 0.5
@@ -247,31 +249,14 @@ class Config:
     # ══════════════════════════════════════════════════════════
     eval_interval: int = 20
     eval_scenarios: List[dict] = field(default_factory=lambda: [
-        # ★ 학습과 동일한 combined-ray bias (s, 0.2·s, 5·s)를 고정 scale로 — intensity=1.0(ramp로 full).
-        #   학습 tube span [1.0,1.33]에 정렬, 결정밴드[1.2,1.3] 포함. pattern=aggressive(학습 공격조건 일치).
-        # 1) 무공격 (FP/TN baseline — aggressive 기동의 어려운 FP 케이스)
         {'pattern': 'aggressive', 'attack_type': 'none',
          'attack_intensity': 0.0, 'attack_start_step': 0,
          'disturbance_type': 'none', 'wind_speed': 0.0},
-        # 2) 밴드 아래 s=1.05 (둘다 생존; 약공격 FN 거동)
-        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
-         'attack_intensity': 1.0, 'attack_start_step': 50,
-         'bias_torque_xy': 1.05, 'bias_torque_z': 0.210, 'bias_thrust_n': 5.25,
+        {'pattern': 'circle', 'attack_type': 'loe_combined',
+         'attack_intensity': 0.25, 'attack_start_step': 50,
          'disturbance_type': 'none', 'wind_speed': 0.0},
-        # 3) 밴드 하단 s=1.20 (b_track; track→추락 / hover→생존: 결정-critical)
-        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
-         'attack_intensity': 1.0, 'attack_start_step': 50,
-         'bias_torque_xy': 1.20, 'bias_torque_z': 0.240, 'bias_thrust_n': 6.00,
-         'disturbance_type': 'none', 'wind_speed': 0.0},
-        # 4) 밴드 상단 s=1.28 (결정-critical, 더 어려움)
-        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
-         'attack_intensity': 1.0, 'attack_start_step': 50,
-         'bias_torque_xy': 1.28, 'bias_torque_z': 0.256, 'bias_thrust_n': 6.40,
-         'disturbance_type': 'none', 'wind_speed': 0.0},
-        # 5) tube 상단 s=1.33 (hover도 한계; 강공격 terminal)
-        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
-         'attack_intensity': 1.0, 'attack_start_step': 50,
-         'bias_torque_xy': 1.33, 'bias_torque_z': 0.266, 'bias_thrust_n': 6.65,
+        {'pattern': 'figure8', 'attack_type': 'loe_combined',
+         'attack_intensity': 0.40, 'attack_start_step': 50,
          'disturbance_type': 'none', 'wind_speed': 0.0},
     ])
 
@@ -297,11 +282,17 @@ class Config:
     sweep_attack_mode: str = 'combined'        # 'combined' | 'torque' | 'thrust'
     sweep_values: List[float] = field(default_factory=lambda: [
         0.8, 1.0, 1.2, 1.3, 1.5, 1.7])         # 기본=combined의 토크 b(Nm)
-    sweep_combined_ft_ratio: float = 5.0       # combined에서 추력/토크_xy 비 (3.25N/0.65Nm≈5)
+    sweep_combined_ft_ratio: float = 2.0       # 추력/토크_xy 비. 파일럿1: 5.0에선 th=6.5N@b=1.3이 hover까지
+                                               # crash_altitude로 죽여 결과성 밴드 소멸 → 토크 우세(2.0)로 하향.
     sweep_torque_yaw_ratio:  float = 0.2       # yaw/roll·pitch 비 (검출 보조)
     sweep_pattern: str = 'aggressive'          # track 셀 비행패턴(명령토크 최대=최악조건)
-    sweep_episodes: int = 4                    # 셀당 반복(RNG 노이즈)
+    sweep_episodes: int = 8                    # 셀당 반복(RNG 노이즈)
     sweep_attack_start: int = 30               # 공격 ON 스텝(@10Hz). 이후 ramp
+    # ── 조건 C: 지연 호버(delayed hover) — "공격 시작 후 d스텝 뒤 호버 전환" 정책 ──
+    #   추적 기동 관성+교란 자세를 안고 현재위치 호버로 전환하는 '전이 케이스'를 검증.
+    #   생존율 vs d 곡선 = 탐지 데드라인. 실측 탐지지연(~3스텝)에서 생존해야 RL 프레이밍 성립.
+    #   빈 튜플 () 로 두면 기존 A/B(track/hover) 셀만 실행.
+    sweep_hover_delays: Tuple[int, ...] = (1, 2, 3, 4, 5, 8)
 
     def __post_init__(self):
         self.r_inv_sqrt = 1.0 / self.r_init
