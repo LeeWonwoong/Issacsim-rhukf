@@ -1,0 +1,8 @@
+==========================================================
+ [02:43:16] START latch-band combined ft=1.5 ramp=0.0s ep=10 grid=1.34,1.37,1.40,1.42,1.44 delays=1,3,5,7,10,14 → results_latch_band
+==========================================================
+ [gate] banner=ramp=0.0s cells=42 ep=10 ft_ratio=1.5  (expect ramp=0.0s cells=42 ep=10 ft_ratio=1.5)
+ [gate] OK (ramp=0.0s, ep=10, cells=42, ft_ratio=1.5) — running to completion...
+ [06:04:00] DONE latch-band exit=0  →  results_latch_band
+ [rows] results_latch_band/sweep_summary.csv = 420 data rows (expect 420)
+########## LATCH-BAND SWEEP DONE: 20260710_060400 ##########

@@ -1,0 +1,9 @@
+==========================================================
+ [14:31:55] START combined ft=1.5 ramp=0.0s ep=20 grid=1.34,1.36,1.38,1.40,1.42 → results_combined_final
+==========================================================
+ [gate] banner=ramp=0.0s cells=27 ep=20 ft_ratio=1.5  (expect ramp=0.0s cells=27 ep=20 ft_ratio=1.5)
+ [gate] OK (ramp=0.0s, ep=20, cells=27, ft_ratio=1.5) — running to completion...
+ [18:34:47] DONE combined-final exit=0  →  results_combined_final
+ [rows] results_combined_final/sweep_summary.csv = 540 data rows (expect 540)
+ [agg] results_combined_final/aggregate.txt written
+########## COMBINED FINAL SWEEP DONE: 20260707_183448 ##########

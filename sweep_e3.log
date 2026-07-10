@@ -1,0 +1,17 @@
+==========================================================
+ [23:18:31] START E3 pat=aggressive ft=1.5 ramp=0.0s ep=10 grid=1.34,1.37,1.40 → results_pattern_agg
+==========================================================
+ [gate] banner=ramp=0.0s cells=11 ep=10 ft_ratio=1.5 pat=aggressive  (expect ramp=0.0s cells=11 ep=10 ft_ratio=1.5 pat=aggressive)
+ [gate] OK (aggressive) — running to completion...
+ [00:13:24] DONE E3 pat=aggressive exit=0 → results_pattern_agg
+ [rows] results_pattern_agg/sweep_summary.csv = 110 data rows (expect 110)
+ [agg] results_pattern_agg/aggregate.txt written
+==========================================================
+ [00:13:24] START E3 pat=circle ft=1.5 ramp=0.0s ep=10 grid=1.34,1.37,1.40 → results_pattern_circle
+==========================================================
+ [gate] banner=ramp=0.0s cells=11 ep=10 ft_ratio=1.5 pat=circle  (expect ramp=0.0s cells=11 ep=10 ft_ratio=1.5 pat=circle)
+ [gate] OK (circle) — running to completion...
+ [00:51:51] DONE E3 pat=circle exit=0 → results_pattern_circle
+ [rows] results_pattern_circle/sweep_summary.csv = 110 data rows (expect 110)
+ [agg] results_pattern_circle/aggregate.txt written
+########## E3 PATTERN SWEEP DONE: 20260708_005152 ##########

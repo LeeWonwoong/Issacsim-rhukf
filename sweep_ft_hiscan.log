@@ -1,0 +1,29 @@
+########## COMBINED HI-ft_ratio SCAN 시작: 20260707_014021 ##########
+==========================================================
+ [01:40:21] START ft_ratio=2.0 → results_combined_ft20
+==========================================================
+ [gate] results_combined_ft20: banner=ramp=0.0s cells=11 ep=10 mode=combined?1 ft_ratio=2.0?1
+ [gate] sweepline:   [SWEEP] 11 cells × 10 ep | mode=combined ft_ratio=2.0 bias(Nm)=[1.32, 1.36, 1.4] delays=(3,)
+ [gate] OK (combined, ft_ratio=2.0, cells=11, ep=10, ramp=0.0) — running...
+ [02:27:49] DONE ft_ratio=2.0 exit=0 → results_combined_ft20
+ [rows] results_combined_ft20/sweep_summary.csv = 110 data rows (expect 110)
+ [agg] results_combined_ft20/aggregate.txt written
+==========================================================
+ [02:27:49] START ft_ratio=2.5 → results_combined_ft25
+==========================================================
+ [gate] results_combined_ft25: banner=ramp=0.0s cells=11 ep=10 mode=combined?1 ft_ratio=2.5?1
+ [gate] sweepline:   [SWEEP] 11 cells × 10 ep | mode=combined ft_ratio=2.5 bias(Nm)=[1.32, 1.36, 1.4] delays=(3,)
+ [gate] OK (combined, ft_ratio=2.5, cells=11, ep=10, ramp=0.0) — running...
+ [03:34:03] DONE ft_ratio=2.5 exit=0 → results_combined_ft25
+ [rows] results_combined_ft25/sweep_summary.csv = 110 data rows (expect 110)
+ [agg] results_combined_ft25/aggregate.txt written
+==========================================================
+ [03:34:03] START ft_ratio=3.5 → results_combined_ft35
+==========================================================
+ [gate] results_combined_ft35: banner=ramp=0.0s cells=11 ep=10 mode=combined?1 ft_ratio=3.5?1
+ [gate] sweepline:   [SWEEP] 11 cells × 10 ep | mode=combined ft_ratio=3.5 bias(Nm)=[1.32, 1.36, 1.4] delays=(3,)
+ [gate] OK (combined, ft_ratio=3.5, cells=11, ep=10, ramp=0.0) — running...
+ [04:44:58] DONE ft_ratio=3.5 exit=0 → results_combined_ft35
+ [rows] results_combined_ft35/sweep_summary.csv = 110 data rows (expect 110)
+ [agg] results_combined_ft35/aggregate.txt written
+########## ALL 3 HI-ft_ratio SWEEPS DONE: 20260707_044458 ##########

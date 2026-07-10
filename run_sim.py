@@ -13,6 +13,7 @@ Baro/Flow/Distance 센서 퍼블리시 제거 — UKF는 GPS+IMU만 사용.
 센서 공격 (GPS FDI) 제거 — Actuator-only 위협 모델.
 """
 import carb
+import os
 import argparse
 from isaacsim import SimulationApp
 
@@ -89,9 +90,12 @@ class WindModel:
             V = (self.ws / 2) * (1 - np.cos(np.pi * (t - self.gs) / self.gd))
             return self._drag(V * d)
         elif self.scenario == 'wind_turbulence':
+            # OU(Ornstein-Uhlenbeck) 이산화. 노이즈계수는 sqrt(1-a^2)여야
+            # 정상상태 std(ts)=ti*ws (=난류강도 정의)가 샘플레이트 무관하게 보존된다.
+            # (기존 (1-a)는 고샘플레이트에서 std를 sqrt((1-a)/(1+a))≈0.063배로 압착 → 사실상 상수풍 버그)
             a = np.exp(-self.tb * dt)
             self._ts = a * self._ts + \
-                       (1 - a) * self.ti * self.ws * self.rng.standard_normal(3)
+                       np.sqrt(1.0 - a * a) * self.ti * self.ws * self.rng.standard_normal(3)
             return self._drag(self.ws * d + self._ts)
         return np.zeros(3)
 
@@ -194,6 +198,7 @@ class PegasusApp:
         self.stage = omni.usd.get_context().get_stage()
 
         self.wind = WindModel('none')
+        self._wind_dbg = os.environ.get('WIND_DBG', '') not in ('', '0')
 
         self.body_view = None
         self._setup_body_view()
@@ -352,6 +357,30 @@ class PegasusApp:
                 continue
 
             wf = self.wind.get_force(self.sim_time, self.physics_dt)
+
+            # ── [WINDDBG] 바람 인가 검증용 진단 로그 (env WIND_DBG=1일 때만) ──
+            if getattr(self, '_wind_dbg', False) and step_counter % 100 == 0:
+                try:
+                    st = self.vehicle.state
+                    v = np.asarray(st.linear_velocity, dtype=float)
+                    vh = float(np.hypot(v[0], v[1]))
+                    p = np.asarray(st.position, dtype=float)
+                    q = np.asarray(st.attitude, dtype=float)  # [x,y,z,w]
+                    # 수직으로부터 틸트각(도): body z축과 world z축 사이 각
+                    x_, y_, z_, w_ = q
+                    zbz = 1.0 - 2.0*(x_*x_ + y_*y_)          # R[2,2] = body-z의 world-z 성분
+                    tilt = float(np.degrees(np.arccos(max(-1.0, min(1.0, zbz)))))
+                    line = (f'[WINDDBG] t={self.sim_time:6.2f} scen={self.wind.scenario} ws={self.wind.ws:.1f} '
+                            f'|wf|={np.linalg.norm(wf):.3f}N wfx={wf[0]:+.3f} '
+                            f'vhoriz={vh:.3f} vx={v[0]:+.3f} pos=({p[0]:+.2f},{p[1]:+.2f},{p[2]:+.2f}) '
+                            f'tilt={tilt:5.2f}deg atk={self.attack_active} bv={self.body_view is not None}')
+                    print(line, flush=True)
+                    _dbgpath = os.environ.get('WIND_DBG_FILE', '')
+                    if _dbgpath:
+                        with open(_dbgpath, 'a') as _f:
+                            _f.write(line + '\n')
+                except Exception as _e:
+                    print(f'[WINDDBG] state read fail: {_e}', flush=True)
 
             attack_force = np.zeros(3)
             attack_torque = np.zeros(3)

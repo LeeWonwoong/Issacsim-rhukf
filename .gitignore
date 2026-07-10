@@ -1,0 +1,10 @@
+# Python caches
+__pycache__/
+*.pyc
+
+# Experiment outputs (large binaries: .pt models, .png, .npz, detail CSVs)
+results/
+results_*/
+
+# Editor/OS
+.DS_Store

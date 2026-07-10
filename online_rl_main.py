@@ -207,6 +207,9 @@ class OnlineRLNode(Node):
         # ── Detection tracking ──
         self.first_hover_step = None
         self.hover_before_attack_count = 0
+        self._hover_latched = False       # [latch 2026-07-09] 공격 대응 중 최초 hover 고도 고정
+        self._ep_relapse = 0              # [진단] 공격중 hover→track 재발(플리커) 횟수
+        self._ep_min_alt = 999.0          # [진단] 공격중 최저 고도(m) — 침하 확인용
 
         # ── Evaluation mode ──
         self.eval_mode = False
@@ -447,6 +450,7 @@ class OnlineRLNode(Node):
         self.episode_reward = 0.0; self.episode_losses = []; self.attack_active_flag = False
         self.window_buffer.clear(); self.gps_updated = False
         self.first_hover_step = None; self.hover_before_attack_count = 0
+        self._hover_latched = False; self._ep_relapse = 0; self._ep_min_alt = 999.0
         self._is_airborne = False; self._hover_pos[:] = 0;  self._hover_yaw = 0.0
         self._hover_alt = -abs(self.cfg.flight_altitude)  # ★ 기본값(미전환 상태용)
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
@@ -921,10 +925,20 @@ class OnlineRLNode(Node):
                 action = self.agent.act(state, eps)
 
         # ── HOVER 전환 시 위치 고정 (★ 떨림 방지) ──
+        #   [latch 2026-07-09] 공격 대응 중에는 최초 진입 고도를 latch — 재진입 시 재캡처 금지.
+        #   (재캡처=플리커마다 더 낮은 고도 재저장=계단식 침하→crash. 스크립트 latched dhover와 동일 동작)
+        #   평시(공격무·에피소드시작)엔 정상 재캡처. latch는 공격 OFF에서 해제(아래 elif).
         if action == 1 and (self.prev_action != 1 or self.prev_action is None):
+            # 위치·yaw는 항상 재캡처 (수평 드리프트 보정 정상)
             self._hover_pos[:] = self.cur_pos[:2]
-            self._hover_alt = float(self.cur_pos[2])   # ★ 현재 고도에서 호버 (스냅 과도 제거)
             self._hover_yaw = float(self.cur_euler[2])
+            # 고도만 latch: 공격 대응 중이면 재캡처 금지 (계단식 침하 방지)
+            if self.attack_active_flag and self._hover_latched:
+                pass   # _hover_alt 그대로 유지
+            else:
+                self._hover_alt = float(self.cur_pos[2])   # 최초 진입 고도에서 호버
+                if self.attack_active_flag:
+                    self._hover_latched = True             # 공격 중 최초 진입 → 이후 고정
 
         # ── Detection tracking ──
         if action == 1:
@@ -932,6 +946,12 @@ class OnlineRLNode(Node):
                 self.first_hover_step = self.step_count
             if not self.attack_active_flag:
                 self.hover_before_attack_count += 1
+
+        # ── [진단 2026-07-09] 공격중 relapse(hover→track 재발) + 최저고도 ──
+        if self.attack_active_flag:
+            if self.prev_action == 1 and action == 0:
+                self._ep_relapse += 1
+            self._ep_min_alt = min(self._ep_min_alt, -float(self.cur_pos[2]))
 
         # ── Attack burst on/off (버스트 경계에서 토글) ──
         want_attack = (self.scenario['attack_type'] != 'none') and self._is_attack_step(self.step_count)
@@ -956,6 +976,7 @@ class OnlineRLNode(Node):
             self._send_attack_cmd(False)
             self.attack_active_flag = False
             self._last_burst_end = self.step_count
+            self._hover_latched = False   # [latch] 공격 OFF → 해제(다음 대응은 새 고도 latch)
             self.get_logger().warn(f'  🟢 Attack OFF (burst) @ step {self.step_count}')
 
         # ── Debug log ──
@@ -1009,6 +1030,8 @@ class OnlineRLNode(Node):
             'precision': round(prec, 4), 'recall': round(rec, 4), 'f1': round(f1, 4),
             'fp_rate': round(fp_rate, 4), 'det_delay': det_delay, 'crashed': crashed,
             'td_exkurt': round(td_exkurt, 4), 'epsilon': round(float(eps), 4),
+            'relapse': self._ep_relapse,   # [진단] 공격중 hover→track 재발 횟수
+            'min_alt': round(self._ep_min_alt, 2) if self._ep_min_alt < 999 else -1,  # 공격중 최저고도(m)
         }
         if getattr(self, '_metrics_w', None) is None:
             os.makedirs(self.cfg.outdir, exist_ok=True)
@@ -1126,7 +1149,7 @@ class OnlineRLNode(Node):
         self._sweep_summary_w = csv.writer(self._sweep_summary_f)
         self._sweep_summary_w.writerow([
             'cell_idx', 'mode', 'bias', 'tq_xy', 'th_n', 'policy', 'pattern', 'episode',
-            'survived', 'crash_step', 'crash_reason', 'steps'])
+            'survived', 'crash_step', 'crash_reason', 'steps', 'min_alt'])
         _unit = 'N' if cfg.sweep_attack_mode == 'thrust' else 'Nm'
         _ftr = (f' ft_ratio={cfg.sweep_combined_ft_ratio}'
                 if cfg.sweep_attack_mode == 'combined' else '')
@@ -1215,6 +1238,9 @@ class OnlineRLNode(Node):
         gt_ned = np.array([self.gt_pos[1], self.gt_pos[0], -self.gt_pos[2]])
         gt_err = float(np.linalg.norm(gt_ned[:2] - sp[:2]))
         alt = float(-self.cur_pos[2] if self.cur_pos[2] < 0 else 0.0)
+        # [min_alt 2026-07-10] 공격 중 최저고도(침하 정도) — 스크립트 latch도 침하하나 확인용
+        if self.attack_active_flag:
+            self._ep_min_alt = min(self._ep_min_alt, alt)
         self._sweep_detail_w.writerow([
             self.sweep_cell_idx, self.cfg.sweep_attack_mode, f'{self.sweep_value:.3f}',
             f'{self._sweep_bias[0]:.3f}', f'{self._sweep_bias[2]:.3f}', self.sweep_policy,
@@ -1239,11 +1265,12 @@ class OnlineRLNode(Node):
     def _end_sweep_episode(self, reason):
         survived = (reason == 'timeout')
         crash_step = -1 if survived else self.step_count
+        _min_alt = round(self._ep_min_alt, 3) if self._ep_min_alt < 999 else -1.0
         self._sweep_summary_w.writerow([
             self.sweep_cell_idx, self.cfg.sweep_attack_mode, f'{self.sweep_value:.3f}',
             f'{self._sweep_bias[0]:.3f}', f'{self._sweep_bias[2]:.3f}', self.sweep_policy,
             self.sweep_pattern_cur, self.sweep_ep_in_cell,
-            int(survived), crash_step, reason, self.step_count])
+            int(survived), crash_step, reason, self.step_count, _min_alt])
         self._sweep_detail_f.flush(); self._sweep_summary_f.flush()
         surv = '✅survive' if survived else f'❌{reason}@{crash_step}'
         self.get_logger().info(

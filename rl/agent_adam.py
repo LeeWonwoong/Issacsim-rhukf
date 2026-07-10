@@ -60,7 +60,8 @@ class OnlineAdamAgent:
         self.net = _DDQNNet(cfg.dimS, cfg.num_actions, cfg.shared_layers,
                             cfg.q_layers, cfg.activation_fn).float().to(cfg.device)
         self.target_net = copy.deepcopy(self.net)
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.adam_lr)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.adam_lr,
+                                           amsgrad=getattr(cfg, 'adam_amsgrad', True))
         self.buffer = TensorReplayBuffer(cfg.buffer_size, cfg.dimS, cfg.device, cfg)
 
         self.steps_done = 0
@@ -75,6 +76,7 @@ class OnlineAdamAgent:
         gpu = torch.cuda.get_device_name(0) if (cfg.device == 'cuda' and torch.cuda.is_available()) else 'N/A'
         print(f"  Agent: Adam DDQN + Huber (baseline) | Params: {n} | "
               f"Device: {cfg.device} ({gpu}) | lr={cfg.adam_lr} | "
+              f"AMSGrad: {'ON' if getattr(cfg, 'adam_amsgrad', True) else 'off'} | "
               f"PER: {'ON' if cfg.use_per else 'off'} | n-step: {cfg.n_step_size if cfg.use_n_step else 1}")
 
     # ─────────────────────────────────────────────────────────

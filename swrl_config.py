@@ -140,10 +140,16 @@ class Config:
     #  환경 외란 풀
     # ══════════════════════════════════════════════════════════
     disturbance_enabled: bool = True
+    # ── 바람 외란 고정(2026-07-08, STEP1/2 근거) ──
+    #   aggressive=주 aliasing, 바람=보조(ws≈7 turbulence만). 결정: [[wind-turbulence-bug-and-step2]].
+    #   wind_constant 제외: PX4가 완전 상쇄(정지비행 틸트만, 잔차0) → aliasing 무용.
+    #   wind_gust 제외: 미검증(스윕 근거 없음). 필요시 재검증 후 추가.
+    #   turbulence는 run_sim.py OU진폭 수정(sqrt(1-a^2)) 후에만 유효(수정 전=사실상 상수풍).
     disturbance_types: List[str] = field(default_factory=lambda: [
-        'none', 'wind_turbulence', 'wind_constant', 'wind_gust',
+        'none', 'wind_turbulence',
     ])
-    wind_speed_range: Tuple[float, float] = (3.0, 7.0)
+    #   ws3/5는 drag∝v²로 컨트롤러가 흡수(NIS 무변) → 실제로 무는 구간(≈7)으로 상향.
+    wind_speed_range: Tuple[float, float] = (6.0, 8.0)
 
     # ══════════════════════════════════════════════════════════
     #  RL 하이퍼파라미터
@@ -157,7 +163,7 @@ class Config:
     dimS: int = 12                   # window_size × 3
     num_actions: int = 2             # 0=궤도추종, 1=강제호버링
 
-    gamma: float = 0.85
+    gamma: float = 0.9              # 로드맵 학습수정(2026-07-08): 0.85→0.9 (시야 확장; terminal-10이 γ=0.9로 결정에 닿음)
     scale_factor: float = 1.0
     batch_size: int = 128
     buffer_size: int = 20000
@@ -214,8 +220,8 @@ class Config:
     huber_c: float = 8.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
     tikhonov_lambda: float = 1e-8
 
-    # ── n-step ──
-    use_n_step: bool = False
+    # ── n-step ── 로드맵 학습수정(2026-07-08): off→on, n=3 (memory.py 구현됨; 온셋 펄스 신호 부트스트랩 전파)
+    use_n_step: bool = True
     n_step_size: int = 3
 
     # ── PER (이번 실험: PER off → Huber-R 단독 outlier 방어로 FIR 기여 isolate) ──
@@ -250,15 +256,28 @@ class Config:
     #  평가 (고정 시나리오)
     # ══════════════════════════════════════════════════════════
     eval_interval: int = 20
+    #  eval 시나리오 [교체 2026-07-08]: 동결밴드 combined ft1.5(bias=s, yaw=0.2·s, thrust=1.5·s)로 통일.
+    #    옛 loe_combined intensity 0.25/0.40 = 기본bias(0.12,0,2.0)×0.25 = 비치명(조건① 미성립) → 폐기.
+    #    이제 학습(sample_bias_box)과 동일 주입경로: bias_torque_* 키 명시 + intensity=1.0(ramp 타깃).
+    #    밴드 3점(하1.34/중1.37/상1.40) × {aggressive, circle} + 무공격 FA baseline.
     eval_scenarios: List[dict] = field(default_factory=lambda: [
         {'pattern': 'aggressive', 'attack_type': 'none',
          'attack_intensity': 0.0, 'attack_start_step': 0,
          'disturbance_type': 'none', 'wind_speed': 0.0},
-        {'pattern': 'circle', 'attack_type': 'loe_combined',
-         'attack_intensity': 0.25, 'attack_start_step': 50,
+        # 밴드 하단 1.34 (aggressive)
+        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 60,
+         'bias_torque_xy': 1.34, 'bias_torque_z': 0.268, 'bias_thrust_n': 2.010, 'bias_scale': 1.34,
          'disturbance_type': 'none', 'wind_speed': 0.0},
-        {'pattern': 'figure8', 'attack_type': 'loe_combined',
-         'attack_intensity': 0.40, 'attack_start_step': 50,
+        # 밴드 중심 1.37 (circle — 패턴 일반화)
+        {'pattern': 'circle', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 60,
+         'bias_torque_xy': 1.37, 'bias_torque_z': 0.274, 'bias_thrust_n': 2.055, 'bias_scale': 1.37,
+         'disturbance_type': 'none', 'wind_speed': 0.0},
+        # 밴드 상단 1.40 (aggressive)
+        {'pattern': 'aggressive', 'attack_type': 'loe_combined',
+         'attack_intensity': 1.0, 'attack_start_step': 60,
+         'bias_torque_xy': 1.40, 'bias_torque_z': 0.280, 'bias_thrust_n': 2.100, 'bias_scale': 1.40,
          'disturbance_type': 'none', 'wind_speed': 0.0},
     ])
 

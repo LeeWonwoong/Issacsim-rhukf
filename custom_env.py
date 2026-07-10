@@ -51,7 +51,8 @@ class AdamDDQNAgent:
         self.net = DDQNNetwork(cfg.dimS, cfg.num_actions, cfg.shared_layers,
                                cfg.q_layers).float().to(cfg.device)
         self.target_net = copy.deepcopy(self.net)
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=3e-4)
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=3e-4,
+                                           amsgrad=getattr(cfg, 'adam_amsgrad', True))
         self.buffer = TensorReplayBuffer(cfg.buffer_size, cfg.dimS, cfg.device, cfg)
         self.steps_done = 0; self.episode_count = 0
         self.episode_rewards = []; self.episode_lengths = []; self.info = None
