@@ -68,28 +68,62 @@ def replay(qg, rg):
 # episode 경계: reset==1 이 새 에피소드 시작
 ep_start = np.where(data[:, 1] > 0.5)[0]
 ep_bounds = list(ep_start) + [data.shape[0]]
+N_SEG = len(ep_bounds) - 1
 
-def analyze(res):
-    # res cols: 0 ep_id,1 attack,2 scale,3 delay,4 ng_raw,5 ng_scl
+def load_cell_map(logpath='results_capture/run.log'):
+    """★ 이 캡처는 col0(episode)·col20(scale) 이 전부 0(로거 scenario 키 부재).
+    → run.log 배너에서 셀 순서 (bias, policy) 를 파싱해 세그먼트 위치로 매핑.
+       cell N/M ... b=X.XXXNm ... policy=Y  (첫 등장 순서 = 실행 순서 = 로그 세그먼트 순서)."""
+    import re
+    cells = {}
+    if os.path.exists(logpath):
+        with open(logpath) as f:
+            for line in f:
+                m = re.search(r'cell (\d+)/\d+ .*b=([0-9.]+)Nm.*policy=(\w+)', line)
+                if m:
+                    cells.setdefault(int(m.group(1)), (float(m.group(2)), m.group(3)))
+    if not cells:
+        return None
+    return [cells[k] for k in sorted(cells)]
+
+CELLS = load_cell_map(os.path.join(os.path.dirname(Z) or '.', 'run.log'))
+if CELLS and N_SEG % len(CELLS) == 0:
+    EPS_PER_CELL = N_SEG // len(CELLS)
+    SEG_META = [CELLS[k // EPS_PER_CELL] for k in range(N_SEG)]   # (bias, policy) per segment
+    print(f"# cell-map: {len(CELLS)} cells × {EPS_PER_CELL} ep = {N_SEG} seg. "
+          f"biases={sorted({b for b,_ in CELLS})}")
+else:
+    SEG_META = None
+    print(f"# ⚠ cell-map 실패(CELLS={bool(CELLS)}, N_SEG={N_SEG}) → fallback: attack-flag 기반")
+
+def analyze(res, per_bias=False):
+    # res cols: 0 (unused),1 attack,2 (unused),3 delay,4 ng_raw,5 ng_scl
+    # 세그먼트별 (bias, policy)는 SEG_META(run.log 순서매핑)에서. col0/col20 은 죽어있음.
     norm_raw, man_raw = [], []
     onset_raw = {}                          # delay(10Hz) -> list(raw NIS)
-    for a, b in zip(ep_bounds[:-1], ep_bounds[1:]):
+    onset_by_bias = {}                       # (bias, delay) -> list  (sanity 분해용)
+    for k, (a, b) in enumerate(zip(ep_bounds[:-1], ep_bounds[1:])):
         seg = res[a:b]; seg_data = data[a:b]
-        atk_ever = seg[:, 1].max() > 0.5
-        if not atk_ever:
+        bias, policy = (SEG_META[k] if SEG_META else (None, None))
+        is_normal = (bias == 0.0) if bias is not None else (seg[:, 1].max() <= 0.5)
+        is_track  = (policy == 'track') if policy is not None else (seg_data[:, 3].max() <= 0.5)
+        if is_normal:
+            # ── 정상 = bias=0 셀 전체 스텝 ──
             norm_raw.extend(seg[:, 4])
-            # 급기동 스텝 = 명령토크 |u1..u3| 상위 20% (정상 내 기동)
             tqmag = np.linalg.norm(seg_data[:, 14:17], axis=1)
-            thr = np.percentile(tqmag, 80) if len(tqmag) else 0
-            man_raw.extend(seg[tqmag >= thr, 4])
-        else:
-            # track(=action 항상 0) 에피소드만 순수 온셋 시그니처
-            if seg_data[:, 3].max() > 0.5:
-                continue
+            if len(tqmag):
+                thr = np.percentile(tqmag, 80)      # 급기동 = 명령토크 상위 20%
+                man_raw.extend(seg[tqmag >= thr, 4])
+        elif is_track:
+            # ── 온셋 = bias>0 track 셀의 공격(flag on)스텝, delay 정렬 ──
             for j in range(len(seg)):
                 if seg[j, 1] > 0.5:
-                    dl = int(round(seg[j, 3]))    # 10Hz 공격경과
+                    dl = int(round(seg[j, 3]))
                     onset_raw.setdefault(dl, []).append(seg[j, 4])
+                    if per_bias and bias is not None:
+                        onset_by_bias.setdefault((bias, dl), []).append(seg[j, 4])
+    if per_bias:
+        return np.asarray(norm_raw), np.asarray(man_raw), onset_raw, onset_by_bias
     return np.asarray(norm_raw), np.asarray(man_raw), onset_raw
 
 
@@ -138,12 +172,20 @@ for rg in R_CANDS:
         res_cache[(qg, rg)] = (nr, mr, oraw)
         M[(qg, rg)] = metrics(nr, mr, oraw)
 
-# ── SANITY ───────────────────────────────────────────────────────
-base_oraw = res_cache[(BASELINE_Q, BASELINE_R)][2]
+# ── SANITY (baseline 셀만 per-bias 분해) ─────────────────────────
+_bn, _bm, base_oraw, base_bybias = analyze(replay(BASELINE_Q, BASELINE_R), per_bias=True)
 base_t2 = np.median(base_oraw[SANITY_DELAY]) if base_oraw.get(SANITY_DELAY) else float('nan')
 ok = abs(base_t2 - SANITY_TARGET) <= 0.6
-print(f"★ SANITY: 현행(Q={BASELINE_Q:.0e}, R={BASELINE_R}) t={SANITY_DELAY} gyro NIS median = "
-      f"{base_t2:.3f} (목표≈{SANITY_TARGET}) → {'PASS ✅' if ok else 'MISMATCH ⚠ replay 정합성부터 확인'}")
+print(f"★ SANITY: 현행(Q={BASELINE_Q:.0e}, R={BASELINE_R}) t={SANITY_DELAY} gyro NIS median(밴드혼합) = "
+      f"{base_t2:.3f} (목표≈{SANITY_TARGET}) → {'PASS ✅' if ok else 'CHECK ⚠'}")
+biases = sorted({bx for (bx, dl) in base_bybias})
+print(f"  per-bias t={SANITY_DELAY} median: " +
+      "  ".join(f"s={bx}: {np.median(base_bybias[(bx, SANITY_DELAY)]):.3f}"
+               f"(n={len(base_bybias[(bx, SANITY_DELAY)])})"
+               for bx in biases if (bx, SANITY_DELAY) in base_bybias))
+print(f"  펄스 시그니처(d1↑ d2↑ · d4-8침묵 · d10-11재상승) 재현 = "
+      f"{'YES ✅' if (base_t2 > np.median(base_oraw.get(5,[9])) ) else 'NO'} "
+      f"→ 이게 replay 정합성의 실질 기준(온라인 NIS 미로그).")
 print("=" * 92)
 
 # ── 표1: 온셋정렬 gyro NIS(raw median) — R블록별 delay×Q ──────────

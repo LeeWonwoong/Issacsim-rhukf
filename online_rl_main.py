@@ -183,6 +183,7 @@ class OnlineRLNode(Node):
         self.home_lat = None; self.home_lon = None; self.home_alt = None
         self.earth_radius = 6371000.0; self.gps_updated = False
         self.last_res = np.zeros(9); self.last_Pzz = np.eye(9)
+        self._spike_grace_remaining = 0
 
         # ── Episode state ──
         self.flight_state = 'IDLE'
@@ -457,6 +458,7 @@ class OnlineRLNode(Node):
         self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib, q_gate=self._ukf_q_gate)
         self.is_ukf_initialized = False; self.last_res = np.zeros(9); self.last_Pzz = np.eye(9)
         self.continuous_fp_count = 0
+        self._spike_grace_remaining = 0    # NIS 스파이크 후 FP 완화 grace 카운터
         self.drift_counter = 0
         self.attack_bursts = []
         self._cur_burst_start = 0
@@ -860,15 +862,23 @@ class OnlineRLNode(Node):
                     self.continuous_fp_count = 0
 
         # ── 2. 퓨어한 보상 계산 ──
+        # NIS 스파이크 grace: raw gyro NIS가 임계 넘으면 이후 N스텝 FP 완화 무장('신호 있을 때만').
+        rc = self.cfg.reward
+        if nis_g_raw >= rc.spike_nis_threshold:
+            self._spike_grace_remaining = rc.fp_spike_grace_steps
+        fp_grace_active = self._spike_grace_remaining > 0
+        if self._spike_grace_remaining > 0:
+            self._spike_grace_remaining -= 1
         # FP 인자: 공격직후 recovery는 recovery_delay(offset grace); 순수오탐은 연속 hover 카운트(첫스텝 -1 점증).
-        fp_rec_arg = (min(recovery_delay, 5) if self._last_burst_end is not None
-                      else min(self.continuous_fp_count, 5))
+        fp_rec_arg = (min(recovery_delay, rc.delay_cap) if self._last_burst_end is not None
+                      else min(self.continuous_fp_count, rc.delay_cap))
         reward = calculate_reward(
             self.prev_action if self.prev_action is not None else 0,
             self.attack_active_flag,
-            min(attack_delay, 5),      # FN: attack_delay (onset grace + 에스컬레이션)
-            fp_rec_arg,                # FP: recovery_delay (offset grace) or 큰값(순수오탐)
-            rc=self.cfg.reward,
+            min(attack_delay, rc.delay_cap),   # FN: attack_delay → piecewise 곡선 (cap=8)
+            fp_rec_arg,                        # FP: recovery_delay(offset grace) or 순수오탐 카운트
+            fp_grace=fp_grace_active,          # 스파이크 직후 = FP 완화(-2.0→-1.0)
+            rc=rc,
         )
         # 물리적 crash = 결과 기반 종단 페널티 (추종오차 대신 '추락=나쁨' outcome anchor).
         #   강도가 '생존 가능 띠'에 들어와 있을 때만 깨끗한 신호가 됨(즉사 구간이면 노이즈).

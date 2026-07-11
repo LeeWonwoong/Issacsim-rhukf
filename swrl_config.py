@@ -367,11 +367,15 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
             scenario['attack_intensity'] = 1.0
             s = random.uniform(*cfg.bias_scale_range)
             j = cfg.bias_jitter
-            jit = lambda: random.uniform(1.0 - j, 1.0 + j)
-            scenario['bias_torque_xy'] = s * jit()
-            scenario['bias_torque_z']  = cfg.bias_yaw_ratio * s * jit()
-            scenario['bias_thrust_n']  = cfg.bias_ft_ratio  * s * jit()
-            scenario['bias_scale'] = s          # 로깅/분석용 (밴드 대비 위치)
+            # ★ s≥1.41 클립: ±10% jitter가 유효강도를 crash 오염밴드(hover도 붕괴 ≥1.42)로 밀어
+            #   delay/crash 신호를 노이즈로 만든다 → 지터 상한을 동결밴드 상단(1.40)으로 클램프.
+            #   추력(crash 주채널, 물리#4)도 같은 스케일이라 coherent 하게 차단됨. 하단은 유지(약공격=무해).
+            sclip = cfg.bias_scale_range[1]
+            sj = lambda: min(s * random.uniform(1.0 - j, 1.0 + j), sclip)
+            scenario['bias_torque_xy'] = sj()
+            scenario['bias_torque_z']  = cfg.bias_yaw_ratio * sj()
+            scenario['bias_thrust_n']  = cfg.bias_ft_ratio  * sj()
+            scenario['bias_scale'] = min(s, sclip)   # 로깅/분석용 (밴드 대비 위치)
         else:
             lo, hi = get_curriculum_intensity(episode, cfg)
             scenario['attack_intensity'] = random.uniform(lo, hi)

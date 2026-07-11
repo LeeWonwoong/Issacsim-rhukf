@@ -1,0 +1,6 @@
+==========================================================
+ [17:41:00] START capture-zu combined ft=1.5 ramp=0.0s ep=5 grid=0,1.34,1.37,1.40 → results_capture
+==========================================================
+ [pid 9637] 캡처 시작. 30초 내 배너 확인:
+ [18:18:30] DONE capture-zu → results_capture/zu_log.npz
+-rw-rw-r-- 1 acsl acsl 8861894 Jul 10 18:18 results_capture/zu_log.npz
