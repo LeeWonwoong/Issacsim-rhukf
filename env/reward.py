@@ -1,105 +1,104 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Tuple
 
 
 @dataclass
 class RewardConfig:
-    # ── 정탐 / 정상 (TP ≫ TN: 공격을 잡는 게 명확히 이득 → 딜레이↓) ──
-    r_tp: float = 2.0          # 공격중 hover
+    # ══════════════════════════════════════════════════════════════════
+    #  펄스 reward 재조정 v2 (2026-07-12): 급경사 FN 역효과 → 완만 FN + 조기탐지는 TP(상)로
+    # ══════════════════════════════════════════════════════════════════
+    #  v1(급경사 FN cap-16 + FP grace) 재학습 실패: delay 7→9(악화)·둘째봉↑, FAR 0.004→0.099.
+    #  진단: FP grace가 FAR 주범(공격ep transient arm→값싼 hover), 급경사 FN의 '놓침공포'가
+    #        오히려 신중함(늦은탐지) 유발. d≤3 basin은 존재(전학습중 11회 달성).
+    #  v2 처방: ① FP grace 완전삭제(항상 -2.0) ② FN 완만 단조(-1 기울기, 평탄 제거)
+    #           ③ 조기탐지를 벌(FN급경사)이 아니라 상(TP 증액)으로 유도.
+
+    # ── 정탐(TP) = 조기탐지 상: d≤3 크게 보상, 늦을수록 감소(→ 빨리 잡으면 이득) ──
+    #   매 hover스텝마다 부여되므로 d=2부터 hold하면 [4.5,4.5,4.0,…] 누적 ≫ d=10부터 [2.0,…].
+    r_tp_curve: Tuple[float, ...] = (
+        4.5,  # d0
+        4.5,  # d1
+        4.5,  # d2  ★첫 펄스 골든타임 — 조기정탐 최대보상
+        4.5,  # d3  ★목표 데드라인 (d≤3 전부 4.5)
+        4.0,  # d4
+        3.5,  # d5
+        3.0,  # d6
+        2.5,  # d7
+        2.0,  # d8+ 늦은정탐 = 구 r_tp(2.0) 바닥
+    )
+    r_tp_cap: int = 8
+    r_tp: float = 2.0          # (하위호환/폴백; 실제는 r_tp_curve 사용)
     r_tn: float = 0.5          # 평시 track
 
-    # ══════════════════════════════════════════════════════════════════
-    #  미탐(FN) — 펄스 reward 대수술 (2026-07-11): piecewise 단조 곡선
-    # ══════════════════════════════════════════════════════════════════
-    #  배경(확정 물리): NIS 펄스 t=2~3 gyro 급상승(raw~3.15, 236배) → t=4~9 침묵(innovation 골,
-    #    필터로 못채움 확정) → t=10~11 재상승. 데드라인 상단(s1.40) d≤7 / 하단(s1.34) d≤14.
-    #  병목 = reward 유인(오라클 delay1 가능). 구(舊) fn_onset_mult(선형×배수)는 d≥5 평탄 →
-    #    빨리 잡을 이유 없어 delay≈9 안착(이봉). → 곱셈 폐기, delay 인덱스 lookup으로 단조 재작성.
-    #  형태: d0~1 grace(신호 물리적으로 無 — 벌하면 왜곡) / d2~3 최급(첫 펄스=골든타임=목표지점)
-    #        d4~7 계속 상승(침묵이라 못잡아도 늦을수록 벌, 데드라인7) / d≥8 cap(비평탄은 per-step
-    #        누적으로 보장 — 매 미탐스텝마다 -16 가산되어 미루면 총합 계속 하락).
-    #  제약(불변식): 단조증가(인버전 없음) ∧ d2~3 최급 ∧ d≥8 per-step 최대.
+    # ── 미탐(FN) = 완만 단조 (급경사 아님; 평탄 제거) ──
+    #   기울기 -1/step. d0~1 grace(신호 물리적으로 無). d2~ 완만 하락. 데드라인(하단 d≤14)까지 단조,
+    #   그 뒤 cap(회복불가 구간이라 구분 무의미). '놓침공포' 대신 완만 — 조기유인은 TP가 담당.
     fn_curve: Tuple[float, ...] = (
-        -0.3,   # d0  grace (obs창 미충전 + 신호 없음)
-        -0.5,   # d1  grace (첫 펄스 직전, 탐지율 물리적 0%)
-        -3.0,   # d2  ★첫 펄스 — 골든타임 진입 (기울기 -2.5, 급증)
-        -6.0,   # d3  ★펄스 정점 — 최급 기울기 (-3.0), 목표 지점
-        -8.0,   # d4  침묵 진입 (-2.0)
-        -10.0,  # d5  침묵 (-2.0)
-        -12.0,  # d6  침묵 (-2.0)
-        -14.0,  # d7  데드라인 상단(s1.40) (-2.0)
-        -16.0,  # d8+ cap (데드라인 초과 압박; per-step 누적으로 비평탄 유지)
+        -0.3, -0.5,                                        # d0,d1 grace
+        -2.0, -3.0, -4.0, -5.0, -6.0, -7.0, -8.0,          # d2..d8
+        -9.0, -10.0, -11.0, -12.0, -13.0, -14.0,           # d9..d14 (평탄 제거, 단조 지속)
     )
-    delay_cap: int = 8         # 5→8: 데드라인 상단7 덮음. fn_curve 길이 = delay_cap+1 이어야 함.
+    delay_cap: int = 14        # FN 곡선 인덱스 상한(하단밴드 데드라인). fn_curve 길이 = delay_cap+1.
 
-    # ── 오탐(FP) = 평시 hover 첫 스텝부터 강하게 ──
+    # ── 오탐(FP) = 평시 hover 첫 스텝부터 강하게. grace 없음(항상 -2.0부터). ──
     fp_base: float = -2.0      # fp_run 0 (명확히 손해)
     fp_per_step: float = -1.0  # 연속 오탐당 추가
-
-    # ── FP 완화: NIS 스파이크 직후 grace (첫 펄스 과감히) ──
-    #    첫 펄스 raw~3.15(236배)로 명확 → 그 직후 반응은 FP여도 정당 → 벌 완화(-2.0→-1.0).
-    #    '신호 있을 때만': 스파이크 감지(raw gyro NIS ≥ spike_nis_threshold) 후 N스텝만.
-    #    평시(무신호) FP 는 fp_base -2.0 그대로 유지 → '일단 다 쳐' 과잉교정 방지.
-    fp_spike_grace_steps: int = 2       # 스파이크 후 완화 지속 스텝
-    fp_spike_grace_base: float = -1.0   # grace 중 FP 페널티(평탄; per-step 에스컬레이션 미적용)
-    spike_nis_threshold: float = 1.5    # grace 무장 임계 (raw gyro NIS; 정상 p99≈0.73 ≪ 1.5 ≪ 펄스 3.15)
+    fp_cap: int = 5            # FP 에스컬레이션/recovery grace 클램프 (FN delay_cap과 분리)
 
     terminal_penalty: float = -10.0     # flip/altitude 물리추락 (γ=0.9라 결정에 닿음)
 
     # ── heavy-tailed 보상 노이즈 (옵티마이저 강건성 실험 KNOB; 기본 OFF) ──
     #    버퍼 저장 reward에만 가산(=칼만 measurement noise 채널). zero-mean mixture.
-    #    §6 강건성 스윕: reward_noise_outlier_sigma를 0,5,10,20으로 쓸며 RHUKF−Adam 이점 측정.
     reward_noise_enabled: bool = False
-    reward_noise_sigma: float = 1.0          # 평상 가우시안 std (≈R 자릿수)
-    reward_noise_outlier_prob: float = 0.05  # outlier 발생 확률
-    reward_noise_outlier_sigma: float = 10.0 # outlier std (heavy-tail 세기 = 주 다이얼)
+    reward_noise_sigma: float = 1.0
+    reward_noise_outlier_prob: float = 0.05
+    reward_noise_outlier_sigma: float = 10.0
 
     def __post_init__(self):
-        # fn_curve 는 delay_cap 을 덮어야 함 (0..delay_cap 인덱싱).
         assert len(self.fn_curve) >= self.delay_cap + 1, \
             f"fn_curve(len={len(self.fn_curve)}) < delay_cap+1({self.delay_cap+1})"
-        # 단조증가(=값이 단조감소) 불변식 — 인버전 방지.
         assert all(self.fn_curve[i] >= self.fn_curve[i + 1] for i in range(len(self.fn_curve) - 1)), \
             f"fn_curve 비단조: {self.fn_curve}"
+        assert len(self.r_tp_curve) >= self.r_tp_cap + 1, \
+            f"r_tp_curve(len={len(self.r_tp_curve)}) < r_tp_cap+1({self.r_tp_cap+1})"
+        # 조기탐지 상: 단조 비증가(늦을수록 보상↓) + 바닥이 r_tn보다 커야 TP 유인 유지.
+        assert all(self.r_tp_curve[i] >= self.r_tp_curve[i + 1] for i in range(len(self.r_tp_curve) - 1)), \
+            f"r_tp_curve 비단조(증가): {self.r_tp_curve}"
 
 
 DEFAULT_REWARD = RewardConfig()
 
 
 def sample_reward_noise(rc: RewardConfig = None) -> float:
-    """heavy-tailed 보상 노이즈 1샘플 (zero-mean mixture). 비활성/미설정이면 0.0.
-       버퍼 저장 reward에만 가산 → 칼만 measurement noise 채널을 직접 자극."""
+    """heavy-tailed 보상 노이즈 1샘플 (zero-mean mixture). 비활성/미설정이면 0.0."""
     import numpy as np
     rc = rc if rc is not None else DEFAULT_REWARD
     if not getattr(rc, 'reward_noise_enabled', False):
         return 0.0
     if np.random.rand() < rc.reward_noise_outlier_prob:
-        return float(np.random.randn() * rc.reward_noise_outlier_sigma)   # outlier(꼬리)
-    return float(np.random.randn() * rc.reward_noise_sigma)               # 평상
+        return float(np.random.randn() * rc.reward_noise_outlier_sigma)
+    return float(np.random.randn() * rc.reward_noise_sigma)
 
 
 def calculate_reward(current_action, is_under_attack,
                      attack_delay: int = 0, fp_run: int = 0,
-                     fp_grace: bool = False,
                      rc: RewardConfig = None) -> float:
     """
     current_action:  0=track, 1=hover
     is_under_attack: 현재 스텝 공격 활성 여부 (지면 진실; 관측엔 없음)
-    attack_delay:    공격 onset 후 경과 스텝 (FN piecewise 곡선 인덱스)
+    attack_delay:    공격 onset 후 경과 스텝 (TP 조기상 곡선 + FN 완만 곡선 인덱스)
     fp_run:          평시 연속 오탐(hover) 지속 길이 (FP 선형 에스컬레이션)
-    fp_grace:        NIS 스파이크 직후 grace 창 여부(True면 FP 페널티 완화; 호출부가 판정)
     rc:              RewardConfig (None이면 DEFAULT_REWARD)
     """
     rc = rc if rc is not None else DEFAULT_REWARD
     if is_under_attack:
-        if current_action == 1:                                  # TP
-            return rc.r_tp
-        d = min(max(attack_delay, 0), rc.delay_cap)              # FN: piecewise 단조 곡선
+        if current_action == 1:                                  # TP: 조기탐지 상(곡선)
+            d = min(max(attack_delay, 0), rc.r_tp_cap)
+            return rc.r_tp_curve[d]
+        d = min(max(attack_delay, 0), rc.delay_cap)              # FN: 완만 단조 곡선
         return rc.fn_curve[d]
     else:
         if current_action == 0:                                  # TN
             return rc.r_tn
-        if fp_grace:                                             # 스파이크 직후 = 과감한 반응 허용
-            return rc.fp_spike_grace_base                        # 평탄 완화(-1.0)
-        d = min(max(fp_run, 0), rc.delay_cap)                    # FP: 연속오탐 선형
+        d = min(max(fp_run, 0), rc.fp_cap)                       # FP: 연속오탐 선형 (grace 없음)
         return rc.fp_base + rc.fp_per_step * d
