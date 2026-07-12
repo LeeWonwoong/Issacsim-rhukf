@@ -859,17 +859,16 @@ class OnlineRLNode(Node):
                 else:
                     self.continuous_fp_count = 0
 
-        # ── 2. 퓨어한 보상 계산 ── (v2: FP grace 삭제 — FAR 주범이었음)
-        rc = self.cfg.reward
+        # ── 2. 퓨어한 보상 계산 ──
         # FP 인자: 공격직후 recovery는 recovery_delay(offset grace); 순수오탐은 연속 hover 카운트(첫스텝 -1 점증).
-        fp_rec_arg = (min(recovery_delay, rc.fp_cap) if self._last_burst_end is not None
-                      else min(self.continuous_fp_count, rc.fp_cap))
+        fp_rec_arg = (min(recovery_delay, 5) if self._last_burst_end is not None
+                      else min(self.continuous_fp_count, 5))
         reward = calculate_reward(
             self.prev_action if self.prev_action is not None else 0,
             self.attack_active_flag,
-            min(attack_delay, rc.delay_cap),   # attack_delay → TP 조기상 / FN 완만 곡선
-            fp_rec_arg,                        # FP: recovery_delay(offset grace) or 순수오탐 카운트
-            rc=rc,
+            min(attack_delay, 5),      # FN: attack_delay (onset grace + 에스컬레이션)
+            fp_rec_arg,                # FP: recovery_delay (offset grace) or 큰값(순수오탐)
+            rc=self.cfg.reward,
         )
         # 물리적 crash = 결과 기반 종단 페널티 (추종오차 대신 '추락=나쁨' outcome anchor).
         #   강도가 '생존 가능 띠'에 들어와 있을 때만 깨끗한 신호가 됨(즉사 구간이면 노이즈).

@@ -1,83 +1,51 @@
 from dataclasses import dataclass
-from typing import Tuple
 
 
 @dataclass
 class RewardConfig:
-    # ══════════════════════════════════════════════════════════════════
-    #  펄스 reward 재조정 v2 (2026-07-12): 급경사 FN 역효과 → 완만 FN + 조기탐지는 TP(상)로
-    # ══════════════════════════════════════════════════════════════════
-    #  v1(급경사 FN cap-16 + FP grace) 재학습 실패: delay 7→9(악화)·둘째봉↑, FAR 0.004→0.099.
-    #  진단: FP grace가 FAR 주범(공격ep transient arm→값싼 hover), 급경사 FN의 '놓침공포'가
-    #        오히려 신중함(늦은탐지) 유발. d≤3 basin은 존재(전학습중 11회 달성).
-    #  v2 처방: ① FP grace 완전삭제(항상 -2.0) ② FN 완만 단조(-1 기울기, 평탄 제거)
-    #           ③ 조기탐지를 벌(FN급경사)이 아니라 상(TP 증액)으로 유도.
-
-    # ── 정탐(TP) = 조기탐지 상: d≤3 크게 보상, 늦을수록 감소(→ 빨리 잡으면 이득) ──
-    #   매 hover스텝마다 부여되므로 d=2부터 hold하면 [4.5,4.5,4.0,…] 누적 ≫ d=10부터 [2.0,…].
-    r_tp_curve: Tuple[float, ...] = (
-        4.5,  # d0
-        4.5,  # d1
-        4.5,  # d2  ★첫 펄스 골든타임 — 조기정탐 최대보상
-        4.5,  # d3  ★목표 데드라인 (d≤3 전부 4.5)
-        4.0,  # d4
-        3.5,  # d5
-        3.0,  # d6
-        2.5,  # d7
-        2.0,  # d8+ 늦은정탐 = 구 r_tp(2.0) 바닥
-    )
-    r_tp_cap: int = 8
-    r_tp: float = 2.0          # (하위호환/폴백; 실제는 r_tp_curve 사용)
+    # ── 정탐 / 정상 (TP ≫ TN: 공격을 잡는 게 명확히 이득 → 딜레이↓) ──
+    r_tp: float = 2.0          # 공격중 hover
     r_tn: float = 0.5          # 평시 track
 
-    # ── 미탐(FN) = 완만 단조 (급경사 아님; 평탄 제거) ──
-    #   기울기 -1/step. d0~1 grace(신호 물리적으로 無). d2~ 완만 하락. 데드라인(하단 d≤14)까지 단조,
-    #   그 뒤 cap(회복불가 구간이라 구분 무의미). '놓침공포' 대신 완만 — 조기유인은 TP가 담당.
-    fn_curve: Tuple[float, ...] = (
-        -0.3, -0.5,                                        # d0,d1 grace
-        -2.0, -3.0, -4.0, -5.0, -6.0, -7.0, -8.0,          # d2..d8
-        -9.0, -10.0, -11.0, -12.0, -13.0, -14.0,           # d9..d14 (평탄 제거, 단조 지속)
-    )
-    delay_cap: int = 14        # FN 곡선 인덱스 상한(하단밴드 데드라인). fn_curve 길이 = delay_cap+1.
+    # ── 미탐(FN) = 딜레이 최소화: onset부터 선형 즉발 (fn_base + fn_per_step·delay) ──
+    #   로드맵 학습수정(2026-07-08) fn 온셋가중 [강화 2026-07-08]: 온셋 펄스(t=1~2 뒤 침묵, 물리#2)라
+    #   초반 탐지 필수. 이전(선형 cap4: d0 -0.8/d1 -1.5/…/d4+ -3.6)은 d≥4 평탄→둘째봉(14-15) 방치·조기유인 약함.
+    #   → 온셋창(1≤d≤fn_onset_window) 미탐을 ×fn_onset_mult 가중 + cap 4→5.
+    #   신곡선: d0 -0.80 / d1 -2.70 / d2 -3.96 / d3 -5.22 / d4 -6.48 / d5 -7.74 (단조·급).
+    fn_base: float = -0.8      # delay 0 (온셋 즉시 유의미한 손해 — obs창 미충전 grace)
+    fn_per_step: float = -0.7  # delay당 추가 (선형 → 미루면 바로 아픔)
+    fn_onset_mult: float = 1.8    # 온셋창 미탐 가중배수(1.5~2) = 조기탐지 직접 유인(첫봉 6-7→3-4 당김)
+    fn_onset_window: int = 5      # onset 후 d≤이 스텝까지 가중 적용
 
-    # ── 오탐(FP) = 평시 hover 첫 스텝부터 강하게. grace 없음(항상 -2.0부터). ──
+    # ── 오탐(FP) = 오탐 최소화: 평시 hover 첫 스텝부터 강하게 ──
     fp_base: float = -2.0      # fp_run 0 (명확히 손해)
     fp_per_step: float = -1.0  # 연속 오탐당 추가
-    fp_cap: int = 5            # FP 에스컬레이션/recovery grace 클램프 (FN delay_cap과 분리)
 
-    terminal_penalty: float = -10.0     # flip/altitude 물리추락 (γ=0.9라 결정에 닿음)
+    delay_cap: int = 5         # 4→5: 데드라인창 gradient 유지(평탄화=둘째봉 방치 방지)
+    terminal_penalty: float = -10.0   # flip/altitude 물리추락 (γ=0.9라 결정에 닿음)
 
     # ── heavy-tailed 보상 노이즈 (옵티마이저 강건성 실험 KNOB; 기본 OFF) ──
     #    버퍼 저장 reward에만 가산(=칼만 measurement noise 채널). zero-mean mixture.
+    #    §6 강건성 스윕: reward_noise_outlier_sigma를 0,5,10,20으로 쓸며 RHUKF−Adam 이점 측정.
     reward_noise_enabled: bool = False
-    reward_noise_sigma: float = 1.0
-    reward_noise_outlier_prob: float = 0.05
-    reward_noise_outlier_sigma: float = 10.0
-
-    def __post_init__(self):
-        assert len(self.fn_curve) >= self.delay_cap + 1, \
-            f"fn_curve(len={len(self.fn_curve)}) < delay_cap+1({self.delay_cap+1})"
-        assert all(self.fn_curve[i] >= self.fn_curve[i + 1] for i in range(len(self.fn_curve) - 1)), \
-            f"fn_curve 비단조: {self.fn_curve}"
-        assert len(self.r_tp_curve) >= self.r_tp_cap + 1, \
-            f"r_tp_curve(len={len(self.r_tp_curve)}) < r_tp_cap+1({self.r_tp_cap+1})"
-        # 조기탐지 상: 단조 비증가(늦을수록 보상↓) + 바닥이 r_tn보다 커야 TP 유인 유지.
-        assert all(self.r_tp_curve[i] >= self.r_tp_curve[i + 1] for i in range(len(self.r_tp_curve) - 1)), \
-            f"r_tp_curve 비단조(증가): {self.r_tp_curve}"
+    reward_noise_sigma: float = 1.0          # 평상 가우시안 std (≈R 자릿수)
+    reward_noise_outlier_prob: float = 0.05  # outlier 발생 확률
+    reward_noise_outlier_sigma: float = 10.0 # outlier std (heavy-tail 세기 = 주 다이얼)
 
 
 DEFAULT_REWARD = RewardConfig()
 
 
 def sample_reward_noise(rc: RewardConfig = None) -> float:
-    """heavy-tailed 보상 노이즈 1샘플 (zero-mean mixture). 비활성/미설정이면 0.0."""
+    """heavy-tailed 보상 노이즈 1샘플 (zero-mean mixture). 비활성/미설정이면 0.0.
+       버퍼 저장 reward에만 가산 → 칼만 measurement noise 채널을 직접 자극."""
     import numpy as np
     rc = rc if rc is not None else DEFAULT_REWARD
     if not getattr(rc, 'reward_noise_enabled', False):
         return 0.0
     if np.random.rand() < rc.reward_noise_outlier_prob:
-        return float(np.random.randn() * rc.reward_noise_outlier_sigma)
-    return float(np.random.randn() * rc.reward_noise_sigma)
+        return float(np.random.randn() * rc.reward_noise_outlier_sigma)   # outlier(꼬리)
+    return float(np.random.randn() * rc.reward_noise_sigma)               # 평상
 
 
 def calculate_reward(current_action, is_under_attack,
@@ -86,19 +54,22 @@ def calculate_reward(current_action, is_under_attack,
     """
     current_action:  0=track, 1=hover
     is_under_attack: 현재 스텝 공격 활성 여부 (지면 진실; 관측엔 없음)
-    attack_delay:    공격 onset 후 경과 스텝 (TP 조기상 곡선 + FN 완만 곡선 인덱스)
-    fp_run:          평시 연속 오탐(hover) 지속 길이 (FP 선형 에스컬레이션)
+    attack_delay:    공격 onset 후 경과 스텝 (FN 선형 에스컬레이션)
+    fp_run:          평시 연속 오탐(hover) 지속 길이 (FP 선형 에스컬레이션).
+                     호출부의 continuous_fp_count(또는 recovery_delay)를 그대로 전달하면 됨.
     rc:              RewardConfig (None이면 DEFAULT_REWARD)
     """
     rc = rc if rc is not None else DEFAULT_REWARD
     if is_under_attack:
-        if current_action == 1:                                  # TP: 조기탐지 상(곡선)
-            d = min(max(attack_delay, 0), rc.r_tp_cap)
-            return rc.r_tp_curve[d]
-        d = min(max(attack_delay, 0), rc.delay_cap)              # FN: 완만 단조 곡선
-        return rc.fn_curve[d]
+        if current_action == 1:                                  # TP
+            return rc.r_tp
+        d = min(max(attack_delay, 0), rc.delay_cap)              # FN: 딜레이 선형
+        pen = rc.fn_base + rc.fn_per_step * d
+        if 1 <= d <= rc.fn_onset_window:                         # 온셋창 가중 = 조기탐지 직접 유인
+            pen *= rc.fn_onset_mult
+        return pen
     else:
         if current_action == 0:                                  # TN
             return rc.r_tn
-        d = min(max(fp_run, 0), rc.fp_cap)                       # FP: 연속오탐 선형 (grace 없음)
+        d = min(max(fp_run, 0), rc.delay_cap)                    # FP: 연속오탐 선형
         return rc.fp_base + rc.fp_per_step * d
