@@ -1032,6 +1032,7 @@ class OnlineRLNode(Node):
             'td_exkurt': round(td_exkurt, 4), 'epsilon': round(float(eps), 4),
             'relapse': self._ep_relapse,   # [진단] 공격중 hover→track 재발 횟수
             'min_alt': round(self._ep_min_alt, 2) if self._ep_min_alt < 999 else -1,  # 공격중 최저고도(m)
+            'bias_scale': round(float(self.scenario.get('bias_scale', 0.0)), 4) if self.scenario else 0.0,  # s별 delay 분석용
         }
         if getattr(self, '_metrics_w', None) is None:
             os.makedirs(self.cfg.outdir, exist_ok=True)
