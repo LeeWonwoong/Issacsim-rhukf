@@ -1356,6 +1356,8 @@ def main():
                     help='sweep 외란 타입 override (기본 none)')
     ap.add_argument('--sweep-wind-speed', dest='sweep_wind_speed', type=float, default=None,
                     help='sweep 바람 속도 m/s override (force≈0.031·v²N; 8≈2N 15≈7N)')
+    ap.add_argument('--seed', type=int, default=None,
+                    help='재현성 seed (random/numpy/torch 동시 시드) — baseline seed 반복용')
     _args, _ = ap.parse_known_args()
 
     # 모드별 권장 grid (값 미지정 시) — 각 모드의 '붕괴 경계'를 브래킷
@@ -1399,6 +1401,15 @@ def main():
     if _args.outdir:
         cfg.outdir = _args.outdir
         os.makedirs(cfg.outdir, exist_ok=True)
+
+    # ── 재현성 seed 적용 (baseline seed 반복 / RHUKF 공정비교). 미지정 시 cfg.seed(42) ──
+    if _args.seed is not None:
+        cfg.seed = int(_args.seed)
+    import random as _random
+    _random.seed(cfg.seed); np.random.seed(cfg.seed); torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+    print(f"[SEED] {cfg.seed} 적용 (random/numpy/torch{'/cuda' if torch.cuda.is_available() else ''})")
 
     import warnings
     warnings.filterwarnings("ignore", category=FutureWarning)
