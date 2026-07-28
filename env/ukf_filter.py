@@ -44,10 +44,23 @@ def load_calibration(path='calibration.json'):
 def to_physical_u(thrust, torque, calib):
     N = len(thrust)
     u = np.zeros((N, 4))
+    # C_torque_x/y 가 있으면 축별로 쓴다(2026-07-28: 실측 롤/피치 게인이 ~15% 다름).
+    # 없으면 기존 스키마(C_torque_xy 공통)로 폴백.
+    cx = calib.get('C_torque_x', calib['C_torque_xy'])
+    cy = calib.get('C_torque_y', calib['C_torque_xy'])
     u[:, 0] = np.abs(thrust[:, 2]) * calib['C_thrust']
-    u[:, 1] = torque[:, 0] * calib['C_torque_xy']
-    u[:, 2] = torque[:, 1] * calib['C_torque_xy']
+    u[:, 1] = torque[:, 0] * cx
+    u[:, 2] = torque[:, 1] * cy
     u[:, 3] = torque[:, 2] * calib['C_torque_z']
+    # 총추력에 비례하는 기하 토크 오프셋 (2026-07-28).
+    #  Iris 는 로터 중심이 바디 COM 에서 (x+6.7mm, y−1.9mm) 어긋나 있어 총추력이 상시 토크를 만든다.
+    #  PX4 는 이를 트림 명령으로 상쇄하지만, 모델이 모르면 그 트림을 실제 토크로 오해해
+    #  ω̇ 예측에 상시 편향이 생긴다(수정 전 실측: ω̇y −3.2 rad/s², 호버·순항·급기동 공통).
+    K = calib.get('torque_thrust_coupling')
+    if K:
+        u[:, 1] += K[0] * u[:, 0]
+        u[:, 2] += K[1] * u[:, 0]
+        u[:, 3] += K[2] * u[:, 0]
     return u
 
 
@@ -94,9 +107,9 @@ class DynamicsUKF:
         ])
         
         self.R = np.diag([
-        0.1, 0.1, 0.1,       # pos    (무효, 유지)
-        0.3, 0.3, 0.3,       # vel    0.5 → 1.0 (d'v↑ 지속↑ p90↓)
-        0.5, 0.5, 0.5,       # gyro   0.5 → 1.0 (d'v↑ 지속↑ p90↓)
+        0.5, 0.5, 0.5,       # pos    0.1→0.5 (2026-07-22: pos NIS 신규 로깅용 시작값, 사후 검증)
+        0.3, 0.3, 0.3,       # vel    (현행 튜닝값 유지 — 변경 금지)
+        0.5, 0.5, 0.5,       # gyro   (현행 튜닝값 유지 — 변경 금지)
         ])
 
         self.x = np.zeros(12)
@@ -110,7 +123,16 @@ class DynamicsUKF:
             phi, th, psi = s[3:6]
             vx, vy, vz = s[6:9]
             p, q, r = s[9:12]
-            limit = 0.8
+            # 자세 클립 0.8 → 1.05 (2026-07-29). 1.05 rad = 60.2° = crash_flip 판정과 동일 →
+            # **비행 가능 영역 전체에서 모델이 유효**해진다.
+            #  구 값 0.8(45.8°)은 45.8~60.2° 구간에서 상태가 상한에 붙어 실제 자세를 못 따라갔고,
+            #  그만큼 모델오차가 인위적으로 커졌다(수평추력 오차 50°:0.66N / 60°:2.00N=1.46 m/s²).
+            #  공격이 성공해 기우는 구간이 정확히 여기라, 탐지 신호에 비물리적 성분이 섞였다.
+            #  ※ 클립의 목적은 특이점 회피인데, 특이점 항은 tan(th)/1/cos(th) 로 **th 만** 들어간다.
+            #    phi 는 cp/sp 로만 쓰여 특이점이 없다 = 롤 클립은 원래 잉여. 안전 상한으로만 유지.
+            #    1.05 에서 cos=0.498, tan=1.74 — 수치 안전.
+            #  ⚠ 모델 변경 = NIS 기준선/d′ 변경. 기준선·밴드 측정 전에 넣을 것(2026-07-29 반영).
+            limit = 1.05
             phi = np.clip(phi, -limit, limit)
             th = np.clip(th, -limit, limit)
             s[3:6] = [phi, th, psi]

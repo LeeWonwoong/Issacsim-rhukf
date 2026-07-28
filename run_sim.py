@@ -200,8 +200,21 @@ class PegasusApp:
         self.wind = WindModel('none')
         self._wind_dbg = os.environ.get('WIND_DBG', '') not in ('', '0')
 
+        # ── 로터 캘리브레이션 로그 (env ROTOR_LOG=경로.npz 로 활성) ──
+        #   PX4 정규화 명령(thrust/torque setpoint)과 **실제 적용된 로터 각속도**를 함께 기록.
+        #   로터 각속도를 알면 적용 추력/토크가 Pegasus 모델(T=k·ω², τ_z=Σc·ω²·dir, τ_xy=Σ T×r)
+        #   로 정확히 계산되므로, 동역학·폐루프 편향 없는 **정적** C_thrust/C_torque 적합이 가능하다.
+        #   (자세 rate loop 폐루프에서 ω̇~τ 회귀는 편향된다 — 2026-07-28 진단)
+        self._rotor_log_path = os.environ.get('ROTOR_LOG', '')
+        self._rotor_rows = []
+
+        # ── 모터 1차 지연 (env MOTOR_TAU=초, 미설정/0 = 비활성) ──
+        self._install_motor_lag(float(os.environ.get('MOTOR_TAU', '0') or 0.0))
+
         self.body_view = None
+        self.rotor_view = None
         self._setup_body_view()
+        self._apply_body_calib('[init]')   # 플랜트 질량/관성 = calibration.json (UKF와 동일)
 
         # ── GUI 보기용: chase-cam + 컬러 조명 (headless엔 무영향, 실패해도 무해) ──
         self._cam_follow = (not args.headless)
@@ -271,6 +284,7 @@ class PegasusApp:
         for path in ["/World/quadrotor/body", "/World/quadrotor"]:
             prim = self.stage.GetPrimAtPath(path)
             if prim.IsValid() and prim.HasAPI(UsdPhysics.RigidBodyAPI):
+                self.body_path = path
                 try:
                     self.body_view = RigidPrimView(
                         prim_paths_expr=path, name="attack_body")
@@ -279,6 +293,161 @@ class PegasusApp:
                 except Exception:
                     pass
                 break
+
+    def _rotor_compensation(self):
+        """로터 4개(리볼루트 조인트로 바디에 붙은 별개 강체)의 질량/관성 기여를 반환.
+
+        Iris USD 는 rotor0~3 이 각각 RigidBody 라서 실제 비행질량 = body + Σrotor 다
+        (기본 에셋: 1.5 + 0.1186 = 1.6186kg — '기본값 1.5kg'은 바디만의 값).
+        따라서 '총 비행질량 = 1.372kg' 을 맞추려면 바디에 (1.372 - Σrotor) 를 써야 한다.
+        관성도 동일: 바디 COM 기준 평행축 정리로 로터 기여를 빼준다.
+        반환: (Σm_rotor, I_contrib[3])
+        """
+        try:
+            if getattr(self, 'rotor_view', None) is None:
+                self.rotor_view = RigidPrimView(
+                    prim_paths_expr="/World/quadrotor/rotor[0-3]", name="calib_rotors")
+                self.world.scene.add(self.rotor_view)
+                self.rotor_view.initialize()
+            rm = np.asarray(self.rotor_view.get_masses(), dtype=float).ravel()
+            ri = np.asarray(self.rotor_view.get_inertias(), dtype=float).reshape(len(rm), 9)
+            rp, _ = self.rotor_view.get_world_poses()
+            bp, _ = self.body_view.get_world_poses()
+            rel = np.asarray(rp, dtype=float).reshape(len(rm), 3) - \
+                np.asarray(bp, dtype=float).reshape(3)
+            I = ri[:, [0, 4, 8]].sum(axis=0)              # 로터 자체 관성(작음)
+            for i in range(len(rm)):
+                x, y, z = rel[i]
+                I = I + rm[i] * np.array([y*y + z*z, x*x + z*z, x*x + y*y])   # 평행축
+            return float(rm.sum()), I
+        except Exception as e:
+            carb.log_error(f"[MASS] 로터 기여 계산 실패(보정 없이 진행): {e}")
+            return 0.0, np.zeros(3)
+
+    def _apply_body_calib(self, tag=''):
+        """물리 바디의 질량/관성을 calibration.json(drone)에 강제 정렬.
+
+        calibration.json 의 drone 블록 = **총 비행질량/총 관성**(로터 포함, UKF가 모델링하는 대상).
+        Iris USD 기본값은 body 1.5kg + rotor 0.1186kg = 1.6186kg 이었고, UKF 는 1.372kg 를
+        쓰고 있었다 → 플랜트와 탐지기 모델이 어긋난 채로 돌아갔다(2026-07-28 발견).
+        여기서 body 에 (총목표 - 로터기여) 를 써서 **총합이 목표와 일치**하도록 만든다.
+        USD 어트리뷰트와 PhysX 뷰 양쪽에 써 넣고 읽어서 로그로 확인한다.
+
+        ⚠ 질량이 바뀌면 호버 동작점(u_norm)이 이동하므로 C_thrust/C_torque/drag 재캘리브레이션이
+          **반드시 함께** 가야 한다(안 하면 정합이 오히려 악화).
+        """
+        d = self.calib['drone']
+        m_tot = float(d['mass'])
+        I_tot = np.array([float(d['Ixx']), float(d['Iyy']), float(d['Izz'])])
+        path = getattr(self, 'body_path', '/World/quadrotor/body')
+
+        m_r, I_r = self._rotor_compensation()
+        m_body = m_tot - m_r
+        I_body = I_tot - I_r
+        if m_body <= 0.0 or np.any(I_body <= 0.0):
+            carb.log_error(f"[MASS] 로터 보정 후 값이 비물리적 "
+                           f"(m_body={m_body:.4f}, I_body={I_body}) → 보정 생략")
+            m_body, I_body = m_tot, I_tot
+            m_r, I_r = 0.0, np.zeros(3)
+
+        # (1) USD 어트리뷰트 (리셋/재파싱 후에도 유지되는 소스)
+        try:
+            prim = self.stage.GetPrimAtPath(path)
+            mass_api = (UsdPhysics.MassAPI(prim) if prim.HasAPI(UsdPhysics.MassAPI)
+                        else UsdPhysics.MassAPI.Apply(prim))
+            mass_api.CreateMassAttr().Set(float(m_body))
+            mass_api.CreateDiagonalInertiaAttr().Set(Gf.Vec3f(*[float(v) for v in I_body]))
+        except Exception as e:
+            carb.log_error(f"[MASS] USD 어트리뷰트 설정 실패: {e}")
+
+        # (2) PhysX 런타임 뷰 (이미 파싱된 바디에 즉시 반영)
+        if self.body_view is not None:
+            try:
+                self.body_view.set_masses(np.array([m_body], dtype=np.float32))
+                self.body_view.set_inertias(np.array(
+                    [[I_body[0], 0, 0, 0, I_body[1], 0, 0, 0, I_body[2]]], dtype=np.float32))
+            except Exception as e:
+                carb.log_error(f"[MASS] PhysX 뷰 설정 실패: {e}")
+
+        # (3) 읽어서 확인 — 로그는 '실효 총합' 기준(목표와 직접 비교 가능)
+        try:
+            rb_m = float(np.asarray(self.body_view.get_masses()).ravel()[0])
+            rb_I = np.asarray(self.body_view.get_inertias()).ravel()[[0, 4, 8]]
+            eff_m = rb_m + m_r
+            eff_I = rb_I + I_r
+            ok = abs(eff_m - m_tot) < 1e-3 and np.all(np.abs(eff_I - I_tot) < 1e-5)
+            lvl = carb.log_warn if ok else carb.log_error
+            lvl(f"[MASS]{tag} {'OK' if ok else 'MISMATCH'} path={path} "
+                f"body=({rb_m:.6f}kg, {rb_I[0]:.6f},{rb_I[1]:.6f},{rb_I[2]:.6f}) "
+                f"+rotor=({m_r:.6f}kg, {I_r[0]:.6f},{I_r[1]:.6f},{I_r[2]:.6f}) "
+                f"= 총({eff_m:.6f}kg, {eff_I[0]:.6f},{eff_I[1]:.6f},{eff_I[2]:.6f}) "
+                f"목표({m_tot:.6f}kg, {I_tot[0]:.6f},{I_tot[1]:.6f},{I_tot[2]:.6f})")
+        except Exception as e:
+            carb.log_error(f"[MASS] readback 실패: {e}")
+
+    def _install_motor_lag(self, tau):
+        """로터 명령에 1차 지연을 넣는다 (실기 ESC+모터 시상수 모사). tau<=0 이면 비활성.
+
+        Pegasus 의 QuadraticThrustCurve 는 명령을 **즉시** 로터 각속도로 적용한다
+        (원 소스 주석: "instanenous model - no delay introduced"). 실기는 ESC+모터가
+        1차 지연(τ≈20~40ms)을 가지므로, 이걸 빼놓으면 제어권한의 동적 한계가 낙관적으로
+        나오고 밴드가 실제보다 관대하게 측정된다.
+
+        구현: thrusters 인스턴스의 두 메서드만 감싼다. 백엔드가 쓰는 원 명령은 `_raw_ref` 로
+        따로 보관하고, update() 직전에 지연 상태를 전진시켜 `_input_reference` 에 넣는다
+        (원 값과 필터 출력을 분리해 이중 필터링을 방지).
+        τ 값은 실기 ESC 텔레메트리(RPM 계단응답)에서 실측해 넣는 것이 목표다.
+        """
+        if tau <= 0.0:
+            self._motor_tau = 0.0
+            return
+        tc = self.vehicle._thrusters
+        n = len(tc._input_reference)
+        tc._raw_ref = list(tc._input_reference)
+        tc._lag_state = np.zeros(n, dtype=float)
+        _orig_set = tc.set_input_reference
+        _orig_update = tc.update
+
+        def _set_ref(ref):
+            tc._raw_ref = list(ref)
+
+        def _update(state, dt):
+            raw = np.asarray(tc._raw_ref, dtype=float)
+            a = dt / (tau + dt)                      # 1차 이산화
+            tc._lag_state += a * (raw - tc._lag_state)
+            tc._input_reference = list(tc._lag_state)
+            return _orig_update(state, dt)
+
+        tc.set_input_reference = _set_ref
+        tc.update = _update
+        self._motor_tau = tau
+        self._orig_set_input_reference = _orig_set   # 참조 유지
+        carb.log_warn(f"[MOTOR] 1차 지연 활성 τ={tau*1000:.1f}ms "
+                      f"(로터 {n}개, 물리 dt={self.physics_dt*1000:.1f}ms)")
+
+    def _log_rotors(self, step_counter):
+        """PX4 정규화 명령 + 실제 적용 로터 각속도를 기록(정적 캘리브레이션용).
+        run_sim 은 SIGKILL 로 종료되므로 주기적으로 덮어써 저장한다."""
+        try:
+            vel = np.asarray(self.vehicle._thrusters.velocity, dtype=float)
+            if vel.size < 4 or float(np.max(vel)) <= 0.0:
+                return                       # 아직 시동 전
+            st = self.vehicle.state
+            self._rotor_rows.append(np.concatenate([
+                [self.sim_time], self.cmd_thrust[:3], self.cmd_torque[:3], vel[:4],
+                np.asarray(st.linear_velocity, dtype=float),      # ENU
+                np.asarray(st.angular_velocity, dtype=float),     # 바디
+                [float(self.attack_active)],
+            ]))
+            if step_counter % 2500 == 0 and self._rotor_rows:
+                arr = np.asarray(self._rotor_rows, dtype=np.float64)
+                np.savez(self._rotor_log_path, data=arr, dt=self.physics_dt,
+                         cols='t,cmd_thr_x,cmd_thr_y,cmd_thr_z,cmd_tq_x,cmd_tq_y,cmd_tq_z,'
+                              'w0,w1,w2,w3,vE,vN,vU,wx,wy,wz,attack')
+                carb.log_warn(f"[ROTOR] {self._rotor_log_path} 저장 (rows={len(arr)})")
+        except Exception as e:
+            carb.log_error(f"[ROTOR] 로깅 실패(1회 후 비활성): {e}")
+            self._rotor_log_path = ''
 
     def _update_chase_cam(self, drone_pos):
         """GUI 뷰포트 카메라가 드론을 부드럽게 추적(chase-cam). 실패 시 1회 경고 후 비활성."""
@@ -333,6 +502,7 @@ class PegasusApp:
         # attack_form / bias_* 는 다음 _cb_attack_config에서 갱신되므로 유지(리셋 불필요)
 
         self.world.reset()
+        self._apply_body_calib('[reset]')   # world.reset() 이 기본값을 되살릴 경우 대비 재적용
         self.needs_reset = False
         carb.log_warn("[SIM] World reset complete")
 
@@ -435,6 +605,10 @@ class PegasusApp:
 
             self.sim_time += self.physics_dt
             step_counter += 1
+
+            if self._rotor_log_path:
+                self._log_rotors(step_counter)
+
             if step_counter % 5 == 0:
                 state = self.vehicle.state
                 msg = Odometry()

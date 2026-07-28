@@ -1,0 +1,25 @@
+{
+  "C_thrust": 25.579865900100636,
+  "C_torque_xy": 3.792547062256057,
+  "C_torque_z": 4.907196157320669,
+  "drag": [
+    0.5,
+    0.3,
+    0.0
+  ],
+  "drone": {
+    "mass": 1.372,
+    "g": 9.81,
+    "Ixx": 0.02954699,
+    "Iyy": 0.02648359,
+    "Izz": 0.05335915
+  },
+  "note": "2026-07-28 총질량 1.372kg 정합 + 로터각속도 기반 재캘리브레이션(fit_static_from_rotor.py, fc=5Hz) + 오일러 ENU→NED 프레임 수정. drag 는 실측 [0.499,0.299] corr-1.00 = Pegasus LinearDrag([0.50,0.30,0.0]) 설정값. torque_thrust_coupling = 로터중심 오프셋(x+6.7mm,y-1.9mm)이 총추력으로 만드는 상시 토크(validate_by_regime.py --fit-coupling). C_torque 는 drone.I 와 짝 — I 변경 시 재적합 필수. 검증: hover/cruise 편향≈0 (waypoint/circle/figure8/aggressive 4패턴).",
+  "C_torque_x": 3.567819820250292,
+  "C_torque_y": 4.017274304261822,
+  "torque_thrust_coupling": [
+    -0.0012082485765556811,
+    0.006209249861084686,
+    0.00012653925162054575
+  ]
+}

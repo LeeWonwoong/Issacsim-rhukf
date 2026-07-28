@@ -4,13 +4,19 @@ import glob
 import os
 from scipy.signal import butter, filtfilt, savgol_filter
 
-DRONE = {
-    'mass': 1.5,
-    'g':    9.81,
-    'Ixx':  0.02912,
-    'Iyy':  0.02912,
-    'Izz':  0.0552,
-}
+# ⚠ 2026-07-28: 여기에 질량/관성을 하드코딩하면 calibration.json 의 drone 블록과 갈라진다.
+#   실제로 그 사고가 났었다 — 스크립트는 1.5kg 가정으로 계수를 적합했는데 calibration.json 의
+#   drone 만 1.372kg 로 손수정돼, UKF 가 쓰는 C/m 비율이 어긋난 채로 오래 돌아갔다.
+#   (게다가 Iris 의 실제 비행질량은 로터 4개 포함 1.6186kg 이었다.)
+#   → DRONE 은 항상 calibration.json 에서 읽는다. 단일 출처 유지.
+def load_drone(path=None):
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = path or os.path.join(here, 'calibration.json')
+    with open(path) as f:
+        return json.load(f)['drone']
+
+
+DRONE = load_drone()
 def apply_zero_phase_filter(data, fs=50):
     """지연 없는 영위상 필터링 적용 (IEEE 표준)"""
     nyq = 0.5 * fs
@@ -93,11 +99,20 @@ def run_sysid_ols(files):
     return c_thrust, c_torques, [c_drag_x, c_drag_y, abs(c_drag_z)]
 
 def main():
-    files = sorted(glob.glob('data_raw/ep*.npz'))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--glob', default='data_raw/ep*.npz',
+                    help='입력 npz 글롭 (online_rl_main --log-sysid 산출물도 동일 포맷)')
+    ap.add_argument('--out', default=None, help='기록할 json (미지정 시 출력만)')
+    args = ap.parse_args()
+
+    files = sorted(glob.glob(args.glob))
     if not files:
-        print("[!] data_raw 폴더에 데이터가 없습니다.")
+        print(f"[!] 입력 데이터가 없습니다: {args.glob}")
         return
 
+    print(f"[*] DRONE(= calibration.json drone) = {DRONE}")
+    print(f"[*] 입력 {len(files)}개: {files}")
     c_thr, c_tqs, drags = run_sysid_ols(files)
 
     calib = {
@@ -109,10 +124,13 @@ def main():
         'note': "SysId via OLS with Zero-phase filtering (Gravity bug fixed)"
     }
 
-    with open('calibration.json', 'w') as f:
-        json.dump(calib, f, indent=2)
+    if args.out:
+        with open(args.out, 'w') as f:
+            json.dump(calib, f, indent=2, ensure_ascii=False)
+        print(f"[*] 기록 → {args.out}")
 
     print(f"[*] 시스템 식별(캘리브레이션) 완료!")
+    print(f"    - C_torque(축별): x={c_tqs[0]:.4f} y={c_tqs[1]:.4f} z={c_tqs[2]:.4f}")
     print(f"    - C_thrust: {c_thr:.4f} (정상: 20~50)")
     print(f"    - C_torque: XY={calib['C_torque_xy']:.4f}, Z={c_tqs[2]:.4f}")
     print(f"    - Drag:     X={drags[0]:.4f}, Y={drags[1]:.4f}, Z={drags[2]:.4f} (정상: 양수 0.05~0.5)")

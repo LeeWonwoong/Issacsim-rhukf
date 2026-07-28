@@ -11,8 +11,112 @@ UKF 잔차(NIS) 관측 기반 DDQN이 매 스텝 track/hover 이진 결정.
 - Isaac Sim 4.5 + PX4 SITL + Pegasus, ROS2 Humble, 10Hz 제어루프
 - `online_rl_main.py`(RL/스윕 노드) + `run_sim.py`(Isaac 서브프로세스)
 - 관측: 4스텝 윈도우 [nis_vel, nis_gyro, action] = 12차원. 의도적 비일관 UKF(Q낮게/R높게)
-  → NIS는 χ² 통계량이 아니라 탐지 feature. log1p 압축.
-- 네트워크 514 파라미터 고정(최적화기 공정비교용). agent: `--agent rhukf|adam`
+  → NIS는 χ² 통계량이 아니라 탐지 feature. **압축 통일(2026-07-22): 전 채널 ε̃=ln(1+ε)/(1+ln(1+ε)) [offset=1.0]** (기존 vel=log0.5 폐기).
+  pos NIS(res[0:3],R_pos=0.5)는 **로깅 전용**(정책 입력 아님). 16D 채택 여부는 우선순위2 분리도로 판정.
+- 네트워크: **페어링용 [24,24]=962params@12D / 1058@16D** (2026-07-22, 기존 514[16,16]에서 상향). 최적화기 공정비교용 고정. agent: `--agent rhukf|adam`
+- **환경 확정(2026-07-22): 바람=none40%/turbulence60%, wind_speed_range=(1.0,5.0)** (constant/gust 제거·캡처A 근거). sim_speed_factor=10(캡처·스윕 기본).
+
+## ★★ 플랜트/모델 정합 3건 수정 (2026-07-28) — 이전 측정치 전부 무효 ★★
+사용자 요청("런타임 질량 직접 쿼리")에서 시작해 UKF 모델과 시뮬레이터 플랜트의 불일치 3건을 실측·수정.
+**아래 FROZEN 밴드·NIS 기준선·d′·데드라인·학습된 에이전트는 전부 재측정 대상.**
+
+1. **총 비행질량 = 1.372kg 로 정합** (`run_sim._apply_body_calib`, `[MASS]` 로그로 매 기동 확인)
+   - Iris USD 는 body 1.5kg + **rotor 4개(리볼루트 조인트 별개 강체) 0.1186kg = 실제 1.6186kg** 였다.
+     "기본값 1.5kg"은 바디만의 값 — 로터를 빼먹은 것이 오해의 출발점.
+   - 이제 body 1.253385kg 를 써서 **총합이 1.372kg**(사용자 실기체 AUW). 관성도 같은 원칙으로
+     구 총관성×(1.372/1.6186) → 총 (0.029547, 0.026484, 0.053359). 로터 x/y 암 길이가 달라 Ixx≠Iyy.
+   - 검증: 로터모델 예측 호버 u_norm=0.5274 vs 실측 0.52722 (0.03%).
+2. **C_thrust / C_torque 재캘리브레이션** (`calibration/fit_static_from_rotor.py`)
+   - 구 값은 `calibrate_sysld.py` 가 **가정질량 1.5 를 하드코딩**한 채 적합됐고 calibration.json 의
+     drone 만 손으로 1.372 로 고쳐져 갈라져 있었다 → 이제 DRONE 은 항상 calibration.json 에서 읽는다.
+   - `C_thrust 22.82 → 25.58` (정적/호버평형/해석/동역학 4경로 0.2% 내 일치)
+   - `C_torque_xy 0.265 → x=3.568 / y=4.017`(축별 분리, ukf_filter 폴백 지원), `C_torque_z 3.655 → 4.907`
+   - **구 C_torque_xy 는 약 14배 과소**. 구 모델의 최대 롤 각가속도 9 rad/s² vs 실측 피크 52 rad/s²
+     → 기동을 원리적으로 예측 못 함 = 기존 "기동↔공격 aliasing" 의 상당 부분이 이 캘리브 오류.
+   - ⚠ C_torque 는 drone.I 와 **짝** — I 를 바꾸면 반드시 재적합.
+   - 방법 주의: 자세 rate loop 는 폐루프라 `ω̇~τ_cmd` 회귀가 편향된다(R²0.03~0.15, 계수 2배 요동).
+     run_sim 이 기록한 **실제 로터 각속도**(env `ROTOR_LOG`)로 적용 토크를 직접 계산하는 경로를 쓸 것.
+     로터 배치 비대칭(Σx=+0.027, Σy=−0.008)으로 요·총추력이 롤로 새므로 교차항 필수(R² 0.4→0.88).
+3. **오일러각 프레임 버그 수정 (ENU/FLU → NED/FRD)** (`online_rl_main._quat_to_euler`)
+   - Isaac GT 쿼터니언(ENU 관성/FLU 바디)에 표준 ZYX 공식을 적용한 각을 NED 기준인 양 소비했다.
+     수정 = (φ, −θ, 90°−ψ). 피해가 두 군데:
+     (a) UKF 가 추력벡터를 틀린 수평 방향으로 회전 → 기동 중 vel NIS 오염.
+         실측: 구 관례 항력적합 [0.13, 0.03]/corr−0.30 → 수정 후 [0.499, 0.299]/corr−1.00
+         = Pegasus 실제 설정 `LinearDrag([0.50,0.30,0.0])` 와 일치. **drag 확정 [0.5, 0.3, 0.0]**.
+     (b) `_hover_yaw`(ENU) 를 PX4 TrajectorySetpoint(NED yaw)로 보내 **호버 전환마다 약 90° 요 슬루**를
+         명령했다. 실측 25회: 전환 후 3s |Δψ| 중앙 **84.5°**(90pct 90.0°) vs 전환 전 0.7°.
+         → dhover 데드라인·basin·"호버전환" 클래스 분리도가 전부 이 인공물 위에서 측정된 것.
+
+4. **추력-토크 기하 결합 항 — 발견했으나 의도적으로 미포함 (sim2real 결정, 2026-07-28)**
+   - `ukf_filter.to_physical_u` 는 `torque_thrust_coupling` 키가 **있으면** 적용, 없으면 무시(현재 없음).
+   - 빼는 이유: 실기에선 배터리/페이로드 위치마다 COM 오프셋이 달라 이 항을 맞출 수 없다.
+     sim 에서만 정확히 보정하면 **모델오차가 sim 에서만 0** 이 되어 sim↔real 간극을 벌린다.
+     빼두면 명목 오프셋이 만드는 현실적 편향이 학습 데이터에 그대로 남아 정책이 견디도록 학습된다.
+   - 복원: `validate_by_regime.py <outdir> --fit-coupling --write` (백업 `.bak_with_coupling`)
+   - 분리도 영향은 작다: COM ±10mm 상당 편향의 NIS 기여 ≈0.018 (압축 후 분리폭 0.84 대비 ~1%).
+   ↓ 아래는 발견 내용 기록
+   - Iris 는 로터 중심이 바디 COM 에서 (x+6.7mm, y−1.9mm) 어긋나 **총추력이 상시 토크**를 만든다.
+     PX4 는 트림으로 상쇄하지만 UKF 가 모르면 그 트림명령을 실제 토크로 오해 → ω̇ 예측 상시 편향.
+   - 실측 편향(수정 전): ω̇y **−3.17 rad/s²**, ω̇x +0.55 — 호버·순항·급기동 **전 영역 공통**(=상수항).
+     기하학적 예측(Σx/4·T, Σy/4·T)과 부호·크기 일치. 수정 후 전 영역 편향 ≈0.
+   - K = [−0.00121, +0.00621, +0.00013] N·m per N. `validate_by_regime.py --fit-coupling` 로 재추정.
+
+### ★ sim-to-real 설계 원칙 (2026-07-28 확정) ★
+**최종 목표는 실기체 inference.** 그래서 판단 기준이 "모델 정확도"가 아니라 **"모델오차 수준의 현실성"** 이다.
+정책이 먹는 건 NIS 이고, NIS 수준을 결정하는 건 모델오차의 크기이기 때문.
+- 틀린 물리(질량·프레임·C_torque)는 반드시 고친다 — 실기에서도 제대로 캘리브할 것이므로 양쪽 다 맞아야 함.
+- 반면 **실기에서 못 맞추는 미세항은 sim 에서도 맞추지 않는다** (예: 추력-토크 결합항). 안 그러면
+  모델오차가 sim 에서만 0 이 되어 평시 NIS 기준선이 비현실적으로 낮아지고, 실기에서 상시 오탐이 난다.
+- COM 오프셋 랜덤화는 **하지 않음**: 분리도 영향 ~1% 인데 교란축이 늘면 학습곡선 분산이 커져
+  본 기여(RHUKF-FV vs Adam **샘플효율** 비교)를 흐린다. 항을 빼는 것만으로 노출은 이미 확보됨.
+- 미결(순서 주의):
+  · **플랜트 현실성(모터 1차 지연 τ≈30ms, 배터리 새그)** → 플랜트를 바꾸므로 **밴드 재측정 전에** 결정.
+  · 캘리브 불일치 랜덤화(C_thrust±5%, C_torque±10%, mass±5%) → 플랜트 무관, 밴드 후 결정 가능.
+  · 관측 정규화(비행 초반 기준선으로 NIS 정규화) → 관측 정의 변경, 학습 전 결정.
+- **밴드는 절대값이 아니라 제어권한 대비 비율로도 기록할 것** (전이 가능한 표현):
+  현 동결 s=1.34 → 토크 1.34 N·m = 롤 권한 4.36 의 **31%**, 추력 2.01 N = 무게 13.46 의 **15%**.
+- **캘리브 절차 전이성**: 오늘 쓴 로터 각속도 기반은 sim 전용(실기는 ESC 텔레메트리 필요).
+  실기용은 PX4 시스템ID **치프 주입**(개루프 여기 → 폐루프 편향 제거). sim 에 ground truth
+  (3.568/4.017/4.907)가 있으므로 **그 절차가 정답을 복원하는지 sim 에서 먼저 증명**해둘 것.
+
+### 검증 결과 (2026-07-28, 4패턴 × 3영역)
+고정 계수의 **예측잔차**로 검증(재적합 아님). `validate_by_regime.py`:
+```
+                  Fx(항력) 편향   Fz(추력) 편향   ω̇y 편향
+  hover           +0.0005 N      −0.034 N       −0.12~+0.01
+  cruise(1~1.8m/s) ±0.003 N      −0.012~+0.013  +0.08~+0.15
+  agile(|ω|>1)    −0.009 N       +0.9~+1.5 N    −0.3~−1.5
+```
+호버·순항은 전 패턴(waypoint/circle/figure8/aggressive)에서 편향 ≈0 → **캘리브레이션은 기동영역 무관**.
+잔차는 급전이(agile) 구간에 몰리는데 원인은 추력곡선 비선형(T=4k(100+1000u)², 호버 secant 25.6 vs
+국소기울기 41.7)과 명령/응답 타이밍. **2차 모델로 바꿔봤으나 RMS 가 오히려 악화**(agile 2.18→3.35 N,
+명령-응답 시차가 2차항에서 1.6배 증폭) → 선형 C_thrust 유지 결정.
+
+### 교차검증 (독립 경로: calibrate_sysld.py, 가속도계 기반)
+```
+  C_thrust  25.514  vs 25.580 (−0.26%)   ✓
+  drag      [0.438, 0.326, 0.036] vs [0.50, 0.30, 0.00]  ✓ (z≈0 확인)
+  C_tq_z     4.502  vs  4.907 (−8%)      ✓
+  C_tq_xy    0.255  vs  3.79             ✗ ← 폐루프 편향. 구 값 0.265 가 바로 이 경로 산물.
+```
+→ 롤/피치만 두 경로가 갈리며, 물리 상한·실측 각가속도·유효관성 3중 검증이 로터 경로를 지지한다.
+**교훈: 자세 rate loop 계수는 `calibrate_sysld` 로 뽑지 말 것**(요/추력/항력은 유효).
+
+### 재캘리브레이션 도구 (신규)
+- `run_calib_mass.sh` — bias0·wind none·aggressive 캡처 (zu_log + sysid_log + rotor_log)
+- `online_rl_main --log-sysid` — GT속도+IMU+명령을 **IMU 레이트(250Hz)** 로 저장.
+  ※ 50Hz 로 뜨면 자세루프 토크명령이 앨리어싱된다(초기 실패 원인).
+- `run_sim` env `ROTOR_LOG=경로.npz` — PX4 명령 + 실제 적용 로터 각속도
+- `run_sim` env `MOTOR_TAU=0.03` — 모터 1차 지연(초) 주입. **기본 비활성(0)**.
+  Pegasus 는 명령을 즉시 로터속도로 적용("no delay introduced")하므로 실기 ESC+모터 지연이 없다.
+  켜면 플랜트가 바뀌어 **밴드 재측정 필요** → 실기 τ 실측 후 켜는 것을 권장. 비행 검증은 미실시.
+- `SIM2REAL_DATA_SPEC.md` — 실기 데이터 수집 스펙(궤적/ulog 메시지/ROS2 토픽/ESC 텔레메트리)
+- `calibration/fit_static_from_rotor.py` (C_thrust/C_torque 확정) / `fit_gains.py` (병진·항력)
+- `verify_calibration.py <outdir>` — 요 슬루·항력·호버점 회귀검증
+- `validate_by_regime.py <outdir...>` — 호버/순항/급기동 영역별 고정계수 예측잔차 (+`--fit-coupling`)
+- `run_regime_check.sh` — waypoint/circle/figure8 패턴별 검증 캡처
+- `probe_mass.py` — Isaac 런타임 질량/관성 직접 쿼리 (`~/isaacsim/python.sh probe_mass.py`)
+- ⚠ 시스템 python3 는 numpy2/scipy 불일치 → 분석 스크립트는 `~/isaacsim/python.sh` 로 실행
 
 ## 핵심 물리 지식 (스윕으로 실측 확정된 것)
 1. s<1.2 공격은 PX4가 중화(EADR과 일치) → 공격 정의에서 배제
@@ -59,8 +163,11 @@ UKF 잔차(NIS) 관측 기반 DDQN이 매 스텝 track/hover 이진 결정.
 - 통합 그림: `plot_fine_staircase.py` → deadline_staircase.png (한글폰트 Noto CJK 적용됨).
 
 ## ★ 공격 세팅 최종 동결 (2026-07-07 갱신, FROZEN) ★
+> ⚠️ **2026-07-28 무효화**: 아래 밴드/생존율/NIS 수치는 전부 (질량 1.6186kg + C_torque 14배 오차 +
+> 오일러 프레임 버그) 상태에서 측정된 것이다. 플랜트가 15% 가벼워졌고(T/W 2.61→3.07) 호버 전환의
+> 90° 요 슬루가 사라졌으므로 **밴드는 반드시 재측정**해야 한다. 아래는 이력으로만 읽을 것.
 **채널 = COMBINED ft_ratio=1.5 (torque:thrust = 1:1.5, T≈2N@s=1.34), 밴드 = [1.34, 1.40] Nm, ramp 0.0.**
-압축 = **채널분리: vel=log(x+0.5) / gyro=log1p** (env/ukf_filter.py `compute_nis_scaled(offset=...)`, 학습·sweep 통일).
+압축 = ~~채널분리: vel=log(x+0.5) / gyro=log1p~~ **→ 통일(2026-07-22): 전 채널 offset=1.0, ε̃=ln(1+ε)/(1+ln(1+ε))** (env/ukf_filter.py `compute_nis_scaled`). ⚠️ 압축기 변경으로 기존 관측 baseline·d′ 무효화 — 재캡처(우선순위1 deadline)로 재산출 중.
 검증 스윕 = results_combined_final (combined ft1.5, ramp0.0, bias 1.34~1.42, 27 cells × 20ep = 540ep):
 ```
   bias | track hover | dh1  dh2  dh3 | 판정
@@ -101,8 +208,22 @@ UKF 잔차(NIS) 관측 기반 DDQN이 매 스텝 track/hover 이진 결정.
 - **⚠ 관측 차원은 절대 건드리지 않음**: `[nis_vel, nis_gyro, action]` × window4 = dimS 12 구조 유지. 압축 함수(offset)만 채널분리.
   config 정렬은 **공격 샘플러만** 바꾼다(bias_ft_ratio/scale_range) — obs_scale·dimS·window_size 불변.
 
+### ★ 전 패턴 공격 정합화 (2026-07-23) ★
+- **버그 수정**: `attack_flight_patterns=['aggressive']` → **flight_patterns 전체(waypoint/circle/figure8/aggressive)**.
+  실제 공격은 **모든 기동 궤적**에 랜덤 세기로 주입되는 것이 의도된 설계였음(사용자 확정). 기존 aggressive 강제는 버그.
+  이제 공격/평시 에피소드 **동일 패턴 분포** (swrl_config.py:117, sampler:388; 검증=공격에피 4패턴 균등 ~830/4000ep).
+- **⚠ 동결 밴드 [1.34,1.40]은 aggressive 전용 — 전 패턴 미성립(2026-07-23 results_deadline 분석):**
+  ```
+   패턴      track생존(①=낮아야)   dhover0(③=높아야)    판정
+   figure8   1.00(전 bias)         1.00              ① 실패: 공격 무해(track 안죽음)
+   hover     1.00(전 bias)         1.40서 0.00       ① 실패 + hover전환이 오히려 사망(soft-hold 이슈)
+   waypoint  1.37서 0.25           1.37서 1.00       1.37만 부분 성립(dh3=0.17로 데드라인 빡빡)
+  ```
+  → **aggressive = 최악(가장 취약) 케이스**. 순한 패턴은 제어여유 ↑ → 같은 bias 흡수 → 밴드가 **위로 이동(더 센 공격 필요)** 하거나 아예 무해.
+  전 패턴 공격 정합화 시 **[1.34,1.40] 균일 주입은 figure8/hover에선 비결과성 공격**(①붕괴) 문제. → 밴드 패턴별 재조정 vs 비결과성 수용, 결정 필요.
+
 ## 동결 후 순서 (합의된 로드맵)
-E3: 밴드 3점 × {aggressive, circle} 패턴 스팟체크(밴드 이동 확인)
+E3: 밴드 3점 × {waypoint, circle, figure8, aggressive} 전 패턴 스팟체크(전 패턴 공격 정합화로 승격 — 밴드 유지/이동 확인)
 E4: bias=0 × wind 스팟체크(교란원 구성: aggressive 유지 vs 바람 추가 판단)
 관측 점검: nis_separability.py 4-클래스(호버전환/급기동/공격/정상) 확장 → Bayes 상한 → 관측 동결
 학습 수정(동결 후에만): gamma 0.8→0.9, n-step=3(memory.py), timeout 부트스트랩 분리
