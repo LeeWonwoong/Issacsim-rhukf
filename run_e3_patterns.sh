@@ -14,9 +14,9 @@ source ~/colcon_ws/install/setup.bash 2>/dev/null || true
 set -u
 cd /home/acsl/projects/Issacsim-rhukf
 PY=python3
-GRID="1.34,1.37,1.40"
-RAMP="0.0"; EP="10"; FT="1.5"; DELAYS="3"
-EXP_CELLS="11"
+GRID="${GRID:-1.34,1.37,1.40}"
+RAMP="${RAMP:-0.0}"; EP="${EP:-10}"; FT="${FT:-1.5}"; DELAYS="${DELAYS:-3}"
+EXP_CELLS="${EXP_CELLS:-11}"
 
 run_one() {
   local PAT="$1" OUT="$2"

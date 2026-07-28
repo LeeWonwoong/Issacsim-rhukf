@@ -14,8 +14,8 @@ source ~/colcon_ws/install/setup.bash 2>/dev/null || true
 set -u
 cd /home/acsl/projects/Issacsim-rhukf
 PY=python3
-GRID="1.34"; RAMP="0.0"; EP="10"; FT="1.5"; DELAYS="3"; PAT="aggressive"
-EXP_CELLS="5"
+GRID="${GRID:-1.34}"; RAMP="${RAMP:-0.0}"; EP="${EP:-10}"; FT="${FT:-1.5}"; DELAYS="${DELAYS:-3}"; PAT="${PAT:-aggressive}"
+EXP_CELLS="${EXP_CELLS:-5}"
 
 # ── E3 완료 대기 (최대 6시간) ──
 echo " [$(date +%H:%M:%S)] E4 대기: E3 완료 마커(sweep_e3.log)를 기다림..."

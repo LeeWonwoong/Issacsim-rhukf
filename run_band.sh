@@ -13,9 +13,9 @@ source ~/colcon_ws/install/setup.bash 2>/dev/null || true
 set -u
 cd /home/acsl/projects/Issacsim-rhukf
 PY=python3
-GRID="1.28,1.30,1.32,1.34"
-RAMP="0.0"
-OUT="results_torque_band"
+GRID="${GRID:-1.28,1.30,1.32,1.34}"
+RAMP="${RAMP:-0.0}"
+OUT="${OUT:-results_torque_band}"
 
 mkdir -p "${OUT}"
 echo "=========================================================="
