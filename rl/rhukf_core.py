@@ -409,6 +409,9 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
     P_diag = torch.diagonal(P_delta_new)
     k_gain_norm = torch.norm(K).item()
     innov_abs = torch.abs(residual)
+    # 필터 innovation 일관성 NIS = mean(residual² / P_zz대각). 캘리브레이션(R맞음)이면 ≈1.
+    #   >>1 = R과소(under-damped, 노이즈 쫓음) / <<1 = R과대(over-damped).
+    nis_filter = (residual.squeeze(-1) ** 2 / torch.clamp(torch.diagonal(P_zz), min=1e-6)).mean().item()
     dbg = {
         'innov_mean': innov_abs.mean().item(),
         'innov_max': innov_abs.max().item(),
@@ -418,6 +421,7 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
         'resid_norm': torch.norm(residual).item(),
         'adapt_ratio': adapt_factor.mean().item(),
         'mu_delta_norm': torch.norm(mu_delta_new).item(),
+        'nis_filter': nis_filter,
     }
     filter_state_new = {'mu_delta': mu_delta_new, 'P_delta': P_delta_new}
     return theta_active, filter_state_new, loss.item(), target_var, k_gain_norm, dbg

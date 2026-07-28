@@ -50,7 +50,8 @@ class Config:
     # ══════════════════════════════════════════════════════════
     warmup_seconds: float = 3.0
     attack_start_range: Tuple[int, int] = (50, 150)
-    attack_ramp_duration: float = 0.3     # 0.0 = step 공격(즉시 full). EADR 논거(효과적 액추에이터 공격은 abrupt/고진폭) + 상승엣지 선명화.
+    attack_ramp_duration: float = 0.0     # ★0.0=step 공격(즉시 full) 확정(2026-07-23). 펄스 시그니처(t=1~2 스파이크) 선명화=즉각감지 서사.
+                                          #   EADR 논거(효과적 액추에이터 공격=abrupt/고진폭). ⚠기존 0.3은 온셋 뭉갬→펄스 약화(학습이 0.3으로 돌던 버그).
                                           # 주의: step은 crash 데드라인을 줄임 → sweep의 dhover(지연 호버) 생존곡선으로 대응가능성 검증 후 확정.
     attack_duration_range: Tuple[int, int] = (50, 100)
 
@@ -112,9 +113,13 @@ class Config:
     bias_torque_z:  float = 0.1
     bias_thrust_n:  float = 2.5
 
-    # ── 공격 에피소드 기동: 추락 밴드는 aggressive에서 검증됨 → 공격시 그 패턴으로 결합 ──
-    #    (평시 에피소드는 flight_patterns 전체 사용; 타 패턴 밴드는 추후 재검증)
-    attack_flight_patterns: List[str] = field(default_factory=lambda: ['aggressive'])
+    # ── 공격 에피소드 기동: 실제 공격은 모든 기동 궤적에 들어간다 → 평시와 동일한 패턴 분포 ──
+    #    (2026-07-23 수정: 기존 ['aggressive'] 강제는 버그였음. 추락 밴드는 aggressive에서 검증됐지만
+    #     학습 공격은 전 패턴에 랜덤 세기로 주입하는 것이 의도된 설계. deadline 스윕(hover/waypoint/figure8
+    #     @1.37·1.40)이 밴드 유지 확인 역할. flight_patterns 전체 사용.)
+    attack_flight_patterns: List[str] = field(default_factory=lambda: [
+        'waypoint', 'circle', 'figure8', 'aggressive'
+    ])
 
     # ── 탐험 편향은 eps_action_probs(=[0.8,0.2])로 처리 ──
     # ── TD-오차 첨도 로깅(무거운 꼬리 = Huber/유계영향 이점 근거) ──
@@ -148,8 +153,10 @@ class Config:
     disturbance_types: List[str] = field(default_factory=lambda: [
         'none', 'wind_turbulence',
     ])
-    #   ws3/5는 drag∝v²로 컨트롤러가 흡수(NIS 무변) → 실제로 무는 구간(≈7)으로 상향.
-    wind_speed_range: Tuple[float, float] = (6.0, 8.0)
+    disturbance_weights: List[float] = field(default_factory=lambda: [0.4, 0.6])  # none 40% / turbulence 60% (2026-07-22)
+    #   바람 확정(2026-07-22, 캡처A 근거): constant/gust 제거(정상 NIS바닥 불변) — turbulence만 바닥 상승(median 0.013→0.030@7).
+    #   wind_speed_range (0.3,7.0)→(1.0,5.0): 강도 3~7서 온셋여유 0.9 포화 → 5 초과 무의미, 하한 1.0(무풍은 none 40%가 담당).
+    wind_speed_range: Tuple[float, float] = (1.0, 5.0)
 
     # ══════════════════════════════════════════════════════════
     #  RL 하이퍼파라미터
@@ -158,13 +165,15 @@ class Config:
 
     max_episodes: int = 200
     episode_max_steps: int = 300
+    sim_speed_factor: float = 10.0   # Isaac Sim 배속(2026-07-22): 모든 캡처·스윕 기본 10. --speed로 override. ※페어링(학습)은 RHUKF learn 지연 확인 필요.
 
     window_size: int = 4
     dimS: int = 12                   # window_size × 3
     num_actions: int = 2             # 0=궤도추종, 1=강제호버링
 
-    gamma: float = 0.9              # 로드맵 학습수정(2026-07-08): 0.85→0.9 (시야 확장; terminal-10이 γ=0.9로 결정에 닿음)
+    gamma: float = 0.85            # 하이퍼탐색 A 종결(2026-07-21): 0.85 확정. cfg.gamma 단일필드 → Adam(agent_adam.py:73)·RHUKF 공유. Adam도 0.85.
     scale_factor: float = 1.0
+    reward_scale: float = 1.0      # 하이퍼탐색 A 종결(2026-07-21): 0.18(캘리브레이션 실험)→1.0 원 config 복귀. loss탐색 종결(DQN loss=성능지표 아님). c=0.4비교는 reward_scale·p_delta 교란 → 파킹.
     batch_size: int = 128
     buffer_size: int = 20000
 
@@ -177,7 +186,7 @@ class Config:
     #  D3QN 네트워크 구조
     # ══════════════════════════════════════════════════════════
     # ── 순수 DDQN (dueling 제거) : shared_layers → q_layers → nA 단일 Q헤드 ──
-    shared_layers: List[int] = field(default_factory=lambda: [16, 16])
+    shared_layers: List[int] = field(default_factory=lambda: [24, 24])  # 페어링용(2026-07-22): [16,16]→[24,24]. 962 params@12D / 1058@16D. RHUKF·Adam 공통.
     q_layers: List[int] = field(default_factory=lambda: [])   # [] = shared_out → nA 단일 선형
     activation_fn: str = 'silu'
     init_scheme: str = 'he'          # 'he' | 'xavier' | 'orthogonal'
@@ -193,7 +202,7 @@ class Config:
     measurement_mode: str = 'q_target'     # z = r + γ^n·Q_target
     anchor_type: str = 'target'            # error-state θ_anchor
     ddqn_argmax: str = 'online_moving'
-    h0_online_moving_init: str = 'prev_est'
+    h0_online_moving_init: str = 'spas'    # RHUKF 고-K(2026-07-14): prev_est→spas (h0 argmax만 시그마앙상블, 고T_Var 강건)
     h0_prior_source: str = 'target'
     use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
 
@@ -209,15 +218,15 @@ class Config:
     kappa: float = 0.0
 
     # ── 노이즈/공분산 (eps와 동일 지수 스케줄: init→end) ──
-    q_init: float = 1e-2
-    q_end: float = 1e-2
+    q_init: float = 1e-4                   # RHUKF 고-K(2026-07-14): 1e-2→1e-4 (P재팽창 억제, 고T_Var 안정)
+    q_end: float = 1e-4
 
-    r_init: float = 2.0
-    r_end: float = 2.0
+    r_init: float = 1.0                    # RHUKF 고-K(2026-07-14): 2.0→1.0
+    r_end: float = 1.0
 
-    p_init: float = 0.05                   # 초기 파라미터 공분산
-    p_delta_init: float = 0.05             # error-state Δ 초기 공분산
-    huber_c: float = 8.0                   # 5→3 (residual RMS~3에서 adapt_factor가 실제로 켜지도록). 2~4 사이 튜닝
+    p_init: float = 0.05                   # 초기 파라미터 공분산 (absolute 모드용)
+    p_delta_init: float = 0.02             # RHUKF 고-K(2026-07-14): 0.05→0.02 (error-state Δ 초기 공분산)
+    huber_c: float = 3.0                   # RHUKF 고-K(2026-07-14): 8→3 (관측 잔차 p90≈3 → 유계영향 실제 활성)
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ── 로드맵 학습수정(2026-07-08): off→on, n=3 (memory.py 구현됨; 온셋 펄스 신호 부트스트랩 전파)
@@ -317,6 +326,27 @@ class Config:
     #   빈 튜플 () 로 두면 기존 A/B(track/hover) 셀만 실행.
     sweep_hover_delays: Tuple[int, ...] = (1, 2, 3, 4, 5, 8)
 
+    # ── NIS 기준선 캡처 격자 (2026-07-20; 바람설계용). capture_mode='normal'|'hijack'|None ──
+    #   셀마다 (pattern, disturbance, wind_speed, bias) 지정 → 한 sim 로드로 전 격자 순회.
+    #   관측 정의 불변(12D live-P NIS, 로그압축) — 로거 컬럼만 확장.
+    capture_mode: str = ''                       # '' | 'normal' | 'hijack' (--capture-mode)
+    capture_patterns: List[str] = field(default_factory=lambda: [
+        'hover', 'circle', 'figure8', 'waypoint', 'aggressive'])
+    #   외란조건: (type, wind_speed). none(0) + {constant,turbulence,gust}×{3,5,7}
+    capture_disturbances: List[Tuple[str, float]] = field(default_factory=lambda: [
+        ('none', 0.0),
+        ('wind_constant', 3.0), ('wind_constant', 5.0), ('wind_constant', 7.0),
+        ('wind_turbulence', 3.0), ('wind_turbulence', 5.0), ('wind_turbulence', 7.0),
+        ('wind_gust', 3.0), ('wind_gust', 5.0), ('wind_gust', 7.0)])
+    capture_biases_hijack: List[float] = field(default_factory=lambda: [1.34, 1.37, 1.40])
+
+    # ── 마감 재측정 격자 (2026-07-22; capture_mode='deadline'). 패턴 고정·지연만 스윕(패턴/지연 교란 제거) ──
+    #   셀 = pattern × bias × delay_condition, disturbance=none. delay=dhover{d}, no_response=track(대조군).
+    #   = 3 × 3 × 5 = 45 cells × 12ep = 540ep. 산출: 패턴별 지연-생존율 곡선 + 패턴별 마감(생존95% 최대지연).
+    deadline_patterns: List[str] = field(default_factory=lambda: ['hover', 'waypoint', 'figure8'])
+    deadline_delays: Tuple[int, ...] = (0, 3, 5, 7)     # dhover 전환지연(스텝). + no_response(track) 자동추가.
+    deadline_biases: List[float] = field(default_factory=lambda: [1.34, 1.37, 1.40])
+
     def __post_init__(self):
         self.r_inv_sqrt = 1.0 / self.r_init
         self.r_inv = 1.0 / (self.r_init ** 2)
@@ -360,8 +390,8 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
     }
     if cfg.attack_enabled and random.random() > cfg.prob_no_attack:
         scenario['attack_type'] = random.choice(cfg.attack_types)
-        # 공격 에피소드는 추락밴드가 검증된 기동으로 (sweep=aggressive)
-        scenario['pattern'] = random.choice(getattr(cfg, 'attack_flight_patterns', ['aggressive']))
+        # 공격 에피소드도 전 기동 패턴에 랜덤 주입 (평시와 동일 분포; 2026-07-23 수정)
+        scenario['pattern'] = random.choice(getattr(cfg, 'attack_flight_patterns', cfg.flight_patterns))
         if getattr(cfg, 'sample_bias_box', True):
             # combined 추락 ray (s, 0.2·s, 5·s) 주변 tube 샘플 — scale 하나로 묶어야 ray를 안 벗어남.
             scenario['attack_intensity'] = 1.0
@@ -403,7 +433,11 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
             scenario['attack_bursts'] = [(scenario['attack_start_step'], scenario['attack_end_step'])]
 
     if cfg.disturbance_enabled:
-        scenario['disturbance_type'] = random.choice(cfg.disturbance_types)
+        _w = getattr(cfg, 'disturbance_weights', None)
+        if _w and len(_w) == len(cfg.disturbance_types):
+            scenario['disturbance_type'] = random.choices(cfg.disturbance_types, weights=_w)[0]
+        else:
+            scenario['disturbance_type'] = random.choice(cfg.disturbance_types)
         if scenario['disturbance_type'] != 'none':
             scenario['wind_speed'] = random.uniform(*cfg.wind_speed_range)
     return scenario

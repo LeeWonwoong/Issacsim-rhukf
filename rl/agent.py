@@ -67,6 +67,13 @@ class OnlineRHUKFAgent:
         self.episode_rewards = []
         self.episode_lengths = []
         self._last_z_var = 0.0
+        # ── Step1 레짐진단 계측 (T_Var 외; K_Gain/Qmax/초기잔차/argmax_flip) ──
+        self._last_kgain = 0.0        # ‖K‖ (칼만이득 크기, 레짐 밴드 확인)
+        self._last_pmax = 0.0         # max diag P (발산 조기경보)
+        self._last_innov = 0.0        # |residual| mean (huber_c 설정용 초기잔차)
+        self._last_argmax_flip = 0.0  # 업데이트 전후 argmax 변동률 (정책 안정성)
+        self._last_qmax = 0.0         # max|Q| (발산 조기경보; O(10) 이탈 상승=발산 임박)
+        self._last_nis = 0.0          # 필터 innovation NIS (캘리브레이션; ≈1이면 R맞음)
         self._learn_call_count = 0   # update_interval 게이트용
 
         n_params = self.info['total_params']
@@ -177,24 +184,44 @@ class OnlineRHUKFAgent:
         t0 = pytime.perf_counter()
         loss = 0.0
         z_var_sum = 0.0
+        kgain_last = 0.0; dbg_last = None
+        theta_before = self.theta.squeeze().detach().clone()   # argmax_flip용 스냅샷
 
         if cfg.state_form == 'error':
             ctx = init_error_horizon(self.theta, self.theta_target,
                                      list(self.batch_hist), self.sp, cfg, self.fv_cache)
             fs = None
             for h in range(cfg.N_horizon):
-                self.theta, fs, l_val, t_var, _, _ = rhukf_step_fv_error(
+                self.theta, fs, l_val, t_var, kgain_last, dbg_last = rhukf_step_fv_error(
                     fs, ctx, self.batch_hist[h], h, self.sp, cfg, self.fv_cache)
                 loss = l_val
                 z_var_sum += t_var
         else:  # absolute
             filter_state = None
             for h in range(cfg.N_horizon):
-                self.theta, filter_state, l_val, t_var, _, _ = rhukf_step_fv(
+                self.theta, filter_state, l_val, t_var, kgain_last, dbg_last = rhukf_step_fv(
                     self.theta, self.theta_target, filter_state, self.batch_hist[h],
                     self.sp, (h == 0), cfg.p_init, self.fv_cache, cfg)
                 loss = l_val
                 z_var_sum += t_var
+
+        # ── Step1 진단 캡처: K_Gain / Qmax / 초기잔차 / argmax_flip ──
+        self._last_kgain = float(kgain_last)
+        if dbg_last is not None:
+            self._last_pmax = float(dbg_last.get('max_P', 0.0))
+            self._last_innov = float(dbg_last.get('innov_mean', 0.0))
+            self._last_nis = float(dbg_last.get('nis_filter', 0.0))
+        try:
+            s_probe = self.batch_hist[-1]['s']            # [dim_s, B]
+            if self.normalizer:
+                s_probe = self.normalizer.normalize(s_probe)
+            a_before = forward_single(theta_before, self.info, s_probe).argmax(dim=0)
+            q_after = forward_single(self.theta.squeeze().detach(), self.info, s_probe)  # [nA, B]
+            a_after = q_after.argmax(dim=0)
+            self._last_argmax_flip = float((a_before != a_after).float().mean().item())
+            self._last_qmax = float(q_after.abs().max().item())   # 발산감시: O(10) 이탈 상승=발산 임박
+        except Exception:
+            pass
 
         # ── Soft target update ──
         self.theta_target = (1.0 - cfg.tau_srrhuif) * self.theta_target + cfg.tau_srrhuif * self.theta

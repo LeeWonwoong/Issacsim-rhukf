@@ -30,7 +30,7 @@ def replay_nis(data, dt, calib):
             ukf.x[0:3] = z[i, 0:3]; ukf.x[3:6] = eul[i]
             ukf.x[6:9] = z[i, 3:6]; ukf.x[9:12] = z[i, 6:9]
         res, Pzz = ukf.step(z[i], u[i])
-        _, a = compute_nis_scaled(res[3:6], Pzz[3:6, 3:6], 3.0, offset=0.5)  # vel 저압축(log0.5) — 학습 관측과 일치
+        _, a = compute_nis_scaled(res[3:6], Pzz[3:6, 3:6], 3.0)  # 통일압축 offset=1.0 (학습 관측과 일치)
         _, b = compute_nis_scaled(res[6:9], Pzz[6:9, 6:9], 3.0)              # gyro log1p 유지
         nv[i] = a; ng[i] = b
     return nv, ng
