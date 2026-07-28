@@ -208,8 +208,14 @@ class PegasusApp:
         self._rotor_log_path = os.environ.get('ROTOR_LOG', '')
         self._rotor_rows = []
 
-        # ── 모터 1차 지연 (env MOTOR_TAU=초, 미설정/0 = 비활성) ──
-        self._install_motor_lag(float(os.environ.get('MOTOR_TAU', '0') or 0.0))
+        # ── 모터 1차 지연 (env, 미설정/0 = 비활성) ──
+        #   MOTOR_TAU=초        : 대칭(상승=하강). 하위호환 별칭.
+        #   MOTOR_TAU_UP/DOWN=초: 비대칭. 실기는 스핀업(모터 토크)보다 스핀다운(프로펠러
+        #                         공력항력만, 액티브 브레이킹 없으면)이 2~3배 느리다.
+        _tau_sym = float(os.environ.get('MOTOR_TAU', '0') or 0.0)
+        _tau_up = float(os.environ.get('MOTOR_TAU_UP', '0') or 0.0) or _tau_sym
+        _tau_dn = float(os.environ.get('MOTOR_TAU_DOWN', '0') or 0.0) or _tau_sym
+        self._install_motor_lag(_tau_up, _tau_dn)
 
         self.body_view = None
         self.rotor_view = None
@@ -385,26 +391,46 @@ class PegasusApp:
         except Exception as e:
             carb.log_error(f"[MASS] readback 실패: {e}")
 
-    def _install_motor_lag(self, tau):
-        """로터 명령에 1차 지연을 넣는다 (실기 ESC+모터 시상수 모사). tau<=0 이면 비활성.
+    def _install_motor_lag(self, tau_up, tau_down=None):
+        """로터 명령에 1차 지연을 넣는다 (실기 ESC+모터 시상수 모사). 둘 다 <=0 이면 비활성.
 
         Pegasus 의 QuadraticThrustCurve 는 명령을 **즉시** 로터 각속도로 적용한다
         (원 소스 주석: "instanenous model - no delay introduced"). 실기는 ESC+모터가
         1차 지연(τ≈20~40ms)을 가지므로, 이걸 빼놓으면 제어권한의 동적 한계가 낙관적으로
         나오고 밴드가 실제보다 관대하게 측정된다.
 
+        ★ 비대칭 (2026-07-29): 실기는 상승과 하강의 시상수가 다르다.
+          - 스핀업   = 모터가 전기 토크로 능동 가속        → 빠르다
+          - 스핀다운 = 프로펠러 공력항력에만 의존
+                       (ESC 액티브 브레이킹/damped light 없으면) → 보통 τ_down ≈ 2~3·τ_up
+          이 프로젝트에 직결되는 이유: bias 주입은 **일부 로터 up / 일부 로터 down** 이고,
+          온셋 엣지(t=1~2 스파이크 = RL 정당화의 핵심 근거)는 **느린 쪽이 지배**한다.
+          대칭 τ 하나로는 온셋 모양이 실기와 다르다.
+        ⚠ τ 는 RPM 의존이다(τ ≈ J_prop/(2·c_d·ω₀)). 상수 τ 는 한 동작점의 선형화이므로
+          실측은 **호버 RPM 근방**에서 할 것 — 평시 NIS 기준선을 지배하는 동작점이므로.
+        ⚠ ESC 제어모드를 먼저 동결하고 실측할 것. τ_down 이 거기 좌우된다.
+
         구현: thrusters 인스턴스의 두 메서드만 감싼다. 백엔드가 쓰는 원 명령은 `_raw_ref` 로
         따로 보관하고, update() 직전에 지연 상태를 전진시켜 `_input_reference` 에 넣는다
         (원 값과 필터 출력을 분리해 이중 필터링을 방지).
         τ 값은 실기 ESC 텔레메트리(RPM 계단응답)에서 실측해 넣는 것이 목표다.
         """
-        if tau <= 0.0:
+        tau_up = float(tau_up or 0.0)
+        tau_down = float(tau_up if tau_down is None else (tau_down or 0.0))
+        if tau_up <= 0.0 and tau_down <= 0.0:
+            self._motor_tau_up = self._motor_tau_down = 0.0
             self._motor_tau = 0.0
             return
+        # 한쪽만 준 경우 나머지는 같은 값으로 (대칭 폴백)
+        if tau_up <= 0.0:
+            tau_up = tau_down
+        if tau_down <= 0.0:
+            tau_down = tau_up
+
         tc = self.vehicle._thrusters
         n = len(tc._input_reference)
         tc._raw_ref = list(tc._input_reference)
-        tc._lag_state = np.zeros(n, dtype=float)
+        tc._lag_state = np.asarray(tc._input_reference, dtype=float).copy()
         _orig_set = tc.set_input_reference
         _orig_update = tc.update
 
@@ -413,16 +439,23 @@ class PegasusApp:
 
         def _update(state, dt):
             raw = np.asarray(tc._raw_ref, dtype=float)
-            a = dt / (tau + dt)                      # 1차 이산화
-            tc._lag_state += a * (raw - tc._lag_state)
-            tc._input_reference = list(tc._lag_state)
+            st = tc._lag_state
+            # 로터별로 상승/하강을 판정해 서로 다른 시상수를 적용
+            tau = np.where(raw >= st, tau_up, tau_down)
+            a = dt / (tau + dt)                      # 1차 이산화 (로터별 벡터)
+            st += a * (raw - st)
+            tc._input_reference = list(st)
             return _orig_update(state, dt)
 
         tc.set_input_reference = _set_ref
         tc.update = _update
-        self._motor_tau = tau
+        self._motor_tau_up = tau_up
+        self._motor_tau_down = tau_down
+        self._motor_tau = tau_up                     # 하위호환 필드
         self._orig_set_input_reference = _orig_set   # 참조 유지
-        carb.log_warn(f"[MOTOR] 1차 지연 활성 τ={tau*1000:.1f}ms "
+        _sym = '대칭' if abs(tau_up - tau_down) < 1e-12 else '비대칭'
+        carb.log_warn(f"[MOTOR] 1차 지연 활성({_sym}) τ_up={tau_up*1000:.1f}ms "
+                      f"τ_down={tau_down*1000:.1f}ms "
                       f"(로터 {n}개, 물리 dt={self.physics_dt*1000:.1f}ms)")
 
     def _log_rotors(self, step_counter):
