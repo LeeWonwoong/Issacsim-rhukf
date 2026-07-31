@@ -77,13 +77,27 @@ def main():
 
     fails = []
 
+    # 시동한 적이 있는가 — 자세 컨트롤러가 돌아야 thrust/torque_setpoint 가 찍힌다.
+    # 지상 미시동 로그에서는 이 둘이 없는 게 정상이므로 FAIL 로 세지 않는다.
+    vs = get(ulog, 'vehicle_status')
+    armed_ever = False
+    if vs is not None:
+        a = fld(vs, 'arming_state')
+        if a is not None:
+            armed_ever = bool((a >= 2).any())      # PX4: 2 = ARMED
+    ctrl_only = {'vehicle_thrust_setpoint', 'vehicle_torque_setpoint'}
+
     # ── 1) 필수 메시지 ───────────────────────────────────────
-    print("\n[1] 필수 메시지")
+    print("\n[1] 필수 메시지"
+          + ("" if armed_ever else "   (※ 미시동 로그 — 컨트롤러 출력은 없는 게 정상)"))
     for name in REQUIRED:
         d = get(ulog, name)
         if d is None:
-            print(f"{BAD} {name:28s} 없음")
-            fails.append(f"{name} 누락")
+            if name in ctrl_only and not armed_ever:
+                print(f"{WARN} {name:28s} 없음 — 시동해야 찍힘 (비행 로그에서 재확인)")
+            else:
+                print(f"{BAD} {name:28s} 없음")
+                fails.append(f"{name} 누락")
         else:
             print(f"{OK} {name:28s} {len(d.data['timestamp']):7d} rows  {rate(d):7.1f} Hz")
     gps = None
@@ -104,10 +118,32 @@ def main():
         else:
             print(f"{OK} {name:28s} {len(d.data['timestamp']):7d} rows  {rate(d):7.1f} Hz")
 
-    sc = get(ulog, 'sensor_combined')
-    if sc is not None and rate(sc) < 150:
-        print(f"{WARN} sensor_combined {rate(sc):.0f} Hz — High rate 로깅이 꺼져 있을 수 있음 "
-              f"(진동 PSD 분석에 200Hz+ 권장)")
+    # ── 2-1) 목표 레이트 대조 ────────────────────────────────
+    # 목표치는 "각 계수를 뽑는 데 실제로 필요한 표본 수"에서 역산한 값이다.
+    #   자이로 σ  : 호버 60s × 100Hz = 6000 표본 (상대오차 1%)  — 진동 성분 때문에 고레이트 필요
+    #   G         : doublet 1회 0.8s 당 40 표본이면 1.25Hz 기본파를 충분히 재현
+    #   drag      : 등속 8s 구간에서 자세·속도는 거의 상수 → 저레이트로 충분
+    #   GPS σ     : 60s × 1Hz = 60 표본 → σ 상대오차 9.2%. 허용 가능(권장 5Hz 는 2.9%)
+    TARGET = [('sensor_combined', 100, 'ω̇ 계산 · 자이로 σ (진동)'),
+              ('vehicle_torque_setpoint', 50, 'G 회귀 입력'),
+              ('vehicle_thrust_setpoint', 20, 'C_thrust · k_norm'),
+              ('vehicle_attitude', 20, 'drag (등속에선 거의 상수)'),
+              ('vehicle_local_position', 10, '속도 · 구간 판정'),
+              ('sensor_gps', 1, 'GPS 속도 σ (5Hz 면 더 좋음)')]
+    print("\n[2-1] 목표 레이트 대조")
+    for name, need, why in TARGET:
+        d = get(ulog, name) or (get(ulog, 'vehicle_gps_position') if name == 'sensor_gps' else None)
+        if d is None:
+            if name in ctrl_only and not armed_ever:
+                print(f"{WARN} {name:26s}   —      목표 {need:4d} Hz   {why} (시동 후 확인)")
+            else:
+                print(f"{BAD} {name:26s} 없음     목표 {need:4d} Hz   {why}")
+            continue
+        r = rate(d)
+        good = r >= need * 0.9
+        print(f"{OK if good else BAD} {name:26s} {r:6.1f} Hz  목표 {need:4d} Hz   {why}")
+        if not good:
+            fails.append(f"{name} 레이트 부족({r:.0f}<{need})")
 
     if args.type == 'ground':
         verdict(fails, "지상 점검")
