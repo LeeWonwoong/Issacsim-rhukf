@@ -65,7 +65,8 @@ def build(bench, outdir, a):
     dist = a.v * a.leg
     # ★ 안전 반경을 실제 이동거리에 맞춰 자동 확대.
     #   구간 하나가 v×leg 만큼 가는데 기본 25m 로 두면 도중에 중단된다.
-    F3Drag.MAX_RADIUS = a.max_radius if a.max_radius > 0 else max(30.0, dist * 1.4)
+    #  구간거리에 비례하되 여유는 고정 3m — 좁은 공간에서도 실제 보호가 되도록.
+    F3Drag.MAX_RADIUS = a.max_radius if a.max_radius > 0 else dist * 1.5 + 3.0
     node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle)
     node.get_logger().info(
         f"  등속 {a.v} m/s × {a.leg}s = 구간당 {dist:.0f}m,  구간 {len(node.legs)}개\n"
@@ -77,6 +78,14 @@ def build(bench, outdir, a):
         f"     → 스위치를 켜기 전에 **기수를 원하는 전진 방향으로** 두세요\n"
         f"\n"
         f"  yaw 는 yaw0 로 고정 — 전후/좌우 항력을 분리하려면 필수")
+    t_acc = a.v / 3.0                      # MPC_ACC_HOR 기본 ~3 m/s^2 가정
+    t_steady = a.leg - 2 * t_acc
+    if t_steady < 1.5:
+        node.get_logger().warn(
+            f"  ⚠ 등속 구간이 {t_steady:.1f}s 뿐입니다 (가속·감속에 {2*t_acc:.1f}s 소모).\n"
+            f"    --leg 를 늘리거나 --v 를 낮추세요. 항력은 등속에서만 보입니다.")
+    else:
+        node.get_logger().info(f"  구간당 등속 시간 약 {t_steady:.1f}s (가속·감속 제외)")
     return node
 
 
