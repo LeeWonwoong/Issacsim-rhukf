@@ -10,6 +10,9 @@
      비행장 방향·기체 놓은 방향과 무관해진다.
   4. nav_state 가 OFFBOARD 를 벗어나면 즉시 SAFE. 조종사 인계가 항상 최우선.
   5. 이륙/착륙은 **사람이** 한다. 스크립트는 떠 있는 기체를 잠깐 넘겨받을 뿐이다.
+  6. ★ 스크립트는 **수동비행이 안정된 뒤에** 실행한다.
+     이륙 전부터 켜두면 수동비행 내내 setpoint 가 흘러 불필요한 부하·위험이 된다.
+     PX4 는 스트림이 몇 초만 먼저 와 있으면 오프보드를 수락한다.
 
 px4_msgs 필드 (설치본에서 확인, 2026-08-03)
   OffboardControlMode      position/velocity/acceleration/attitude/body_rate/
@@ -58,7 +61,9 @@ class Pose:
         return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 NAN = float('nan')
-PUB_HZ = 20.0          # 발행 주기 (PX4 요구 최소 2Hz, 여유있게)
+PUB_HZ = 10.0          # 발행 주기.
+#  PX4 요구 최소는 2Hz. 10Hz 면 충분하고, 20Hz 는 uXRCE-DDS 링크와 FC CPU 에
+#  불필요한 부하를 준다(제어 루프 타이밍에 영향을 줄 수 있음).
 
 
 def wrap_pi(a):
