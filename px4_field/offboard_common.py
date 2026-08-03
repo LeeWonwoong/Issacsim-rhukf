@@ -351,8 +351,10 @@ class OffboardSequenceNode(Node):
             self.warn_once('nostream',
                            '  대기 중 — 오프보드 스위치를 켜면 자동으로 스트림이 열립니다 '
                            '(안 되면 Enter)')
-            self._log_row()
-            return
+            # ★ 여기서 return 하면 안 된다.
+            #   발행은 send_* 안의 가드가 이미 막고 있고, 상태기계는 계속 돌아야 한다.
+            #   (조종사가 인계했을 때 ENGAGED → WAIT 복귀가 여기서 일어나므로,
+            #    return 하면 상태가 ENGAGED 에 갇혀 재진입 시 옛 origin 을 쓴다)
 
         if self.state == 'WAIT':
             self.hold_here()
