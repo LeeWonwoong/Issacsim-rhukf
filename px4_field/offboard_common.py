@@ -1,10 +1,17 @@
 """offboard_common.py — 실기 데이터 수집용 오프보드 노드 공통 골격 (2026-08-03)
 
 설계 원칙
-  1. 발행 루프는 상태와 무관하게 **항상 10Hz** 로 돈다.
-     PX4 는 setpoint 스트림이 이미 오고 있어야 오프보드 진입을 수락하고,
-     0.5초만 끊겨도 페일세이프로 빠진다.
-  2. 진입 전 기본 setpoint = **현재 위치 유지**.
+  1. ★★ setpoint 는 **오프보드일 때만** 발행한다. 이게 가장 중요하다.
+     /fmu/in/trajectory_setpoint 는 PX4 내부의 uORB `trajectory_setpoint` 가 되는데,
+     **조종기 수동비행의 FlightTask 도 같은 토픽에 발행**한다.
+     오프보드가 아닐 때 우리가 계속 쓰면 두 발행자가 번갈아 덮어써서
+     위치 컨트롤러가 조종기 명령과 우리 명령을 교대로 따른다
+     → 호버가 돌고 떨리고 조종기가 안 먹는다 (2026-08-03 현장 실측).
+
+     OffboardControlMode 는 전용 토픽이라 충돌이 없으므로 항상 발행해도 된다.
+     다만 PX4 가 오프보드 진입을 수락하려면 setpoint 도 와 있어야 하므로,
+     **조종사가 준비됐을 때 Enter 로 스트림을 연다**(ARM_STREAM).
+  2. 스트림을 열면 기본 setpoint = **현재 위치 유지**.
      하드코딩 좌표를 쓰면 스위치를 켜는 순간 기체가 그 좌표로 날아간다.
   3. 오프보드 진입 순간 origin(x,y,z) 과 yaw0 을 스냅샷 → 이후 전부 이 기준.
      비행장 방향·기체 놓은 방향과 무관해진다.
@@ -27,6 +34,7 @@ px4_msgs 필드 (설치본에서 확인, 2026-08-03)
 import csv
 import math
 import os
+import threading
 import time
 
 import rclpy
@@ -122,6 +130,7 @@ class OffboardSequenceNode(Node):
         self.stage = 'idle'
         self._last_stage = None
         self._warned = set()
+        self.stream_armed = False      # ★ True 가 되기 전에는 setpoint 를 발행하지 않는다
 
         os.makedirs(outdir, exist_ok=True)
         stamp = time.strftime('%Y%m%d_%H%M%S')
@@ -132,11 +141,18 @@ class OffboardSequenceNode(Node):
                           'x', 'y', 'z', 'vx', 'vy', 'vz', 'heading'])
 
         self.create_timer(1.0 / PUB_HZ, self._tick)
+        threading.Thread(target=self._stdin_waiter, daemon=True).start()
         self.get_logger().info(
-            f"\n{'='*64}\n  {self.SEQ_NAME.upper()}  {'[BENCH 모드 — 사전조건 완화]' if bench else ''}\n"
-            f"  setpoint 스트림 {PUB_HZ:.0f}Hz 발행 시작.\n"
-            f"  → 수동으로 이륙시킨 뒤 **오프보드 스위치를 켜세요**.\n"
-            f"  마커 로그: {self._csv_path}\n{'='*64}")
+            f"\n{'='*68}\n  {self.SEQ_NAME.upper()}  {'[BENCH 모드 — 사전조건 완화]' if bench else ''}\n"
+            f"  OffboardControlMode 만 {PUB_HZ:.0f}Hz 로 발행 중.\n"
+            f"  setpoint 는 아직 **발행하지 않습니다** (조종기 수동비행과 충돌하므로).\n"
+            f"\n"
+            f"  순서:\n"
+            f"    1) 조종기로 이륙 → 고도 안정\n"
+            f"    2) 이 창에서 **Enter** → setpoint 스트림이 열림\n"
+            f"    3) 3초 안에 오프보드 스위치 ON\n"
+            f"\n"
+            f"  마커 로그: {self._csv_path}\n{'='*68}")
 
     # ── 콜백 ─────────────────────────────────────────────
     def _cb_status(self, m):
@@ -198,6 +214,23 @@ class OffboardSequenceNode(Node):
             return float(self.lp.heading)
         return 0.0
 
+    def _may_stream(self):
+        """setpoint 를 발행해도 되는가.
+
+        오프보드가 아니고 스트림도 안 열렸으면 발행하지 않는다.
+        (조종기 수동비행의 FlightTask 와 trajectory_setpoint 를 두고 다투기 때문)
+        """
+        return self.stream_armed or self.offboard
+
+    def _stdin_waiter(self):
+        try:
+            input()
+        except Exception:
+            return
+        self.stream_armed = True
+        self.get_logger().info(
+            "\n  ▶ setpoint 스트림 열림. 3초 안에 오프보드 스위치를 켜세요.\n")
+
     def warn_once(self, key, msg):
         if key not in self._warned:
             self._warned.add(key)
@@ -224,6 +257,8 @@ class OffboardSequenceNode(Node):
         self.pub_ocm.publish(m)
 
     def send_position(self, x, y, z, yaw):
+        if not self._may_stream():
+            return
         self._ocm(position=True)
         m = TrajectorySetpoint()
         m.position = [float(x), float(y), float(z)]
@@ -238,6 +273,8 @@ class OffboardSequenceNode(Node):
         if self.bench:                       # 실내 = 위치/속도 추정 무효 → 자세로 대체
             self.send_attitude(0.0, 0.0, yaw, self.bench_thrust)
             return
+        if not self._may_stream():
+            return
         self._ocm(velocity=True)
         m = TrajectorySetpoint()
         m.position = [NAN, NAN, NAN]
@@ -250,6 +287,8 @@ class OffboardSequenceNode(Node):
 
     def send_attitude(self, roll, pitch, yaw, thrust_norm):
         """thrust_norm 은 0~1 (아래로 미는 크기). FRD 라 thrust_body[2] = -thrust_norm."""
+        if not self._may_stream():
+            return
         self._ocm(attitude=True)
         m = VehicleAttitudeSetpoint()
         m.q_d = [float(v) for v in yaw_to_quat(wrap_pi(yaw), roll, pitch)]
@@ -282,10 +321,14 @@ class OffboardSequenceNode(Node):
 
     # ── 메인 루프 ────────────────────────────────────────
     def _tick(self):
+        self._ocm(position=True)        # 전용 토픽이라 충돌 없음 — 항상 발행
         if self.lp is None:
             self.warn_once('nolp', '  위치/속도 수신 대기 중... '
                                    '(vehicle_local_position 또는 vehicle_odometry)')
-            self._ocm(position=True)
+            return
+        if not self._may_stream():
+            self.warn_once('nostream', '  대기 중 — Enter 를 누르면 setpoint 스트림이 열립니다')
+            self._log_row()
             return
 
         if self.state == 'WAIT':
