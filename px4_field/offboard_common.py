@@ -130,7 +130,9 @@ class OffboardSequenceNode(Node):
         self.stage = 'idle'
         self._last_stage = None
         self._warned = set()
-        self.stream_armed = False      # ★ True 가 되기 전에는 setpoint 를 발행하지 않는다
+        self.stream_armed = False      # Enter 로 여는 수동 개방(폴백)
+        self.user_intent = -1          # 조종사가 고른 모드 (nav_state_user_intention)
+        self._intent_seen = False
 
         os.makedirs(outdir, exist_ok=True)
         stamp = time.strftime('%Y%m%d_%H%M%S')
@@ -158,6 +160,14 @@ class OffboardSequenceNode(Node):
     def _cb_status(self, m):
         prev = self.nav_state
         self.nav_state, self.arming = m.nav_state, m.arming_state
+        # ★ 조종사가 고른 모드. 오프보드 스위치를 켜면 setpoint 가 아직 없어서
+        #   nav_state 는 안 바뀌지만 이 값은 즉시 OFFBOARD 가 된다.
+        #   이걸 보고 스트림을 열면 조종사는 스위치만 켜면 되고,
+        #   수동비행 중에는 setpoint 가 나가지 않아 충돌도 없다.
+        self.user_intent = getattr(m, 'nav_state_user_intention', -1)
+        if (not self._intent_seen) and self.user_intent == VehicleStatus.NAVIGATION_STATE_OFFBOARD:
+            self._intent_seen = True
+            self.get_logger().info('  ▶ 조종사가 오프보드를 선택함 → setpoint 스트림 개방')
         if prev != self.nav_state:
             self.get_logger().info(f"  nav_state {prev} → {self.nav_state}"
                                    f"{'  (OFFBOARD)' if self.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD else ''}")
@@ -217,10 +227,21 @@ class OffboardSequenceNode(Node):
     def _may_stream(self):
         """setpoint 를 발행해도 되는가.
 
-        오프보드가 아니고 스트림도 안 열렸으면 발행하지 않는다.
-        (조종기 수동비행의 FlightTask 와 trajectory_setpoint 를 두고 다투기 때문)
+        셋 중 하나면 발행한다:
+          1) 이미 오프보드              (nav_state == OFFBOARD)
+          2) ★ 조종사가 오프보드를 선택 (nav_state_user_intention == OFFBOARD)
+             스위치를 켜는 순간 이 값이 바뀐다. setpoint 가 아직 없어
+             nav_state 는 안 바뀌지만, 우리가 이걸 보고 스트림을 열어주면
+             PX4 가 곧바로 오프보드로 진입한다.
+          3) Enter 로 수동 개방 (폴백 — 위 필드가 없는 펌웨어용)
+
+        그 외(수동비행 중)에는 발행하지 않는다.
+        /fmu/in/trajectory_setpoint 는 조종기 FlightTask 와 같은 uORB 토픽이라
+        동시에 쓰면 위치 컨트롤러가 둘을 교대로 따른다.
         """
-        return self.stream_armed or self.offboard
+        return (self.offboard
+                or self.user_intent == VehicleStatus.NAVIGATION_STATE_OFFBOARD
+                or self.stream_armed)
 
     def _stdin_waiter(self):
         try:
@@ -327,7 +348,9 @@ class OffboardSequenceNode(Node):
                                    '(vehicle_local_position 또는 vehicle_odometry)')
             return
         if not self._may_stream():
-            self.warn_once('nostream', '  대기 중 — Enter 를 누르면 setpoint 스트림이 열립니다')
+            self.warn_once('nostream',
+                           '  대기 중 — 오프보드 스위치를 켜면 자동으로 스트림이 열립니다 '
+                           '(안 되면 Enter)')
             self._log_row()
             return
 
