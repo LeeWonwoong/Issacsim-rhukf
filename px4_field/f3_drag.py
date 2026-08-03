@@ -12,13 +12,19 @@
   위치 setpoint 는 EKF 원점 기준이라 좌표 매칭이 필요하지만,
   속도는 그런 문제가 없고 등속을 정확히 유지할 수 있다.
 
-사용:
-    python3 f3_drag.py                  # 실비행
-    python3 f3_drag.py --bench          # 프로펠러 뺀 지상 검증
-    python3 f3_drag.py --v 3.0 --leg 8
+★ 기본값은 좁은 공간(5m) 기준이다
+    v=1.5 m/s, leg=3s, reps=4  →  구간 4.5m, 등속 2.0s, 축당 표본 320
+    같은 공간에서 속도를 낮추면 항력 신호(기울기)가 작아지지만
+    --reps 로 왕복을 늘려 표본을 벌면 상쇄된다.
+    실측 기준 SNR 59.0 — 넓은 공간 설정(v2/leg4/reps2, 10m)의 64.6 대비 91%.
 
-절차: Position 모드로 수동 이륙 → 고도 5m 안정 → 오프보드 스위치 ON
-필요 공간: v × leg × 2 + 여유  (기본 3m/s × 8s = 24m, 왕복 48m + 여유)
+사용:
+    python3 f3_drag.py                            # 5m 공간 기본
+    python3 f3_drag.py --v 2 --leg 4 --reps 2     # 10m 공간
+    python3 f3_drag.py --bench                    # 프로펠러 뺀 지상 검증
+
+절차: Position 모드로 수동 이륙 → 고도 2~2.5m 안정 → 기수 정렬 → 오프보드 ON
+필요 공간: 기수 방향 v×leg×1.3, 기수 기준 오른쪽 같은 거리
 """
 import argparse
 from offboard_common import OffboardSequenceNode, run
@@ -28,11 +34,13 @@ class F3Drag(OffboardSequenceNode):
     SEQ_NAME = 'f3_drag'
     NEED_ALT = 3.0
 
-    def __init__(self, bench=False, outdir='field_logs', v=3.0, leg=8.0, pause=3.0, settle=4.0):
+    def __init__(self, bench=False, outdir='field_logs', v=3.0, leg=8.0, pause=3.0,
+                 settle=4.0, reps=2):
         self.v, self.leg, self.pause, self.settle = v, leg, pause, settle
-        # 구간: (축, 부호)  전진→후진→횡진+→횡진−, 각 2왕복
-        self.legs = [('fwd', +1), ('fwd', -1), ('fwd', +1), ('fwd', -1),
-                     ('lat', +1), ('lat', -1), ('lat', +1), ('lat', -1)]
+        # 구간: (축, 부호). 축마다 reps 회 왕복.
+        #   공간이 좁으면 구간을 짧게 하고 reps 를 늘려 표본을 보충한다.
+        self.legs = ([('fwd', +1), ('fwd', -1)] * reps +
+                     [('lat', +1), ('lat', -1)] * reps)
         self.T_leg = self.leg + self.pause
         super().__init__(bench=bench, outdir=outdir)
 
@@ -67,7 +75,7 @@ def build(bench, outdir, a):
     #   구간 하나가 v×leg 만큼 가는데 기본 25m 로 두면 도중에 중단된다.
     #  구간거리에 비례하되 여유는 고정 3m — 좁은 공간에서도 실제 보호가 되도록.
     F3Drag.MAX_RADIUS = a.max_radius if a.max_radius > 0 else dist * 1.5 + 3.0
-    node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle)
+    node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle, a.reps)
     node.get_logger().info(
         f"  등속 {a.v} m/s × {a.leg}s = 구간당 {dist:.0f}m,  구간 {len(node.legs)}개\n"
         f"  총 {a.settle + len(node.legs)*node.T_leg:.0f}s,  안전반경 {F3Drag.MAX_RADIUS:.0f}m\n"
@@ -92,10 +100,12 @@ def build(bench, outdir, a):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--bench', action='store_true')
-    ap.add_argument('--v', type=float, default=3.0, help='등속 속도 [m/s]')
-    ap.add_argument('--leg', type=float, default=8.0, help='한 구간 시간 [s]')
-    ap.add_argument('--pause', type=float, default=3.0, help='구간 사이 정지 [s]')
+    ap.add_argument('--v', type=float, default=1.5, help='등속 속도 [m/s]')
+    ap.add_argument('--leg', type=float, default=3.0, help='한 구간 시간 [s]')
+    ap.add_argument('--pause', type=float, default=2.0, help='구간 사이 정지 [s]')
     ap.add_argument('--settle', type=float, default=4.0)
+    ap.add_argument('--reps', type=int, default=4,
+                    help='축당 왕복 횟수. 공간이 좁으면 구간을 줄이고 이걸 늘린다')
     ap.add_argument('--need-alt', type=float, default=1.5,
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--max-radius', type=float, default=0.0,

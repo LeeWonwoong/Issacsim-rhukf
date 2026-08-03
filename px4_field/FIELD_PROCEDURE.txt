@@ -24,7 +24,7 @@
   □ 안전조종사
 
   조건: 바람 약한 시간대 (F1 이 특히 민감)
-        F3 용으로 기수 방향 10 m + 오른쪽 10 m 트인 공간
+        F3 용으로 기수 방향 6 m + 오른쪽 6 m 트인 공간 (기본 설정 기준)
 
 
 ────────────────────────────────────────────────────────────────────────
@@ -36,7 +36,11 @@
 
   1-2. 젯슨 SSH 접속
          cd ~/px4_field
-         ls                        # f1_hover.py f2_doublet.py f3_drag.py 확인
+         ls    # f1_hover.py f2_doublet.py f3_drag.py offboard_common.py
+               # check_ulog.py fit_from_ulog.py   ← 분석 스크립트도 같은 폴더에 있다
+
+       ※ 노트북에도 px4_field 폴더를 그대로 두면 로그 검사를 노트북에서 할 수 있다.
+         (check_ulog.py 는 pyulog 만 있으면 되고 ROS2 가 필요 없다)
 
   1-3. 토픽 살아있는지 1회 확인
          ros2 topic echo /fmu/out/vehicle_status --qos-reliability best_effort --once
@@ -183,10 +187,26 @@
   필요 공간:  기수 방향 10 m + 기수 기준 오른쪽 10 m
               (origin 뒤쪽·왼쪽으로는 가지 않는다)
 
-  [SSH]
-      python3 f3_drag.py --v 2 --leg 4 --pause 2
+  [SSH]   ★ 기본값이 5 m 공간 기준이다. 그냥 실행하면 된다.
+
+      python3 f3_drag.py
+        = --v 1.5 --leg 3 --pause 2 --reps 4
+          구간 4.5 m,  등속 2.0 s,  축당 표본 320,  총 84 초
 
       시작 시 화면에 비행 범위가 출력된다. 공간과 맞는지 확인할 것.
+      범위가 안 맞으면 오프보드를 끄고 아래에서 골라 다시 실행하면 된다.
+
+  ── 공간에 맞춰 고르기 (현장에서 바꿔도 된다) ──────────────
+      공간   명령                                       구간   표본   SNR   시간
+       5 m  (기본값 그대로)                             4.5m   320   59.0   84s
+       4 m  --leg 2.5                                  3.8m   240   51.1   76s
+       6 m  --v 1.25 --leg 3.5 --reps 4                4.4m   427   56.8   92s
+      10 m  --v 2 --leg 4 --reps 2                     8.0m   216   64.6   52s
+
+      ※ SNR = 기울기 x sqrt(표본).  5 m 기본값(59.0)은 10 m 설정(64.6)의 91% 다.
+        정밀도 손실이 거의 없다 — 속도를 낮춰 신호가 작아진 만큼
+        --reps 로 왕복을 늘려 표본을 벌었기 때문이다.
+      ※ 구간거리 = 속도 x leg.  잔디밭·인도 경계를 넘을 것 같으면 주저 말고 줄일 것.
 
   [조종사]
       Position 으로 arm → 이륙 → 고도 2.0 m
@@ -239,9 +259,9 @@
 
   계수 추출 (반드시 isaacsim 파이썬으로 — 시스템 python3 는 scipy 가 깨져 있음):
 
-      ~/isaacsim/python.sh fit_from_ulog.py calibration/f1_field.ulg --mass 1.326
-      ~/isaacsim/python.sh fit_from_ulog.py calibration/f2_field.ulg --mass 1.326
-      ~/isaacsim/python.sh fit_from_ulog.py calibration/f3_field.ulg --mass 1.326
+      ~/isaacsim/python.sh px4_field/fit_from_ulog.py calibration/f1_field.ulg --mass 1.326
+      ~/isaacsim/python.sh px4_field/fit_from_ulog.py calibration/f2_field.ulg --mass 1.326
+      ~/isaacsim/python.sh px4_field/fit_from_ulog.py calibration/f3_field.ulg --mass 1.326
 
   나오는 값:  C_thrust,  k_norm[3],  G[3],  drag[3]
   → sim 플랜트 정합 (질량 1.326 + 관성을 G 에 맞춰 스케일)
@@ -280,7 +300,8 @@
   3. F2-A: python3 f2_doublet.py --thrust <위 값> --amp 6 --n 1 --settle 3
            → 고도 변화 0.2m 이내인지 확인
      F2-B: python3 f2_doublet.py --thrust <위 값> --amp 8 --n 8
-  4. F3 :  python3 f3_drag.py --v 2 --leg 4 --pause 2
+  4. F3 :  python3 f3_drag.py            (기본 = 5m 공간, 구간 4.5m, 84초)
+           넓으면  --v 2 --leg 4 --reps 2               (구간 8m, 52초)
            (기수를 전진 방향으로 돌려놓고 스위치 ON)
   5. 로그 3개 회수 → 검사 → 철수
 
