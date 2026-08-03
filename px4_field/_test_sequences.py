@@ -10,6 +10,8 @@ class Fake:
         for k, v in kw.items(): setattr(self.o, k, v)
         self.o.yaw0 = math.radians(37.0)          # 임의의 진입 방향
         self.o.origin = (10.0, -5.0, -5.0)
+        class LP: x,y,z,vx,vy,vz,heading = 10.0,-5.0,-4.7,0.0,0.0,0.3,0.0
+        self.o.lp = LP()
         self.o.t_engage = 0.0
         self.o._last_stage = None
         self.stages, self.cmds = [], []
