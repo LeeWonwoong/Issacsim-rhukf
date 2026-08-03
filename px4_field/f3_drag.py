@@ -62,12 +62,21 @@ class F3Drag(OffboardSequenceNode):
 
 def build(bench, outdir, a):
     F3Drag.NEED_ALT = a.need_alt
-    node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle)
     dist = a.v * a.leg
+    # ★ 안전 반경을 실제 이동거리에 맞춰 자동 확대.
+    #   구간 하나가 v×leg 만큼 가는데 기본 25m 로 두면 도중에 중단된다.
+    F3Drag.MAX_RADIUS = a.max_radius if a.max_radius > 0 else max(30.0, dist * 1.4)
+    node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle)
     node.get_logger().info(
-        f"  등속 {a.v} m/s × {a.leg}s = 편도 {dist:.0f}m,  구간 {len(node.legs)}개\n"
-        f"  총 {a.settle + len(node.legs)*node.T_leg:.0f}s,  필요 직선거리 약 {2*dist:.0f}m + 여유\n"
-        f"  yaw 는 진입 방향(yaw0)으로 고정 — 전후/좌우 항력 분리를 위해 필수")
+        f"  등속 {a.v} m/s × {a.leg}s = 구간당 {dist:.0f}m,  구간 {len(node.legs)}개\n"
+        f"  총 {a.settle + len(node.legs)*node.T_leg:.0f}s,  안전반경 {F3Drag.MAX_RADIUS:.0f}m\n"
+        f"\n"
+        f"  ★ 비행 범위 (오프보드 켠 지점·기수 기준)\n"
+        f"     기수 방향으로 {dist:.0f}m,  기수 기준 오른쪽으로 {dist:.0f}m\n"
+        f"     → 그 방향으로 각각 {dist*1.3:.0f}m 이상 트여 있어야 합니다\n"
+        f"     → 스위치를 켜기 전에 **기수를 원하는 전진 방향으로** 두세요\n"
+        f"\n"
+        f"  yaw 는 yaw0 로 고정 — 전후/좌우 항력을 분리하려면 필수")
     return node
 
 
@@ -80,6 +89,8 @@ if __name__ == '__main__':
     ap.add_argument('--settle', type=float, default=4.0)
     ap.add_argument('--need-alt', type=float, default=3.0,
                     help='진입 최소 고도 [m]. 실내 지상검증은 0 으로')
+    ap.add_argument('--max-radius', type=float, default=0.0,
+                    help='안전 반경 [m]. 0=자동 (구간거리×1.4, 최소 30)')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
     run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)
