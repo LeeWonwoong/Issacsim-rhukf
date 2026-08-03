@@ -33,7 +33,29 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from px4_msgs.msg import (
     OffboardControlMode, TrajectorySetpoint, VehicleAttitudeSetpoint,
     VehicleCommand, VehicleStatus, VehicleLocalPosition, VehicleAttitude,
+    VehicleOdometry,
 )
+
+
+class Pose:
+    """vehicle_local_position 또는 vehicle_odometry 중 오는 쪽으로 채우는 상태.
+
+    dds_topics.yaml 에 vehicle_local_position 이 등재돼 있지 않은 설치본이 흔하다.
+    그 경우 vehicle_odometry 로 대체한다(position/velocity/q 를 모두 담고 있다).
+    """
+    __slots__ = ('x', 'y', 'z', 'vx', 'vy', 'vz', 'heading', 'src', 'valid')
+
+    def __init__(self):
+        self.x = self.y = self.z = 0.0
+        self.vx = self.vy = self.vz = 0.0
+        self.heading = 0.0
+        self.src = None
+        self.valid = False
+
+    @staticmethod
+    def yaw_from_q(q):
+        w, x, y, z = float(q[0]), float(q[1]), float(q[2]), float(q[3])
+        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 NAN = float('nan')
 PUB_HZ = 20.0          # 발행 주기 (PX4 요구 최소 2Hz, 여유있게)
@@ -78,8 +100,10 @@ class OffboardSequenceNode(Node):
         self.pub_cmd = self.create_publisher(VehicleCommand, '/fmu/in/vehicle_command', qos)
 
         self.create_subscription(VehicleStatus, '/fmu/out/vehicle_status', self._cb_status, qos)
-        self.create_subscription(VehicleLocalPosition, '/fmu/out/vehicle_local_position', self._cb_lp, qos)
         self.create_subscription(VehicleAttitude, '/fmu/out/vehicle_attitude', self._cb_att, qos)
+        # 위치/속도 소스 이중화 — 설치본에 따라 둘 중 하나만 노출돼 있다
+        self.create_subscription(VehicleLocalPosition, '/fmu/out/vehicle_local_position', self._cb_lp, qos)
+        self.create_subscription(VehicleOdometry, '/fmu/out/vehicle_odometry', self._cb_odom, qos)
 
         # 상태
         self.nav_state = -1
@@ -118,7 +142,39 @@ class OffboardSequenceNode(Node):
                                    f"{'  (OFFBOARD)' if self.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD else ''}")
 
     def _cb_lp(self, m):
-        self.lp = m
+        p = self.lp or Pose()
+        p.x, p.y, p.z = float(m.x), float(m.y), float(m.z)
+        p.vx, p.vy, p.vz = float(m.vx), float(m.vy), float(m.vz)
+        if math.isfinite(m.heading):
+            p.heading = float(m.heading)
+        p.valid = bool(m.xy_valid and m.z_valid)
+        p.src = 'local_position'
+        self._first_src('local_position')
+        self.lp = p
+
+    def _cb_odom(self, m):
+        # local_position 이 이미 오고 있으면 그쪽을 우선한다
+        if self.lp is not None and self.lp.src == 'local_position':
+            return
+        p = self.lp or Pose()
+        pos, vel = m.position, m.velocity
+        if all(math.isfinite(v) for v in pos):
+            p.x, p.y, p.z = float(pos[0]), float(pos[1]), float(pos[2])
+            p.valid = True
+        else:
+            p.valid = False
+        if all(math.isfinite(v) for v in vel):
+            p.vx, p.vy, p.vz = float(vel[0]), float(vel[1]), float(vel[2])
+        if math.isfinite(m.q[0]):
+            p.heading = Pose.yaw_from_q(m.q)
+        p.src = 'odometry'
+        self._first_src('odometry')
+        self.lp = p
+
+    def _first_src(self, name):
+        if getattr(self, '_src_announced', None) != name:
+            self._src_announced = name
+            self.get_logger().info(f'  위치/속도 소스 = /fmu/out/vehicle_{name}')
 
     def _cb_att(self, m):
         self.att_q = m.q
@@ -222,7 +278,8 @@ class OffboardSequenceNode(Node):
     # ── 메인 루프 ────────────────────────────────────────
     def _tick(self):
         if self.lp is None:
-            self.warn_once('nolp', '  vehicle_local_position 수신 대기 중...')
+            self.warn_once('nolp', '  위치/속도 수신 대기 중... '
+                                   '(vehicle_local_position 또는 vehicle_odometry)')
             self._ocm(position=True)
             return
 
@@ -274,9 +331,8 @@ class OffboardSequenceNode(Node):
             self.warn_once('bench', '  [BENCH] 고도·유효성 사전조건을 건너뜁니다')
             return True
         alt = -self.lp.z
-        if not (self.lp.xy_valid and self.lp.z_valid):
-            self.warn_once('valid', f'  ✗ 위치 추정 무효 (xy_valid={self.lp.xy_valid}, '
-                                    f'z_valid={self.lp.z_valid}) — 시퀀스 시작 거부')
+        if not self.lp.valid:
+            self.warn_once('valid', f'  ✗ 위치 추정 무효 (소스={self.lp.src}) — 시퀀스 시작 거부')
             return False
         if alt < self.NEED_ALT:
             self.warn_once('alt', f'  ✗ 고도 부족 ({alt:.1f}m < {self.NEED_ALT}m) — 더 올린 뒤 다시 켜세요')
