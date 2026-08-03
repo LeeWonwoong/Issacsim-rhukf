@@ -102,6 +102,8 @@ class F2Doublet(OffboardSequenceNode):
 
     def _alt_hold_thrust(self):
         """origin 고도를 유지하도록 추력을 보정. NED 라 z 는 아래가 +."""
+        if self.bench:                       # 지상검증: 모터를 저속으로만
+            return self.bench_thrust
         h = self._hover_thrust
         if self.lp is None or self.origin is None:
             return h

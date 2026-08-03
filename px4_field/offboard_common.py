@@ -62,9 +62,12 @@ class OffboardSequenceNode(Node):
     MAX_RADIUS = 25.0          # origin 기준 수평 이탈 한계 [m]
     MAX_ALT_DEV = 15.0         # origin 기준 고도 이탈 한계 [m]
 
+    BENCH_THRUST = 0.10        # 프로펠러 뺀 지상검증 시 추력. 모터가 저속으로만 돈다
+
     def __init__(self, bench=False, outdir='field_logs'):
         super().__init__(f'offb_{self.SEQ_NAME}')
         self.bench = bench
+        self.bench_thrust = self.BENCH_THRUST
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          durability=DurabilityPolicy.VOLATILE,
                          history=HistoryPolicy.KEEP_LAST, depth=5)
@@ -171,6 +174,9 @@ class OffboardSequenceNode(Node):
         self.pub_traj.publish(m)
 
     def send_velocity(self, vx, vy, vz, yaw):
+        if self.bench:                       # 실내 = 위치/속도 추정 무효 → 자세로 대체
+            self.send_attitude(0.0, 0.0, yaw, self.bench_thrust)
+            return
         self._ocm(velocity=True)
         m = TrajectorySetpoint()
         m.position = [NAN, NAN, NAN]
@@ -192,13 +198,24 @@ class OffboardSequenceNode(Node):
         self.pub_att.publish(m)
 
     def hold_here(self):
-        """현재 위치·방향 유지. 진입 전 기본 상태이자 SAFE 상태."""
+        """현재 위치·방향 유지. 진입 전 기본 상태이자 SAFE 상태.
+
+        ★ bench 모드는 **자세 setpoint** 로 대체한다.
+          실내는 GPS 가 없어 위치 추정이 무효인데, position 타입 setpoint 를 흘리면
+          PX4 가 오프보드 진입 자체를 거부한다. 자세 타입은 위치 추정이 필요 없다.
+        """
+        if self.bench:
+            self.send_attitude(0.0, 0.0, self.heading(), self.bench_thrust)
+            return
         if self.lp is None:
             self._ocm(position=True)
             return
         self.send_position(self.lp.x, self.lp.y, self.lp.z, self.heading())
 
     def hold_origin(self, dz=0.0):
+        if self.bench:
+            self.send_attitude(0.0, 0.0, self.yaw0, self.bench_thrust)
+            return
         x, y, z = self.origin
         self.send_position(x, y, z + dz, self.yaw0)
 
