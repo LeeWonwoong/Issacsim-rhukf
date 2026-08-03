@@ -5,8 +5,10 @@ from offboard_common import wrap_pi
 
 class Fake:
     """OffboardSequenceNode 를 상속하지 않고 step() 만 빌려 쓰기 위한 껍데기."""
-    def __init__(self, cls, **kw):
+    def __init__(self, cls, bench=False, **kw):
         self.o = cls.__new__(cls)
+        self.o.bench = bench
+        self.o.bench_thrust = 0.10
         for k, v in kw.items(): setattr(self.o, k, v)
         self.o.yaw0 = math.radians(37.0)          # 임의의 진입 방향
         self.o.origin = (10.0, -5.0, -5.0)
@@ -71,3 +73,17 @@ for v in uniq:
     rel = math.degrees(wrap_pi(math.radians(ang)-yaw0)) if sp>0.01 else 0
     print(f"    NED{v}  속력 {sp:.2f} m/s  yaw0 기준 {rel:+.0f}°")
 print("  ★ yaw0 기준 0°=전진, ±180°=후진, +90°=우횡진, -90°=좌횡진 이면 정상")
+
+
+print(); print("="*72); print("BENCH 모드 — 전 구간이 자세명령인지 (실내 진입 가능 조건)"); print("="*72)
+f = Fake(f2_doublet.F2Doublet, bench=True, amp=math.radians(10), n=2, pulse=0.4,
+         recover=3.0, settle=2.0, _hover_thrust=0.33, _axes=('roll','pitch','yaw'),
+         T_one=2*0.4+3.0, T_axis=2*(2*0.4+3.0))
+f.o.hold_origin = lambda dz=0.0: f.cmds.append(('ATT_hold', 0.10))   # bench 경로 모사
+T = f.run()
+kinds = set(c[0] for c in f.cmds)
+print(f"  완료 {T:.1f}s   명령 종류 {kinds}")
+print(f"  → POS/VEL 이 없어야 실내에서 오프보드 진입이 수락된다: "
+      f"{'PASS' if not (kinds & {'POS','VEL'}) else 'FAIL'}")
+thr = sorted(set(c[1] for c in f.cmds if c[0]=='ATT_hold'))
+print(f"  bench 추력 {thr}  (프로펠러 없는 모터가 저속으로만 돎)")
