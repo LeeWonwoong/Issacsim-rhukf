@@ -137,8 +137,8 @@ if __name__ == '__main__':
     ap.add_argument('--settle', type=float, default=5.0, help='시작 전 안정화 [s]')
     ap.add_argument('--thrust', type=float, default=0.33,
                     help='자세명령 중 기준 추력 = 실측 호버 스로틀. F1 결과를 넣을 것 (test1 실측 0.329)')
-    ap.add_argument('--need-alt', type=float, default=2.0,
-                    help='진입 최소 고도 [m]. 저고도 운용 시 낮춘다')
+    ap.add_argument('--need-alt', type=float, default=1.5,
+                    help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
     run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)

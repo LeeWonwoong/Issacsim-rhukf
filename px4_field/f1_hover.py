@@ -34,8 +34,8 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--bench', action='store_true', help='지상 검증(사전조건 완화)')
     ap.add_argument('--dur', type=float, default=90.0, help='호버 유지 [s] (권장 90~120)')
-    ap.add_argument('--need-alt', type=float, default=3.0,
-                    help='진입 최소 고도 [m]. 실내 지상검증은 0 으로')
+    ap.add_argument('--need-alt', type=float, default=1.5,
+                    help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
 

@@ -96,8 +96,8 @@ if __name__ == '__main__':
     ap.add_argument('--leg', type=float, default=8.0, help='한 구간 시간 [s]')
     ap.add_argument('--pause', type=float, default=3.0, help='구간 사이 정지 [s]')
     ap.add_argument('--settle', type=float, default=4.0)
-    ap.add_argument('--need-alt', type=float, default=3.0,
-                    help='진입 최소 고도 [m]. 실내 지상검증은 0 으로')
+    ap.add_argument('--need-alt', type=float, default=1.5,
+                    help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--max-radius', type=float, default=0.0,
                     help='안전 반경 [m]. 0=자동 (구간거리×1.4, 최소 30)')
     ap.add_argument('--outdir', default='field_logs')
