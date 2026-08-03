@@ -61,6 +61,7 @@ class F3Drag(OffboardSequenceNode):
 
 
 def build(bench, outdir, a):
+    F3Drag.NEED_ALT = a.need_alt
     node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle)
     dist = a.v * a.leg
     node.get_logger().info(
@@ -77,6 +78,8 @@ if __name__ == '__main__':
     ap.add_argument('--leg', type=float, default=8.0, help='한 구간 시간 [s]')
     ap.add_argument('--pause', type=float, default=3.0, help='구간 사이 정지 [s]')
     ap.add_argument('--settle', type=float, default=4.0)
+    ap.add_argument('--need-alt', type=float, default=3.0,
+                    help='진입 최소 고도 [m]. 실내 지상검증은 0 으로')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
     run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)
