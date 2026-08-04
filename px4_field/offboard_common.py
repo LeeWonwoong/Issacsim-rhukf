@@ -99,7 +99,58 @@ class OffboardSequenceNode(Node):
 
     BENCH_THRUST = 0.10        # 프로펠러 뺀 지상검증 시 추력. 모터가 저속으로만 돈다
 
-    def __init__(self, bench=False, outdir='field_logs'):
+    GRAPH_WAIT_S = 3.0         # 토픽 접미사 자동 감지 시 ROS 그래프 대기 [s]
+
+    # ── PX4 메시지 버전 접미사(_v<N>) 자동 해석 ──────────
+    #  PX4 v1.16+ 는 MESSAGE_VERSION != 0 인 메시지의 DDS 토픽명 뒤에 _v<N> 을
+    #  자동으로 붙인다 (uxrce_dds_client/utilities.hpp:35, dds_topics.h.em:83).
+    #  버전은 yaml 이 아니라 msg 정의에서 오므로 빌드한 소스 버전이 곧 이름을 정한다.
+    #
+    #      실기 FC (v1.15.4)   : /fmu/out/vehicle_status
+    #      Isaac SITL (v1.18)  : /fmu/out/vehicle_status_v4
+    #                            /fmu/in/vehicle_attitude_setpoint_v1
+    #                            /fmu/out/vehicle_local_position_v1
+    #      (TrajectorySetpoint · VehicleCommand · VehicleOdometry ·
+    #       VehicleAttitude · OffboardControlMode 은 VERSION=0 → 접미사 없음)
+    #
+    #  한 코드가 양쪽에서 그대로 돌도록 ROS 그래프를 보고 실재하는 이름을 고른다.
+    #  같은 발상의 선례: online_rl_main.py 의 PX4 네임스페이스 자동 감지.
+    def _scan_graph(self, probe='/fmu/'):
+        t0 = time.time()
+        names = []
+        while time.time() - t0 < self.GRAPH_WAIT_S:
+            names = [n for n, _ in self.get_topic_names_and_types()]
+            if any(n.startswith(probe) for n in names):
+                return names
+            time.sleep(0.2)
+        self.get_logger().warn(
+            f'  ROS 그래프에 {probe}* 가 없다 ({self.GRAPH_WAIT_S:.0f}s 대기).\n'
+            f'    → 접미사 없는 이름(PX4 v1.15 형식)으로 진행한다.\n'
+            f'    → 기체(또는 SITL)를 먼저 띄운 뒤 실행하면 자동으로 맞춰진다.')
+        return names
+
+    def _make_resolver(self, suffix=None):
+        """base 토픽명 → 그래프에 실재하는 이름(base 또는 base_v<N>) 으로 매핑."""
+        if suffix == 'none':
+            self.get_logger().info('  토픽 접미사 = 강제 없음 (PX4 v1.15 형식)')
+            return lambda base: base
+
+        names = self._scan_graph()
+
+        def resolve(base):
+            if base in names:
+                return base
+            k = len(base) + 2
+            cand = [n for n in names
+                    if n.startswith(base + '_v') and n[k:].isdigit()]
+            if not cand:
+                return base
+            out = max(cand, key=lambda n: int(n[k:]))
+            self.get_logger().info(f'  토픽 해석: {base} → {out}')
+            return out
+        return resolve
+
+    def __init__(self, bench=False, outdir='field_logs', suffix=None):
         super().__init__(f'offb_{self.SEQ_NAME}')
         self.bench = bench
         self.bench_thrust = self.BENCH_THRUST
@@ -107,16 +158,24 @@ class OffboardSequenceNode(Node):
                          durability=DurabilityPolicy.VOLATILE,
                          history=HistoryPolicy.KEEP_LAST, depth=5)
 
-        self.pub_ocm = self.create_publisher(OffboardControlMode, '/fmu/in/offboard_control_mode', qos)
-        self.pub_traj = self.create_publisher(TrajectorySetpoint, '/fmu/in/trajectory_setpoint', qos)
-        self.pub_att = self.create_publisher(VehicleAttitudeSetpoint, '/fmu/in/vehicle_attitude_setpoint', qos)
-        self.pub_cmd = self.create_publisher(VehicleCommand, '/fmu/in/vehicle_command', qos)
+        R = self._make_resolver(suffix)   # PX4 메시지 버전 접미사(_v<N>) 해석기
 
-        self.create_subscription(VehicleStatus, '/fmu/out/vehicle_status', self._cb_status, qos)
-        self.create_subscription(VehicleAttitude, '/fmu/out/vehicle_attitude', self._cb_att, qos)
+        # 해석된 이름을 보관한다 — 배너에서 "감시할 토픽"으로 그대로 안내해야
+        # 사용자가 복사한 ros2 topic hz 가 실제로 잡힌다.
+        self.t_ocm = R('/fmu/in/offboard_control_mode')
+        self.t_traj = R('/fmu/in/trajectory_setpoint')
+        self.t_att = R('/fmu/in/vehicle_attitude_setpoint')
+
+        self.pub_ocm = self.create_publisher(OffboardControlMode, self.t_ocm, qos)
+        self.pub_traj = self.create_publisher(TrajectorySetpoint, self.t_traj, qos)
+        self.pub_att = self.create_publisher(VehicleAttitudeSetpoint, self.t_att, qos)
+        self.pub_cmd = self.create_publisher(VehicleCommand, R('/fmu/in/vehicle_command'), qos)
+
+        self.create_subscription(VehicleStatus, R('/fmu/out/vehicle_status'), self._cb_status, qos)
+        self.create_subscription(VehicleAttitude, R('/fmu/out/vehicle_attitude'), self._cb_att, qos)
         # 위치/속도 소스 이중화 — 설치본에 따라 둘 중 하나만 노출돼 있다
-        self.create_subscription(VehicleLocalPosition, '/fmu/out/vehicle_local_position', self._cb_lp, qos)
-        self.create_subscription(VehicleOdometry, '/fmu/out/vehicle_odometry', self._cb_odom, qos)
+        self.create_subscription(VehicleLocalPosition, R('/fmu/out/vehicle_local_position'), self._cb_lp, qos)
+        self.create_subscription(VehicleOdometry, R('/fmu/out/vehicle_odometry'), self._cb_odom, qos)
 
         # 상태
         self.nav_state = -1
@@ -157,8 +216,7 @@ class OffboardSequenceNode(Node):
             f"        (Enter 는 폴백일 뿐입니다. 평소엔 누르지 마세요 — 수동비행 중\n"
             f"         setpoint 가 흘러 조종기와 충돌합니다.)\n"
             f"\n"
-            f"  감시할 토픽: ros2 topic hz "
-            f"{'/fmu/in/vehicle_attitude_setpoint' if bench else '/fmu/in/trajectory_setpoint'}\n"
+            f"  감시할 토픽: ros2 topic hz {self.t_att if bench else self.t_traj}\n"
             f"  마커 로그: {self._csv_path}\n{'='*68}")
 
     # ── 콜백 ─────────────────────────────────────────────
