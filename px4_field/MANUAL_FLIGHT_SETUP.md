@@ -161,3 +161,28 @@ thrust/torque 는 PX4 기본 로깅에 50Hz 로 이미 들어있다
 ROS2 토픽이 반드시 필요한 시점은 **젯슨에서 UKF 를 실시간으로 돌릴 때(배포)**
 하나뿐이고, 그때 v1.15.4 트리에서 토픽만 추가해 빌드하면 버전 점프가 아니라
 **파라미터도 기체 세팅도 그대로 유지된다.**
+
+
+③ 3줄 새로 추가
+
+cat >> ~/.bashrc <<'EOF'
+
+# ROS2 / PX4
+export ROS_DOMAIN_ID=6
+source /opt/ros/humble/setup.bash
+source ~/colcon_ws/install/setup.bash
+EOF
+
+EOF 까지 통째로 복사해서 붙여넣고 엔터. (내가 아까 준 printf 는 이스케이프가 깨져서 안 됐던 거야. 이건 테스트했어.)
+
+④ 적용
+
+source ~/.bashrc
+echo $ROS_DOMAIN_ID
+
+6 이 나오면 끝.
+
+---
+노트북에 ~/colcon_ws 가 없으면 ③의 마지막 줄에서 "그런 파일이 없습니다" 가 떠. 그럼 그 줄만 빼:
+
+sed -i '/colcon_ws/d' ~/.bashrc && source ~/.bashrc
