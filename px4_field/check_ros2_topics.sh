@@ -10,7 +10,7 @@ set -u
 # topic|용도|필요한쪽 (PUB = PX4가 발행 /fmu/out,  SUB = PX4가 구독 /fmu/in)
 ROWS=(
 "/fmu/out/sensor_combined|자이로·가속도 (UKF 관측 z[6:9], 자이로 σ)|PUB|필수"
-"/fmu/out/sensor_gps|GPS 위치·속도 (UKF 관측 z[0:6])|PUB|필수"
+"/fmu/out/vehicle_gps_position|GPS 위치·속도 (UKF 관측 z[0:6]). 타입=SensorGps|PUB|필수"
 "/fmu/out/vehicle_thrust_setpoint|u[0] 추력 (C_thrust)|PUB|필수"
 "/fmu/out/vehicle_torque_setpoint|u[1:4] 토크 (G, k_norm)|PUB|필수"
 "/fmu/out/vehicle_odometry|위치·속도 (필드 스크립트)|PUB|필수*"
@@ -45,8 +45,21 @@ for row in "${ROWS[@]}"; do
 done
 echo
 if [ $missing -gt 0 ]; then
-  echo "✗ ${missing}개 누락 — dds_topics.yaml 에 추가하고 PX4 재빌드 필요"
+  echo "✗ ${missing}개 누락"
   echo "  * vehicle_odometry 와 vehicle_local_position 은 둘 중 하나만 있어도 됩니다"
+  echo
+  echo "  누락 원인은 둘 중 하나입니다 — 먼저 FC 가 실제로 뭘 내보내는지 보세요:"
+  echo "      ros2 topic list | grep /fmu/out/ | sort"
+  echo
+  echo "  (a) 이름이 다름   예) sensor_gps 는 Isaac Sim 이름. 실기는 vehicle_gps_position"
+  echo "                        (타입은 똑같이 SensorGps, 기본 yaml 에 이미 있음)"
+  echo "                    예) 끝에 _v1 같은 접미사가 붙어 있으면 PX4 메시지 버저닝 문제"
+  echo "  (b) 펌웨어 불일치 FC 에 올라간 빌드의 dds_topics.yaml 이 소스 트리와 다름."
+  echo "                    vehicle_thrust_setpoint / vehicle_torque_setpoint 는"
+  echo "                    PX4 기본 yaml 7·9행에 이미 /fmu/out 으로 등록돼 있고,"
+  echo "                    uxrce_dds_client 는 세션이 열릴 때 시동 여부와 무관하게"
+  echo "                    yaml 전 항목의 data writer 를 만듭니다(dds_topics.h.em:100)."
+  echo "                    → 그래도 0 이면 그 yaml 로 빌드된 펌웨어가 아닙니다. 재빌드·플래시."
 else
   echo "✓ 전부 확인됨"
 fi

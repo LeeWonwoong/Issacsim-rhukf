@@ -11,7 +11,7 @@
 | 토픽 | 용도 |
 |---|---|
 | `sensor_combined` | 자이로·가속도. **UKF 관측 z[6:9]**, 자이로 σ |
-| `sensor_gps` | GPS 위치·속도. **UKF 관측 z[0:6]** |
+| `vehicle_gps_position` | GPS 위치·속도. **UKF 관측 z[0:6]**. 타입은 `SensorGps` |
 | `vehicle_thrust_setpoint` | u[0]. C_thrust |
 | `vehicle_torque_setpoint` | u[1:4]. G, 결합항 k_norm |
 | `vehicle_odometry` | 위치·속도 (필드 스크립트) |
@@ -87,6 +87,10 @@ ros2 topic echo <토픽> --qos-reliability best_effort
 PUB: vehicle_odometry (또는 vehicle_local_position), vehicle_attitude, vehicle_status
 SUB: offboard_control_mode, trajectory_setpoint, vehicle_attitude_setpoint
 ```
-나머지(`sensor_combined`, `sensor_gps`, `thrust/torque_setpoint`)는
+나머지(`sensor_combined`, `vehicle_gps_position`, `thrust/torque_setpoint`)는
 **계수 추출을 ulog 로 하기 때문에 DDS 노출이 없어도 된다.**
+(전부 PX4 기본 로깅 프로파일에 있음 — `logged_topics.cpp` 의 `add_default_topics()`:
+ sensor_combined 123행 / vehicle_gps_position 10Hz 145행 / sensor_gps 1Hz 222행 /
+ vehicle_thrust_setpoint·vehicle_torque_setpoint 50Hz 238-239행.
+ ⚠ GPS σ 는 1Hz 인 `sensor_gps` 말고 10Hz 인 `vehicle_gps_position` 을 쓸 것)
 → 이번엔 3개만 추가하고, 나머지는 배포 단계에서 한 번에 정리해도 된다.

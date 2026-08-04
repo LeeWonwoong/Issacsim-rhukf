@@ -133,6 +133,9 @@ class OffboardSequenceNode(Node):
         self.stream_armed = False      # Enter 로 여는 수동 개방(폴백)
         self.user_intent = -1          # 조종사가 고른 모드 (nav_state_user_intention)
         self._intent_seen = False
+        # ★ OffboardControlMode 에 선언하는 제어 타입. 오프보드 수락 여부를 결정한다.
+        #   실내(위치 추정 무효)에서 position 을 선언하면 PX4 가 모드를 거부한다.
+        self._ocm_kind = 'attitude' if bench else 'position'
 
         os.makedirs(outdir, exist_ok=True)
         stamp = time.strftime('%Y%m%d_%H%M%S')
@@ -145,15 +148,17 @@ class OffboardSequenceNode(Node):
         self.create_timer(1.0 / PUB_HZ, self._tick)
         threading.Thread(target=self._stdin_waiter, daemon=True).start()
         self.get_logger().info(
-            f"\n{'='*68}\n  {self.SEQ_NAME.upper()}  {'[BENCH 모드 — 사전조건 완화]' if bench else ''}\n"
-            f"  OffboardControlMode 만 {PUB_HZ:.0f}Hz 로 발행 중.\n"
+            f"\n{'='*68}\n  {self.SEQ_NAME.upper()}  {'[BENCH — 실내/프로펠러 제거]' if bench else ''}\n"
+            f"  OffboardControlMode({self._ocm_kind}) 만 {PUB_HZ:.0f}Hz 로 발행 중.\n"
             f"  setpoint 는 아직 **발행하지 않습니다** (조종기 수동비행과 충돌하므로).\n"
+            f"  PX4 는 OffboardControlMode 만으로 오프보드를 수락하므로 이대로 충분합니다.\n"
             f"\n"
-            f"  순서:\n"
-            f"    1) 조종기로 이륙 → 고도 안정\n"
-            f"    2) 이 창에서 **Enter** → setpoint 스트림이 열림\n"
-            f"    3) 3초 안에 오프보드 스위치 ON\n"
+            f"  순서:  조종기로 이륙·안정 → **오프보드 스위치 ON** → 자동으로 스트림 개방\n"
+            f"        (Enter 는 폴백일 뿐입니다. 평소엔 누르지 마세요 — 수동비행 중\n"
+            f"         setpoint 가 흘러 조종기와 충돌합니다.)\n"
             f"\n"
+            f"  감시할 토픽: ros2 topic hz "
+            f"{'/fmu/in/vehicle_attitude_setpoint' if bench else '/fmu/in/trajectory_setpoint'}\n"
             f"  마커 로그: {self._csv_path}\n{'='*68}")
 
     # ── 콜백 ─────────────────────────────────────────────
@@ -276,6 +281,30 @@ class OffboardSequenceNode(Node):
         m.acceleration = m.body_rate = m.thrust_and_torque = m.direct_actuator = False
         m.timestamp = 0
         self.pub_ocm.publish(m)
+        if position:
+            self._ocm_kind = 'position'
+        elif velocity:
+            self._ocm_kind = 'velocity'
+        elif attitude:
+            self._ocm_kind = 'attitude'
+
+    def _keepalive_ocm(self):
+        """setpoint 를 아직 안 보낼 때도 OffboardControlMode 는 계속 흘려야 한다.
+
+        PX4 는 **OffboardControlMode 만** 보고 오프보드 가능 여부를 판정한다
+        (setpoint 메시지는 모드 진입 조건이 아니다).
+        `HealthAndArmingChecks/checks/offboardCheck.cpp`:
+
+            offboard_available = (어떤 타입이든 선언됨) && (COM_OF_LOSS_T=1s 이내 수신)
+            if (position && local_position_invalid)  → 거부 "Offboard requires local position"
+            if (velocity && local_velocity_invalid)  → 거부 "Offboard requires local velocity"
+            if (attitude && attitude_invalid)        → 거부 "Offboard requires attitude estimate"
+
+        ★ 그래서 **선언 타입을 실제로 보낼 타입과 맞춰야** 한다.
+          실내 지상검증(bench)에서 position 을 선언하면 위치 추정이 무효라
+          오프보드 스위치가 아예 먹지 않는다. 이때 bench 는 attitude 를 선언한다.
+        """
+        self._ocm(**{self._ocm_kind: True})
 
     def send_position(self, x, y, z, yaw):
         if not self._may_stream():
@@ -342,8 +371,10 @@ class OffboardSequenceNode(Node):
 
     # ── 메인 루프 ────────────────────────────────────────
     def _tick(self):
-        self._ocm(position=True)        # 전용 토픽이라 충돌 없음 — 항상 발행
-        if self.lp is None:
+        self._keepalive_ocm()           # 전용 토픽이라 충돌 없음 — 항상 발행
+        # ★ bench 는 위치 추정이 필요 없다(자세 명령). lp 를 기다리면 실내에서
+        #   영원히 아무것도 발행하지 못해 오프보드 진입 자체가 막힌다.
+        if self.lp is None and not self.bench:
             self.warn_once('nolp', '  위치/속도 수신 대기 중... '
                                    '(vehicle_local_position 또는 vehicle_odometry)')
             return
@@ -361,14 +392,17 @@ class OffboardSequenceNode(Node):
             if self.offboard:
                 if not self._preflight_ok():
                     return
-                self.origin = (self.lp.x, self.lp.y, self.lp.z)
+                self.origin = ((self.lp.x, self.lp.y, self.lp.z)
+                               if self.lp is not None else (0.0, 0.0, 0.0))
                 self.yaw0 = self.heading()
                 self.t_engage = time.time()
                 self.state = 'ENGAGED'
                 self.get_logger().info(
                     f"\n  ★ OFFBOARD 진입 — 시퀀스 시작\n"
                     f"    origin = ({self.origin[0]:+.2f}, {self.origin[1]:+.2f}, {self.origin[2]:+.2f}) NED\n"
-                    f"    yaw0   = {math.degrees(self.yaw0):+.1f}°  (이 방향 기준으로 궤적을 만듭니다)\n")
+                    f"    yaw0   = {math.degrees(self.yaw0):+.1f}°  (이 방향 기준으로 궤적을 만듭니다)\n"
+                    + (f"    [BENCH] 추력 {self.bench_thrust:.2f} — 프로펠러 제거 확인!\n"
+                       if self.bench else ""))
 
         elif self.state == 'ENGAGED':
             if not self.offboard:
@@ -426,7 +460,7 @@ class OffboardSequenceNode(Node):
 
     def _log_row(self):
         t_seq = 0.0 if self.t_engage is None else time.time() - self.t_engage
-        lp = self.lp
+        lp = self.lp if self.lp is not None else Pose()   # bench 는 lp 없이도 돈다
         self._w.writerow([f'{time.time():.3f}', f'{t_seq:.3f}', self.state, self.stage,
                           self.nav_state, int(self.armed),
                           f'{lp.x:.3f}', f'{lp.y:.3f}', f'{lp.z:.3f}',

@@ -15,10 +15,12 @@ OFFB = 14
 POS = 2
 
 class Mock:
-    def __init__(self):
+    def __init__(self, bench=False):
         o = f1_hover.F1Hover.__new__(f1_hover.F1Hover)
         o.dur = 5.0
-        o.bench = False
+        o.bench = bench
+        o.bench_thrust = 0.10
+        o._ocm_kind = 'attitude' if bench else 'position'
         o.stream_armed = False
         o.user_intent = POS
         o._intent_seen = False
@@ -34,14 +36,21 @@ class Mock:
         o._warned = set()
         o.NEED_ALT = 1.5
         self.pub = []
-        o._ocm = lambda **k: self.pub.append('OCM')
+
+        def _ocm(position=False, velocity=False, attitude=False):
+            kind = ('position' if position else 'velocity' if velocity
+                    else 'attitude' if attitude else 'none')
+            o._ocm_kind = kind if kind != 'none' else o._ocm_kind
+            self.pub.append('OCM:' + kind)
+        o._ocm = _ocm
         o.pub_traj = types.SimpleNamespace(publish=lambda m: self.pub.append('TRAJ'))
         o.pub_att = types.SimpleNamespace(publish=lambda m: self.pub.append('ATT'))
         o._log_row = lambda: None
         o.get_logger = lambda: types.SimpleNamespace(
             info=lambda *a: None, warn=lambda *a: None, error=lambda *a: None)
         for f in ('_may_stream', 'heading', 'warn_once', 'set_stage', 'hold_here',
-                  'hold_origin', 'send_position', '_preflight_ok', '_bounds_ok', 'step'):
+                  'hold_origin', 'send_position', 'send_attitude', '_keepalive_ocm',
+                  '_preflight_ok', '_bounds_ok', 'step'):
             setattr(o, f, types.MethodType(getattr(type(o), f, getattr(N, f)), o))
         o.set_stage = lambda n: setattr(o, 'stage', n)
         self.o = o
@@ -107,7 +116,52 @@ print(f"        → state={m.o.state}  (WAIT 로 복귀해야 정상)")
 p = m.tick(3)
 allok &= report('⑧ 인계 후 수동비행 계속', p, False)
 
+
+# ══════════════════════════════════════════════════════════════════════════
+#  BENCH (실내·프로펠러 제거) — 오프보드 수락 조건 검증
+#
+#  PX4 offboardCheck.cpp: OffboardControlMode 에 position 을 선언했는데
+#  local position 이 무효이면 오프보드를 **거부**한다 ("Offboard requires
+#  local position"). 실내에서는 위치 추정이 무효이므로 bench 는 반드시
+#  attitude 를 선언해야 스위치가 먹는다.
+# ══════════════════════════════════════════════════════════════════════════
 print()
 print("=" * 78)
-print(f"  {'✓ 전부 통과 — 조종기 간섭 없음' if allok else '✗ 실패 항목 있음'}")
+print("BENCH 흐름 검증 — 실내(위치 추정 없음)에서 오프보드가 열리는가")
+print("=" * 78)
+
+b = Mock(bench=True)
+b.o.NEED_ALT = 0.0
+
+def report_ocm(label, pub, expect_kind, expect_sp):
+    kinds = [x.split(':')[1] for x in pub if x.startswith('OCM:')]
+    bad = [k for k in kinds if k != expect_kind]
+    has = any(x in ('TRAJ', 'ATT') for x in pub)
+    ok = (not bad) and bool(kinds) and (has == expect_sp)
+    print(f"  [{'OK  ' if ok else 'FAIL'}] {label:44s} OCM={','.join(sorted(set(kinds))) or '없음':10s} "
+          f"setpoint={'있음' if has else '없음'}  (기대 OCM={expect_kind}, setpoint={'있음' if expect_sp else '없음'})")
+    if bad:
+        print(f"         ✗ position 선언이 섞이면 실내에서 오프보드가 거부된다: {sorted(set(bad))}")
+    return ok
+
+# lp 가 끝내 안 오는 상황(실내에서 흔함) — 그래도 OCM 은 계속 나가야 한다
+allok &= report_ocm('⑨ 실내·위치 수신 없음 (lp=None)', b.tick(2), 'attitude', False)
+
+b.o.user_intent = OFFB                          # 조종사가 스위치 ON
+allok &= report_ocm('⑩ 스위치 ON (intent=14)', b.tick(), 'attitude', True)
+
+b.o.nav_state = OFFB                            # PX4 수락
+p = b.tick()
+allok &= report_ocm('⑪ 오프보드 진입 (nav=14)', p, 'attitude', True)
+print(f"        → state={b.o.state}  origin={b.o.origin}")
+
+b.o.t_engage = __import__('time').time() - 1.0
+allok &= report_ocm('⑫ 시퀀스 진행 (자세 명령)', b.tick(3), 'attitude', True)
+
+b.o.nav_state = POS; b.o.user_intent = POS      # 인계
+allok &= report_ocm('⑬ 스위치 OFF (인계)', b.tick(2), 'attitude', False)
+
+print()
+print("=" * 78)
+print(f"  {'✓ 전부 통과 — 조종기 간섭 없음 + 실내 오프보드 진입 가능' if allok else '✗ 실패 항목 있음'}")
 print("=" * 78)

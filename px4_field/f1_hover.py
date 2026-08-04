@@ -36,10 +36,15 @@ if __name__ == '__main__':
     ap.add_argument('--dur', type=float, default=90.0, help='호버 유지 [s] (권장 90~120)')
     ap.add_argument('--need-alt', type=float, default=1.5,
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
+    ap.add_argument('--bench-thrust', type=float, default=0.10,
+                    help='bench 모드 추력 0~1. 0.10 은 아이들에 가까워 반응이 안 보인다. '
+                         '모터 반응을 보려면 0.20~0.25 (프로펠러 제거 상태에서만!)')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
 
     def build(bench, outdir):
         F1Hover.NEED_ALT = a.need_alt
-        return F1Hover(bench, outdir, a.dur)
+        node = F1Hover(bench, outdir, a.dur)
+        node.bench_thrust = a.bench_thrust
+        return node
     run(build, a.bench, a.outdir)

@@ -76,6 +76,7 @@ def build(bench, outdir, a):
     #  구간거리에 비례하되 여유는 고정 3m — 좁은 공간에서도 실제 보호가 되도록.
     F3Drag.MAX_RADIUS = a.max_radius if a.max_radius > 0 else dist * 1.5 + 3.0
     node = F3Drag(bench, outdir, a.v, a.leg, a.pause, a.settle, a.reps)
+    node.bench_thrust = a.bench_thrust
     node.get_logger().info(
         f"  등속 {a.v} m/s × {a.leg}s = 구간당 {dist:.0f}m,  구간 {len(node.legs)}개\n"
         f"  총 {a.settle + len(node.legs)*node.T_leg:.0f}s,  안전반경 {F3Drag.MAX_RADIUS:.0f}m\n"
@@ -110,6 +111,9 @@ if __name__ == '__main__':
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--max-radius', type=float, default=0.0,
                     help='안전 반경 [m]. 0=자동 (구간거리×1.4, 최소 30)')
+    ap.add_argument('--bench-thrust', type=float, default=0.10,
+                    help='bench 모드 추력 0~1. 0.10 은 아이들에 가까워 반응이 안 보인다. '
+                         '모터 반응을 보려면 0.20~0.25 (프로펠러 제거 상태에서만!)')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
     run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)

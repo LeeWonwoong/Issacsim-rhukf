@@ -118,6 +118,7 @@ def build(bench, outdir, a):
     F2Doublet.NEED_ALT = a.need_alt
     node = F2Doublet(bench, outdir, a.amp, a.n, a.pulse, a.recover, a.settle)
     node._hover_thrust = a.thrust
+    node.bench_thrust = a.bench_thrust
     node.get_logger().info(
         f"  doublet: 진폭 {a.amp}°, 축당 {a.n}회, 펄스 {a.pulse}s, 회복 {a.recover}s\n"
         f"  축당 {node.T_axis:.0f}s × 3축 + 안정화 {a.settle:.0f}s = 총 {3*node.T_axis+a.settle:.0f}s\n"
@@ -139,6 +140,9 @@ if __name__ == '__main__':
                     help='자세명령 중 기준 추력 = 실측 호버 스로틀. F1 결과를 넣을 것 (test1 실측 0.329)')
     ap.add_argument('--need-alt', type=float, default=1.5,
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
+    ap.add_argument('--bench-thrust', type=float, default=0.10,
+                    help='bench 모드 추력 0~1. 0.10 은 아이들에 가까워 반응이 안 보인다. '
+                         '모터 반응을 보려면 0.20~0.25 (프로펠러 제거 상태에서만!)')
     ap.add_argument('--outdir', default='field_logs')
     a = ap.parse_args()
     run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)

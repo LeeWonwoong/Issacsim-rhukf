@@ -6,6 +6,9 @@ __pycache__/
 results/
 results_*/
 
+# 실기 비행 로그 (대용량 바이너리 — 디스크에는 남기고 git 에는 안 올린다)
+*.ulg
+
 # Editor/OS
 .DS_Store
 .vscode/
