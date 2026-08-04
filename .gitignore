@@ -12,3 +12,7 @@ results_*/
 # Editor/OS
 .DS_Store
 .vscode/
+
+# 감시 로그 (재현 가능한 실행 산출물)
+px4_field/field_logs/
+px4_field/*_watch.csv
