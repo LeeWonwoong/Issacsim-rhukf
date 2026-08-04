@@ -11,8 +11,8 @@
 ║      px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4    (1.8 MB)      ║
 ║      md5: 75f51a649ea6042facc968cd05aac68c                           ║
 ║                                                                      ║
-║  이 저장소에 들어 있으므로 노트북에서 git pull 만 하면 받아진다.      ║
-║  USB 도 빌드도 필요 없다.  →  바로 [4] 플래시로 갈 것.               ║
+║  USB 로 옮겨 QGC 로 플래시하면 끝이다.  →  [T] → [4]                 ║
+║  빌드할 필요 없다.                                                   ║
 ║                                                                      ║
 ║  · 내용   = PX4 v1.15.4 + dds_topics.yaml 2줄 (아래 [0])             ║
 ║  · 커밋   = 99c40407  ← FC 의 ver all git-hash 와 정확히 동일         ║
@@ -31,23 +31,47 @@
 
 
 ────────────────────────────────────────────────────────────────────────
-[T]  노트북에서 이 폴더 받기
+[T]  USB 로 옮기기  ← 공용 노트북에 아무것도 안 남긴다
 ────────────────────────────────────────────────────────────────────────
-  이미 저장소가 있으면:
+  git clone 은 SSH 키 등록이 필요하니 쓰지 않는다. 파일 하나면 된다.
 
-cd <저장소경로> && git pull
+  ── (1) GPU 워크스테이션에서 USB 로 복사 ──────────────────
 
-  없으면:
+  USB 를 꽂고 마운트 위치를 찾는다:
 
-git clone git@github.com:LeeWonwoong/Issacsim-rhukf.git
+lsblk -o NAME,SIZE,MOUNTPOINT | grep -v loop
 
-  펌웨어 무결성 확인:
+  또는:
 
-md5sum px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4
+ls /media/$USER/
+
+  복사한다 (<USB> 를 위에서 찾은 이름으로 바꿀 것):
+
+cp ~/projects/Issacsim-rhukf/px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4 /media/$USER/<USB>/
+
+  문서도 같이 가져가려면:
+
+cp ~/projects/Issacsim-rhukf/px4_field/REAL_AIRFRAME_DDS_SETUP.txt /media/$USER/<USB>/
+
+  ★ 반드시 안전 제거 (안 하면 파일이 깨진 채로 옮겨진다):
+
+sync && udisksctl unmount -b /dev/sdX1
+
+  (또는 파일 관리자에서 "꺼내기" 클릭)
+
+  ── (2) 노트북에서 ────────────────────────────────────────
+
+  USB 를 꽂는다. **노트북 디스크로 복사하지 않아도 된다** —
+  QGC 가 USB 에서 직접 읽는다. 공용 노트북에 흔적이 안 남는다.
+
+  무결성 확인 (선택, 터미널에서):
+
+md5sum /media/$USER/<USB>/px4_fmu-v6c_v1.15.4_dds.px4
 
     → 75f51a649ea6042facc968cd05aac68c  이면 온전하다.
+      다르면 복사가 깨진 것이니 (1) 을 다시 한다.
 
-  git 을 못 쓰는 상황이면 USB 로 그 파일 하나만 옮겨도 된다.
+  그대로 [4] 플래시로 간다.
 
 
 ────────────────────────────────────────────────────────────────────────
