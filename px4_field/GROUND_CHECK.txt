@@ -60,23 +60,36 @@
 [C]  터미널 세팅 — 창을 열 때마다
 ────────────────────────────────────────────────────────────────────────
 
+  ⚠⚠ **`.bashrc` 에서 `colcon build` 를 자동 실행하지 말 것.**
+     터미널을 열 때마다 워크스페이스를 다시 빌드해 수십 초씩 잡아먹고,
+     빌드가 실패하면 셸 자체가 이상해진다. **소싱(source)만 하면 된다.**
+     들어가 있으면 제거 (한 줄):
+
+sed -i '/colcon build/d' ~/.bashrc && source ~/.bashrc
+
+  ▶ 올바른 세팅 — 3줄. ~/.bashrc 에 박기 (한 줄, 1회만)
+    ※ `[ -f ]` 가드가 있어 해당 파일이 없는 기계(노트북 등)에서도 조용히 넘어간다
+
+printf '\n# ROS2 / PX4\nexport ROS_DOMAIN_ID=0\n[ -f /opt/ros/humble/setup.bash ] && source /opt/ros/humble/setup.bash\n[ -f ~/colcon_ws/install/setup.bash ] && source ~/colcon_ws/install/setup.bash\n' >> ~/.bashrc && source ~/.bashrc
+
   ▶ 이번 창에서만 (한 줄)
 
-export ROS_DOMAIN_ID=6 && source /opt/ros/humble/setup.bash && source ~/colcon_ws/install/setup.bash
-
-  ▶ 앞으로 자동 — ~/.bashrc 에 박기 (한 줄, 1회만)
-
-printf '\n# ROS2 / PX4\nexport ROS_DOMAIN_ID=6\nsource /opt/ros/humble/setup.bash\nsource ~/colcon_ws/install/setup.bash\n' >> ~/.bashrc && source ~/.bashrc
+source /opt/ros/humble/setup.bash && source ~/colcon_ws/install/setup.bash
 
   ▶ 확인 (한 줄)
 
 echo "DOMAIN=$ROS_DOMAIN_ID" && ros2 topic list | grep -c /fmu/
 
   ★ 순서: 언더레이(/opt/ros/humble) 먼저, 오버레이(colcon_ws=px4_msgs) 나중.
+  ★ `~/colcon_ws` 는 px4_msgs 를 빌드해둔 워크스페이스다. 노트북에 없으면
+    위 가드가 건너뛴다. 노트북에서도 ROS2 로 토픽을 받아야 한다면 한 번만:
+        mkdir -p ~/colcon_ws/src && cd ~/colcon_ws/src
+        git clone https://github.com/PX4/px4_msgs.git
+        cd ~/colcon_ws && colcon build --packages-select px4_msgs   ← 이 한 번만
   ★★ 도메인 ID 는 ①이 터미널 ②MicroXRCEAgent 띄운 창 ③PX4 파라미터
      UXRCE_DDS_DOM_ID **세 곳이 전부 같아야** 한다(③은 재부팅 필요).
      하나라도 다르면 /fmu/ 가 통째로 안 뜬다.
-     지금 0 으로 잘 되고 있다면 굳이 6 으로 바꾸지 않아도 된다.
+     **지금 0 으로 잘 되고 있으므로 0 을 유지하는 편이 안전하다.**
 
 
 ────────────────────────────────────────────────────────────────────────
