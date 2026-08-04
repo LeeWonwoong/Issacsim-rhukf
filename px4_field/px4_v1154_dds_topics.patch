@@ -1,0 +1,69 @@
+# 실기 FC(PX4 v1.15.4 / FMU-v6C) 용 dds_topics.yaml 패치
+#
+#   목적: 제어입력(u)과 모터 명령을 ROS2 로 내보내게 한다.
+#         젯슨에서 UKF 를 실시간으로 돌릴 때 필요하다.
+#         ※ 계수 추출(F1/F2/F3)에는 필요 없다 — 그건 ulog 경로다.
+#
+#   ⚠ dds_topics.yaml 은 런타임 설정이 아니다. 빌드 때 generate_dds_topics.py 가
+#     dds_topics.h 로 코드 생성해 펌웨어 바이너리에 박는다. FC 안에 이 파일은
+#     존재하지 않는다. 따라서 적용하려면 재빌드 + 재플래시가 반드시 따라온다.
+#
+#   ⚠ ~/PX4-Autopilot 은 v1.18.0-alpha1 이고 Isaac SITL 이 물려 있다.
+#     v1.15.4 로 브랜치를 바꾸면 서브모듈 34개가 통째로 갈려 SITL 이 깨진다.
+#     → 반드시 **별도 클론**에서 작업할 것 (아래 절차).
+#
+# ── 적용 절차 ────────────────────────────────────────────────────────────
+#
+#   1) v1.15.4 를 별도 디렉터리에 클론 (FC 와 정확히 같은 버전)
+#        git clone --branch v1.15.4 --recursive \
+#            https://github.com/PX4/PX4-Autopilot.git ~/PX4-v1154
+#
+#   2) 아래 블록을 publications 맨 앞(6행 `publications:` 바로 아래)에 삽입
+#        vi ~/PX4-v1154/src/modules/uxrce_dds_client/dds_topics.yaml
+#
+#   3) 같은 파일 47-48행의 vehicle_angular_velocity 주석을 해제
+#        # - topic: /fmu/out/vehicle_angular_velocity      →  주석 제거
+#        #   type: px4_msgs::msg::VehicleAngularVelocity
+#
+#   4) 빌드 & 플래시
+#        cd ~/PX4-v1154 && make px4_fmu-v6c_default
+#        QGC → Vehicle Setup → Firmware → Advanced → 커스텀 .px4 선택
+#        (build/px4_fmu-v6c_default/px4_fmu-v6c_default.px4)
+#
+#   5) 확인
+#        ros2 topic list | grep -E "thrust_setpoint|torque_setpoint|actuator_motors"
+#
+#   ★ 같은 v1.15.4 이므로 **버전 점프가 아니다.** 파라미터·기체 세팅·토픽
+#     이름(_v<N> 접미사 없음)이 전부 그대로 유지된다. 늘어나는 건 DDS 토픽뿐.
+#
+# ── 삽입할 블록 (publications: 바로 아래) ───────────────────────────────
+
+  # 제어입력 관측 (UKF u, 캘리브레이션 검증, 오프보드 디버깅)
+  - topic: /fmu/out/vehicle_thrust_setpoint
+    type: px4_msgs::msg::VehicleThrustSetpoint
+  - topic: /fmu/out/vehicle_torque_setpoint
+    type: px4_msgs::msg::VehicleTorqueSetpoint
+
+  # 실제 모터 명령 4채널 (정규화 0~1)
+  - topic: /fmu/out/actuator_motors
+    type: px4_msgs::msg::ActuatorMotors
+    rate_limit: 50.
+
+# ── 참고: 재플래시 없이 지금 당장 값을 보는 법 ──────────────────────────
+#
+#   QGC → Analyze → MAVLink Console:
+#       listener vehicle_thrust_setpoint
+#       listener vehicle_torque_setpoint
+#       listener actuator_motors
+#
+#   uORB 값을 그대로 찍어준다. ROS2 토픽이 아닐 뿐 값은 완전히 동일하다.
+#   조종기 조종 중에도, 오프보드 중에도 실시간으로 나온다.
+#
+# ── 참고: 이 토픽들은 ulog 에 이미 들어 있다 ────────────────────────────
+#
+#   src/modules/logger/logged_topics.cpp 의 add_default_topics():
+#       vehicle_thrust_setpoint  50Hz  (238행)
+#       vehicle_torque_setpoint  50Hz  (239행)
+#       vehicle_gps_position     10Hz  (145행)
+#       sensor_combined                (123행)
+#   → 실외 F1/F2/F3 계수 추출은 지금 펌웨어로 그대로 진행 가능하다.
