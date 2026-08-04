@@ -99,7 +99,8 @@ class OffboardSequenceNode(Node):
 
     BENCH_THRUST = 0.10        # 프로펠러 뺀 지상검증 시 추력. 모터가 저속으로만 돈다
 
-    GRAPH_WAIT_S = 3.0         # 토픽 접미사 자동 감지 시 ROS 그래프 대기 [s]
+    GRAPH_WAIT_S = 20.0        # 토픽 접미사 자동 감지 시 ROS 그래프 대기 [s]
+    GRAPH_KEY = '/fmu/out/vehicle_status'   # 이게 보여야 해석을 신뢰할 수 있다
 
     # ── PX4 메시지 버전 접미사(_v<N>) 자동 해석 ──────────
     #  PX4 v1.16+ 는 MESSAGE_VERSION != 0 인 메시지의 DDS 토픽명 뒤에 _v<N> 을
@@ -115,18 +116,41 @@ class OffboardSequenceNode(Node):
     #
     #  한 코드가 양쪽에서 그대로 돌도록 ROS 그래프를 보고 실재하는 이름을 고른다.
     #  같은 발상의 선례: online_rl_main.py 의 PX4 네임스페이스 자동 감지.
-    def _scan_graph(self, probe='/fmu/'):
+    def _scan_graph(self):
+        """ROS 그래프가 안정될 때까지 기다린 뒤 토픽 이름 목록을 돌려준다.
+
+        ⚠ 여기서 성급하게 반환하면 안 된다. ROS2 디스커버리는 비동기라
+          '/fmu/ 토픽이 하나 보인다'가 '전부 보인다'를 뜻하지 않는다.
+          실제 사고(2026-08-04, Isaac SITL): 첫 /fmu/ 토픽을 보고 즉시
+          반환하는 바람에 아직 발견되지 않은 vehicle_status_v4 를 놓쳤고,
+          접미사 없는 이름으로 폴백 → 구독이 영영 아무것도 못 받음 →
+          오프보드로 전환해도 스크립트가 감지하지 못했다.
+
+        그래서 두 조건을 모두 만족해야 반환한다:
+          ① 핵심 토픽(vehicle_status 또는 vehicle_status_v<N>)이 보인다
+          ② 토픽 개수가 0.6s 동안 더 늘지 않는다 (디스커버리 정착)
+        """
         t0 = time.time()
-        names = []
+        prev, stable, names = -1, 0, []
         while time.time() - t0 < self.GRAPH_WAIT_S:
             names = [n for n, _ in self.get_topic_names_and_types()]
-            if any(n.startswith(probe) for n in names):
+            # ★ 이름 존재로 판정하면 안 된다 — 구독자만 있어도 목록에 뜬다.
+            #   실제로 **발행자가 있는** 것을 봐야 한다.
+            has_key = any(self.count_publishers(n) > 0 for n in names
+                          if n == self.GRAPH_KEY or n.startswith(self.GRAPH_KEY + '_v'))
+            stable = stable + 1 if len(names) == prev else 0
+            prev = len(names)
+            if has_key and stable >= 3:
                 return names
             time.sleep(0.2)
-        self.get_logger().warn(
-            f'  ROS 그래프에 {probe}* 가 없다 ({self.GRAPH_WAIT_S:.0f}s 대기).\n'
-            f'    → 접미사 없는 이름(PX4 v1.15 형식)으로 진행한다.\n'
-            f'    → 기체(또는 SITL)를 먼저 띄운 뒤 실행하면 자동으로 맞춰진다.')
+
+        self.get_logger().error(
+            f'\n  ✗ {self.GRAPH_WAIT_S:.0f}s 안에 {self.GRAPH_KEY}* 를 찾지 못했다.\n'
+            f'    접미사 없는 이름으로 진행하지만 **오프보드 감지가 안 될 수 있다.**\n'
+            f'    확인:  ros2 topic list | grep /fmu/out/vehicle_status\n'
+            f'    · 아무것도 없다 → 기체/SITL 또는 MicroXRCEAgent 미기동,\n'
+            f'                      혹은 ROS_DOMAIN_ID 불일치\n'
+            f'    · _v<N> 이 보인다 → 이 스크립트를 다시 실행하면 잡힌다\n')
         return names
 
     def _make_resolver(self, suffix=None):
@@ -136,18 +160,39 @@ class OffboardSequenceNode(Node):
             return lambda base: base
 
         names = self._scan_graph()
+        self._remapped = []
 
         def resolve(base):
-            if base in names:
-                return base
+            """★ 이름이 그래프에 있는지로 고르면 안 된다.
+
+            `ros2 topic list` 는 **구독자만 있어도** 이름을 보여준다. 우리가
+            틀린 이름으로 구독을 만들면 그 이름이 그래프에 생기고, 다음 판정에서
+            "있네" 하고 그대로 쓰게 된다. 발행자가 0 이라 영원히 아무것도 안 온다.
+            (2026-08-04 Isaac SITL 실측 — 오프보드 전환이 감지되지 않던 원인)
+
+                /fmu/out/vehicle_status      pub 0  sub 1   ← 우리가 만든 죽은 구독
+                /fmu/out/vehicle_status_v4   pub 1  sub 1   ← PX4 가 실제 발행
+
+            그래서 **상대편이 실제로 붙어 있는지**를 센다. 방향이 반대다:
+                /fmu/out/*  PX4 가 발행 → 우리가 구독 → 발행자 수를 본다
+                /fmu/in/*   PX4 가 구독 → 우리가 발행 → 구독자 수를 본다
+            """
+            count = (self.count_publishers if base.startswith('/fmu/out/')
+                     else self.count_subscribers)
             k = len(base) + 2
-            cand = [n for n in names
-                    if n.startswith(base + '_v') and n[k:].isdigit()]
-            if not cand:
-                return base
-            out = max(cand, key=lambda n: int(n[k:]))
-            self.get_logger().info(f'  토픽 해석: {base} → {out}')
-            return out
+            cands = sorted((n for n in names
+                            if n.startswith(base + '_v') and n[k:].isdigit()),
+                           key=lambda n: -int(n[k:]))          # 높은 버전 우선
+            for c in [base] + cands:
+                if count(c) > 0:
+                    if c != base:
+                        self._remapped.append(f'{base} → {c}')
+                    return c
+            # 상대가 아직 안 붙었다 — 접미사 후보가 보이면 그쪽이 맞을 확률이 높다
+            if cands:
+                self._remapped.append(f'{base} → {cands[0]} (상대 미확인, 추정)')
+                return cands[0]
+            return base
         return resolve
 
     def __init__(self, bench=False, outdir='field_logs', suffix=None):
@@ -171,13 +216,15 @@ class OffboardSequenceNode(Node):
         self.pub_att = self.create_publisher(VehicleAttitudeSetpoint, self.t_att, qos)
         self.pub_cmd = self.create_publisher(VehicleCommand, R('/fmu/in/vehicle_command'), qos)
 
-        self.create_subscription(VehicleStatus, R('/fmu/out/vehicle_status'), self._cb_status, qos)
+        self.t_status = R('/fmu/out/vehicle_status')
+        self.create_subscription(VehicleStatus, self.t_status, self._cb_status, qos)
         self.create_subscription(VehicleAttitude, R('/fmu/out/vehicle_attitude'), self._cb_att, qos)
         # 위치/속도 소스 이중화 — 설치본에 따라 둘 중 하나만 노출돼 있다
         self.create_subscription(VehicleLocalPosition, R('/fmu/out/vehicle_local_position'), self._cb_lp, qos)
         self.create_subscription(VehicleOdometry, R('/fmu/out/vehicle_odometry'), self._cb_odom, qos)
 
         # 상태
+        self._t_start = time.time()
         self.nav_state = -1
         self.arming = -1
         self.lp = None
@@ -216,6 +263,10 @@ class OffboardSequenceNode(Node):
             f"        (Enter 는 폴백일 뿐입니다. 평소엔 누르지 마세요 — 수동비행 중\n"
             f"         setpoint 가 흘러 조종기와 충돌합니다.)\n"
             f"\n"
+            + (f"  토픽 해석(PX4 버전 접미사): {' , '.join(self._remapped)}\n"
+               if getattr(self, '_remapped', None) else
+               "  토픽 해석: 접미사 없음 (PX4 v1.15 형식)\n")
+            + f"  상태 토픽  : {self.t_status}   ← 이게 안 오면 오프보드 감지 불가\n"
             f"  감시할 토픽: ros2 topic hz {self.t_att if bench else self.t_traj}\n"
             f"  마커 로그: {self._csv_path}\n{'='*68}")
 
@@ -430,6 +481,16 @@ class OffboardSequenceNode(Node):
     # ── 메인 루프 ────────────────────────────────────────
     def _tick(self):
         self._keepalive_ocm()           # 전용 토픽이라 충돌 없음 — 항상 발행
+
+        # ★ 런타임 안전망: vehicle_status 가 안 오면 오프보드를 영영 감지 못 한다.
+        #   조용히 대기만 하다 "스위치가 안 먹네" 로 오해하게 되므로 크게 알린다.
+        if self.nav_state < 0 and time.time() - self._t_start > 5.0:
+            self.warn_once('nostatus',
+                           f'\n  ✗ {self.t_status} 를 5초간 한 번도 못 받았다.\n'
+                           f'    → 이 상태로는 오프보드로 전환해도 감지하지 못한다.\n'
+                           f'    확인:  ros2 topic list | grep /fmu/out/vehicle_status\n'
+                           f'    · _v<N> 이 붙은 이름이 보인다 → 스크립트를 재시작하면 잡힌다\n'
+                           f'    · 아무것도 없다 → agent 미기동 또는 ROS_DOMAIN_ID 불일치\n')
         # ★ bench 는 위치 추정이 필요 없다(자세 명령). lp 를 기다리면 실내에서
         #   영원히 아무것도 발행하지 못해 오프보드 진입 자체가 막힌다.
         if self.lp is None and not self.bench:
