@@ -63,20 +63,27 @@ git -C ~/PX4-Autopilot describe --tags --always
 
   (B) 버전이 다를 때 — 셋 중 하나
 
-    B-1. 같은 저장소에서 v1.15.4 를 꺼낸다 (다운로드 없음)
-         태그가 이미 로컬 히스토리에 있으므로 받을 게 없다.
-         기존 체크아웃도 건드리지 않는다.
+    B-1. 이미 빌드해둔 .px4 를 쓴다  ← 가장 간단 (빌드 불필요)
+         GPU 워크스테이션에 v1.15.4 + yaml 2줄로 빌드한 펌웨어가 있다:
+             ~/px4_fmu-v6c_v1.15.4_dds.px4        (1.8 MB, 2026-08-04)
+         .px4 는 아키텍처 무관한 펌웨어 이미지라 어느 PC 에서 만들든 같다.
+         USB 로 노트북에 옮기고 [2][3] 건너뛰어 [4] 플래시로 간다.
+
+    B-2. 같은 저장소에서 v1.15.4 를 꺼내 직접 빌드한다 (다운로드 없음)
+         태그가 이미 로컬 히스토리에 있으므로 새로 받을 게 없다.
+         기존 체크아웃(현재 버전)도 건드리지 않는다.
 
 cd ~/PX4-Autopilot && git worktree add ~/PX4-v1154 v1.15.4
 
 cd ~/PX4-v1154 && git submodule update --init --recursive
 
-         지우려면:  git worktree remove ~/PX4-v1154
+         이후 [2][3] 을 ~/PX4-v1154 경로로 수행.
+         ⚠ 서브모듈까지 받으면 약 1.1 GB 를 쓴다. 빌드가 끝나면 .px4 만
+           밖으로 빼고 지우는 편이 낫다:
 
-    B-2. GPU 워크스테이션에서 이미 빌드해둔 .px4 를 USB 로 옮긴다
-         (빌드 불필요 — [2][3] 건너뛰고 [4] 플래시로)
-             ~/PX4-v1154/build/px4_fmu-v6c_default/px4_fmu-v6c_default.px4
-         .px4 는 아키텍처 무관한 펌웨어 이미지라 어느 PC 에서 만들든 같다.
+cp ~/PX4-v1154/build/px4_fmu-v6c_default/px4_fmu-v6c_default.px4 ~/
+
+cd ~/PX4-Autopilot && git worktree remove --force ~/PX4-v1154 && git worktree prune
 
     B-3. 그냥 그 버전으로 빌드한다  ← 권하지 않음
          v1.16+ 는 토픽명에 _v<N> 을 붙이고(utilities.hpp:35),
