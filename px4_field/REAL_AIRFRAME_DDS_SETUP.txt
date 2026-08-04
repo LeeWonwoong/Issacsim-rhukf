@@ -5,12 +5,49 @@
 
 목적: 제어입력 u(추력·토크 setpoint)를 ROS2 토픽으로 받는다.
 
-  ★ 새로 다운로드할 것 없다. 이미 있는 PX4-Autopilot 에 yaml 만 추가하면 된다.
-    (단 [1] 에서 버전만 확인 — FC 와 같아야 한다)
+╔══════════════════════════════════════════════════════════════════════╗
+║  ★★ 결론: 빌드하지 말고 아래 펌웨어를 그냥 플래시하면 된다 ★★        ║
+║                                                                      ║
+║      px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4    (1.8 MB)      ║
+║      md5: 75f51a649ea6042facc968cd05aac68c                           ║
+║                                                                      ║
+║  이 저장소에 들어 있으므로 노트북에서 git pull 만 하면 받아진다.      ║
+║  USB 도 빌드도 필요 없다.  →  바로 [4] 플래시로 갈 것.               ║
+║                                                                      ║
+║  · 내용   = PX4 v1.15.4 + dds_topics.yaml 2줄 (아래 [0])             ║
+║  · 커밋   = 99c40407  ← FC 의 ver all git-hash 와 정확히 동일         ║
+║  · 보드   = board_id 56 = FMU-v6C                                    ║
+║  · 노트북 파일을 하나도 안 건드린다 (QGC 가 파일 하나를 읽을 뿐)      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+  [1]~[3] 은 직접 빌드하고 싶을 때만 본다.
 
   ※ 급하지 않다. 계수 추출(F1/F2/F3)은 ulog 경로라
     (fit_from_ulog.py:150-155, 기본 로깅 50Hz logged_topics.cpp:238-239)
     플래시 전에도 실외 비행은 그대로 가능하다.
+
+  ※ 도메인 ID 는 0 을 유지한다(2026-08-04 결정). FC 파라미터
+    UXRCE_DDS_DOM_ID 도 0 이므로 건드릴 것이 없다.
+
+
+────────────────────────────────────────────────────────────────────────
+[T]  노트북에서 이 폴더 받기
+────────────────────────────────────────────────────────────────────────
+  이미 저장소가 있으면:
+
+cd <저장소경로> && git pull
+
+  없으면:
+
+git clone git@github.com:LeeWonwoong/Issacsim-rhukf.git
+
+  펌웨어 무결성 확인:
+
+md5sum px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4
+
+    → 75f51a649ea6042facc968cd05aac68c  이면 온전하다.
+
+  git 을 못 쓰는 상황이면 USB 로 그 파일 하나만 옮겨도 된다.
 
 
 ────────────────────────────────────────────────────────────────────────
@@ -159,14 +196,26 @@ grep -c "ORB_ID(vehicle_thrust_setpoint)" ~/PX4-Autopilot/build/px4_fmu-v6c_defa
        2. QGC → Vehicle Setup → Firmware
        3. USB 를 뽑았다 다시 꽂으라는 안내가 뜨면 그렇게 한다
        4. 우측 패널 Advanced settings → Custom firmware file...
-       5. px4_fmu-v6c_default.px4 선택 → 완료 후 재부팅
+       5. 아래 파일 선택 → 완료 후 재부팅
+
+           px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4
+
+         (직접 빌드했다면 build/px4_fmu-v6c_default/px4_fmu-v6c_default.px4)
 
   ③ 파라미터 확인 — 백업과 대조
-       UXRCE_DDS_DOM_ID / MPC_THR_HOVER / COM_RC_IN_MODE / 캘리브레이션
+       MPC_THR_HOVER / COM_RC_IN_MODE / UXRCE_DDS_DOM_ID / 캘리브레이션
+       같은 v1.15.4 라 전부 유지되는 것이 정상이다.
 
-  ⚠ 도메인 ID 를 6 으로 쓰기로 했다면 여기서 같이:
-       QGC → Parameters → UXRCE_DDS_DOM_ID = 6 → 저장 → FC 재부팅
-     이걸 안 하고 터미널만 6 이면 /fmu/ 토픽이 하나도 안 뜬다.
+  ④ 버전 확인 — QGC → Analyze → MAVLink Console
+
+ver all
+
+       PX4 version 1.15.4 / git-hash 99c40407... 로 플래시 전과 똑같이
+       나오는 것이 정상이다. yaml 은 git 해시에 들어가지 않는다.
+
+  ※ 도메인 ID 는 0 유지 — FC 파라미터도 그대로 두면 된다.
+    (0 이 아닌 값을 쓰려면 터미널 · MicroXRCEAgent · UXRCE_DDS_DOM_ID
+     세 곳을 동시에 바꾸고 FC 를 재부팅해야 한다)
 
 
 ────────────────────────────────────────────────────────────────────────

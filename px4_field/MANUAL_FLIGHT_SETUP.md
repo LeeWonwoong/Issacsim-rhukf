@@ -163,12 +163,12 @@ ROS2 토픽이 반드시 필요한 시점은 **젯슨에서 UKF 를 실시간으
 **파라미터도 기체 세팅도 그대로 유지된다.**
 
 
-③ 3줄 새로 추가
+③ 3줄 새로 추가   (도메인은 0 유지 — 2026-08-04 결정)
 
 cat >> ~/.bashrc <<'EOF'
 
 # ROS2 / PX4
-export ROS_DOMAIN_ID=6
+export ROS_DOMAIN_ID=0
 source /opt/ros/humble/setup.bash
 source ~/colcon_ws/install/setup.bash
 EOF
