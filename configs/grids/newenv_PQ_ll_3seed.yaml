@@ -1,0 +1,18 @@
+# 새 무대 · 확정 레짐(c0.6 · R0.03 · 고-K 결합 τ0.02·ui4·spas) 안에서 P(pΔ)·Q(q) 조절, 3시드
+# 근거(newenv_Rregime a_sRll_R0.03, 3시드): loss 최고@ep2–5 → 후반 0.23–0.31배(s43·s44 ρ −0.96/−0.98), cost 상승,
+#   후반 공격 F1 0.61/0.69/0.67 (Adam c0.6 0.66/0.49/0.73), Q/V 1.01–1.02
+# 주의: pΔ·q 는 K↑ 와 함께 시그마평균 편향으로 Qmax 팽창(qmax≈9.7+38·P) → Q/V ≤ 1.05 감시
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/newenv_PQ_ll
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sP:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03}
+    axes: {agent.swirl.p_delta: [0.003, 0.03]}
+  sQ:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03}
+    axes: {agent.swirl.q: [1.0e-4, 1.0e-2]}
