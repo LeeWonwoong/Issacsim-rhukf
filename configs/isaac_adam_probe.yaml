@@ -1,0 +1,6 @@
+# configs/isaac_adam_probe.yaml — 새 무대가 '되는지' 빠른 확인 + 실제 온라인 RL 분포 수집: Isaac 에서 Adam 학습, 스텝 전부 기록
+#   python3 train.py --config configs/isaac_adam_probe.yaml --config configs/overlays/isaac.yaml
+extends: newenv.yaml
+run: {name: isaac_adam_probe, outdir: results/claudecodefortest/isaac_adam_probe, seed: 42, episodes: 150, ep_steps: 300}
+agent: {type: adam}
+log: {steps: true}
