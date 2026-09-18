@@ -293,6 +293,7 @@ class Config:
     decoupling_mode: str = 'fv'            # 현재 FV만 지원
     measurement_mode: str = 'q_target'     # z = r + γ^n·Q_target
     anchor_type: str = 'target'            # error-state θ_anchor
+    act_net: str = 'active'    # ★09-19 SWIRL 행동망: active = θ_T+μ(이번 학습 호출 보정, 기존) | target = 누적 θ_T (호출마다 흔들리는 보정 없이 행동)
     ddqn_argmax: str = 'online_moving'
     h0_online_moving_init: str = 'spas'    # RHUKF 고-K(2026-07-14): prev_est→spas (h0 argmax만 시그마앙상블, 고T_Var 강건)
     h0_prior_source: str = 'target'

@@ -147,7 +147,8 @@ class OnlineRHUKFAgent:
             s_t = torch.as_tensor(state, dtype=DTYPE, device=self.device)
             if self.normalizer:
                 s_t = self.normalizer.normalize(s_t)
-            q = forward_single(self.theta.squeeze(), self.info, s_t)
+            th = self.theta_target if self.cfg.act_net == 'target' else self.theta   # ★09-19 행동망: active(θ_T+이번 호출 보정, 기본) | target(누적 θ_T)
+            q = forward_single(th.squeeze(), self.info, s_t)
             return q.squeeze().argmax().item()
 
     # ═════════════════════════════════════════════════════════
