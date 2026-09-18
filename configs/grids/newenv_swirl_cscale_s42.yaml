@@ -1,0 +1,38 @@
+# 새 무대 · 보상 배율 c ∈ {2,5,10} (사용자 제안) + CP/LL 아티팩트 원칙 대조 (시드 42)
+# 코드 근거(rl/rhukf_core.py rhukf_step_fv_error): K = P_δz·(P_zz_σ + R_eff)⁻¹, P_zz_σ ∝ c² (Q 스케일), Huber 는 원시 잔차 |r|/huber_c
+#   → huber 가 안 걸리면 (c, R) ≈ (0.6, R·0.36/c²): c↑ = R↓ = K↑ 축. c 2/5/10 @R1 ≈ c0.6 에서 R 0.09/0.014/0.0036
+# 아티팩트: ① Q~O(10) 불변량(c 2/5/10 → Q≈33/83/167 로 이탈) ③ 고-K 는 느린 타깃(τ0.02·ui4) ④ spas ⑤ huber≈잔차 스케일·eps_decay≈난이도
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/newenv_swirl_cscale
+seeds: [42]
+stages:
+  a: {}
+learners:
+  sCcp:        # c 만 키움 (CP 결합 τ0.005·ui1·huber5 그대로)
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda}
+    axes: {reward.scale: [2.0, 5.0, 10.0]}
+  sCll2:       # 고-K 결합(LL): τ0.02·ui4·spas, huber ∝ Q 스케일 (5·c/0.6)
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, reward.scale: 2.0, agent.swirl.huber_c: 17.0}
+    axes: {agent.swirl.R: [1.0]}
+  sCll5:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, reward.scale: 5.0, agent.swirl.huber_c: 42.0}
+    axes: {agent.swirl.R: [1.0]}
+  sCll10:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, reward.scale: 10.0, agent.swirl.huber_c: 83.0}
+    axes: {agent.swirl.R: [1.0]}
+  sEps:        # ⑤ eps_decay ≈ 난이도 (LL 15000) — 두 학습기 공통 설정
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda}
+    axes: {agent.eps.decay: [15000]}
+  adamC:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes: {reward.scale: [2.0, 5.0, 10.0]}
+  adamEps:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes: {agent.eps.decay: [15000]}
