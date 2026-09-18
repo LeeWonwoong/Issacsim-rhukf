@@ -35,7 +35,7 @@ def main():
     for i, spec in enumerate(sys.argv[2:]):
         name, pat = spec.rsplit('=', 1)
         C, L, F = [], [], []
-        for d in sorted(glob.glob(pat)):
+        for d in sorted(sum((glob.glob(p) for p in pat.split(',')), [])):
             try:
                 H = json.load(open(d + '/hist.json'))['hist']
             except FileNotFoundError:
