@@ -65,7 +65,11 @@ def main():
     base_sh = (0.6, 0.97, 128, 50000, 3, 4000, 0.1, None, None)
     base_sw = (0.03, 0.01, 0.001, 5, 5.0, 0.02, 4, 'spas', None)
     G = defaultdict(list)
-    for r in runs: G[(r['typ'], r['sh'], r['sw'])].append(r)
+    seen = set()
+    for r in runs:                                     # 같은 설정·같은 시드 중복(결정론적 재실행)은 한 번만
+        k = (r['typ'], r['sh'], r['sw'], r['seed'])
+        if k in seen: continue
+        seen.add(k); G[(r['typ'], r['sh'], r['sw'])].append(r)
     adam = {(r['sh'], r['seed']): r for r in runs if r['typ'] == 'adam'}
     rows = []
     for (typ, sh, sw), rs in G.items():
