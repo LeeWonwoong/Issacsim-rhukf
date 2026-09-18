@@ -1,0 +1,34 @@
+# 밤샘 1단계 · 공유 노브(탐험·버퍼) 한 축씩, SWIRL·Adam 둘 다, 3시드
+# 기준 레짐(SWIRL): c0.6 · R0.03 · 고-K 결합 τ0.02·ui4·spas · pΔ0.01 · q1e-3 (newenv_Rregime/a_sRll_R0.03_s4x)
+# 기준(공통): eps decay 4000 · hover_p 0.1 · buffer 50000 · εz 끔  (Adam 기준 = newenv_Rregime/a_adam_scale0.6_s4x)
+# 축: eps decay {10000, 20000} · buffer {10000, 25000, 100000} · εz-greedy(μ2·상한30) × decay {4000, 10000}
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night1
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sEps:
+    device: gpu
+    set: &S {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03}
+    axes: {agent.eps.decay: [10000, 20000]}
+  sBuf:
+    device: gpu
+    set: *S
+    axes: {agent.buffer: [10000, 25000, 100000]}
+  sZ:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.eps.z_mu: 2.0, agent.eps.z_cap: 30}
+    axes: {agent.eps.decay: [4000, 10000]}
+  aEps:
+    device: cpu
+    set: &A {agent.type: adam, run.device: cpu}
+    axes: {agent.eps.decay: [10000, 20000]}
+  aBuf:
+    device: cpu
+    set: *A
+    axes: {agent.buffer: [10000, 25000, 100000]}
+  aZ:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.eps.z_mu: 2.0, agent.eps.z_cap: 30}
+    axes: {agent.eps.decay: [4000, 10000]}
