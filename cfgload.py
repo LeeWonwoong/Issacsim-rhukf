@@ -41,7 +41,7 @@ _RUN_KEYS = {'name', 'seed', 'episodes', 'ep_steps', 'outdir', 'device'}
 _LOG_KEYS = {'probe_every', 'probe_n'}
 _ENV_KEYS = {'kind', 'surrogate', 'isaac'}
 _ISAAC_KEYS = {'headless', 'speed', 'sim_env', 'launcher', 'compile', 'knobs', 'cfg'}
-_TOP = {'extends', 'run', 'env', 'scenario', 'obs', 'reward', 'agent', 'log'}
+_TOP = {'extends', 'run', 'env', 'scenario', 'obs', 'reward', 'agent', 'log', 'capture'}
 
 
 def _deep_merge(a: dict, b: dict) -> dict:
@@ -109,6 +109,8 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     _check(d.get('log'), _LOG_KEYS, 'log'); log.update(d.get('log') or {})
 
     obs = _build_dc(ObsSpec, d.get('obs'), 'obs')
+    from env.capture import CaptureConfig
+    capture = _build_dc(CaptureConfig, d.get('capture'), 'capture')
     reward = _build_dc(RewardConfig, d.get('reward'), 'reward')
 
     sc = dict(d.get('scenario') or {})
@@ -194,7 +196,9 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
         setattr(cfg, k, tuple(v) if isinstance(cur, tuple) and isinstance(v, list) else v)
 
     resolved = _deep_merge(d, {'run': run, 'log': log, 'env': {'kind': kind, 'isaac': isaac}})
-    return SimpleNamespace(cfg=cfg, obs=obs, reward=reward, scenario=scenario, surrogate=surrogate,
+    if capture.enabled and kind != 'isaac':
+        raise ValueError('capture.enabled 는 env.kind=isaac 에서만 (surrogate 캡처는 의미 없음)')
+    return SimpleNamespace(cfg=cfg, obs=obs, reward=reward, scenario=scenario, surrogate=surrogate, capture=capture,
                            run=run, log=log, isaac=isaac, env_kind=kind, agent_type=atype, resolved=resolved)
 
 

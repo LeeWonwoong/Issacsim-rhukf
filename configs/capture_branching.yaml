@@ -1,0 +1,18 @@
+# configs/capture_branching.yaml — 설계 검증 Step 1: Isaac 에서 burst vs persistent 관측 분기 캡처 (학습 없음)
+#   실행: python3 train.py --config configs/capture_branching.yaml --config configs/overlays/isaac.yaml
+#   분석: python3 scripts/analyze_branching.py results/claudecodefortest/capture_branching
+#   짝 = (d0, 성장률, 온셋, 틸트 방향, 패턴, 풍속) 공유 · 형태만 burst/persistent. 등급 3 × 12짝 × 2 + 무공격 12 = 84 에피소드,
+#   에피소드 길이 = 온셋 60 + 40 스텝 (속도 2.5 에서 에피소드당 ≈ 4 s + 리셋).
+extends: newenv.yaml
+run: {name: capture_branching, outdir: results/claudecodefortest/capture_branching, seed: 42}
+capture:
+  enabled: true
+  policy: track            # 무대응: 관측이 자연 전개되는 모습 (강 persistent 는 추락할 수 있음 → 분기 구간은 그 전에 기록됨)
+  onset: 60
+  post: 40
+  pairs_per_grade: 12
+  n_none: 12
+  burst_dur: 6
+  grow_steps: 4
+  wind_range: [0.0, 6.0]
+  seed: 7

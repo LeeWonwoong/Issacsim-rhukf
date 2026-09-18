@@ -48,6 +48,7 @@ from env.ukf_filter import DynamicsUKF, compute_nis_scaled, load_calibration, to
 from env.reward import RewardTracker
 from env.observation import ObsBuilder, ObsSpec
 from env.scenario import ScenarioConfig, sample_isaac_scenario
+from env.capture import build_capture_list, capture_action
 from rl.agent import OnlineRHUKFAgent
 
 
@@ -246,6 +247,15 @@ class OnlineRLNode(Node):
         self.window_buffer = self.obs.buf          # 구 참조(clear) 호환 — 같은 deque
         self.rtrack = RewardTracker(cfg.reward)
         self.scen_cfg = exp.scenario if exp is not None else ScenarioConfig()
+        # ★09-18 캡처 모드(학습 없음·스크립트 정책·스텝 기록): burst/persistent 분기 검증과 새 풀 수집용
+        self.capture = exp.capture if (exp is not None and exp.capture.enabled) else None
+        self._cap_list = []; self._cap_rows = []
+        if self.capture is not None:
+            self._cap_list = build_capture_list(self.capture, self.scen_cfg.attack, cfg.attack_tq_authority_nm)
+            cfg.max_episodes = len(self._cap_list)
+            cfg.episode_max_steps = self.capture.onset + self.capture.post
+            cfg.eval_interval = 10 ** 9                    # 평가 라운드 끔
+            os.makedirs(os.path.join(cfg.outdir, 'capture'), exist_ok=True)
 
         # ── Sensor state ──
         self.cur_accel = np.zeros(3); self.cur_gyro = np.zeros(3)
@@ -1028,7 +1038,7 @@ class OnlineRLNode(Node):
             self.episode += 1
             if self.episode > self.cfg.max_episodes:
                 self._finish_training(); return
-            self.scenario = self._sample_scenario(self.episode)
+            self.scenario = self._capture_scenario(self.episode) if self.capture is not None else self._sample_scenario(self.episode)
             label = f'TRAIN Ep {self.episode}/{self.cfg.max_episodes}'
 
         atk = self.scenario
@@ -1064,7 +1074,7 @@ class OnlineRLNode(Node):
         """★09-18 공용 샘플러(env/scenario.py). 난수 = (seed, episode) → 학습기와 무관하게 같은 시나리오(짝 비교).
         공격 세기는 스텝별 δ(t)(plan) 로 주입하고, attack_bursts 는 활성 구간(로그·구 코드 호환)만 담는다."""
         rng = np.random.default_rng([int(self.cfg.seed) & 0xFFFFFFFF, int(episode)])
-        sc = sample_isaac_scenario(rng, self.scen_cfg, self.cfg.episode_max_steps)
+        sc = sample_isaac_scenario(rng, self.scen_cfg, self.cfg.episode_max_steps, episode=int(episode) - 1)   # Isaac 에피소드는 1 기준
         plan = sc['plan']
         on = np.flatnonzero(plan.active); segs = []
         if len(on):
@@ -1076,6 +1086,38 @@ class OnlineRLNode(Node):
                     attack_start_step=(segs[0][0] if segs else 0), attack_end_step=(segs[-1][1] if segs else 99999),
                     disturbance_type=sc['disturbance_type'], wind_speed=sc['wind_speed'],
                     bias_scale=plan.dmax, attack_direction=plan.direction, attack_class=plan.cls, plan=plan)
+
+    def _capture_scenario(self, episode):
+        """캡처 목록의 episode 번째(1 기준) 시나리오를 노드 시나리오 dict 로."""
+        c = self._cap_list[int(episode) - 1]; plan = c['plan']
+        on = np.flatnonzero(plan.active)
+        segs = [(int(on[0]), int(on[-1]) + 1)] if len(on) else []
+        return dict(pattern=c['pattern'], attack_type=('tilt' if plan.has_attack else 'none'),
+                    attack_intensity=(1.0 if plan.has_attack else 0.0), attack_bursts=segs,
+                    attack_start_step=(segs[0][0] if segs else 0), attack_end_step=(segs[-1][1] if segs else 99999),
+                    disturbance_type=(self.scen_cfg.wind.kind if c['wind_speed'] > 0 else 'none'), wind_speed=c['wind_speed'],
+                    bias_scale=plan.dmax, attack_direction=plan.direction, attack_class=plan.cls, plan=plan,
+                    capture_meta=dict(pair=c['pair'], grade=c['grade'], kind=c['kind'], d0=c['d0'], grow=c['grow']))
+
+    def _capture_log(self, state, nis_v_raw, nis_g_raw, done, term_reason):
+        plan = self.scenario.get('plan'); k = min(self.step_count, plan.n - 1) if plan is not None else 0
+        self._cap_rows.append([self.step_count, float(plan.delta[k]) if plan is not None else 0.0, int(self.attack_active_flag),
+                               int(self.prev_action if self.prev_action is not None else 0), float(nis_v_raw), float(nis_g_raw),
+                               *self.obs.last_scaled, float(-self.cur_pos[2]), float(self.cur_euler[0]), float(self.cur_euler[1]),
+                               int(done), *[float(x) for x in state]])
+
+    def _capture_flush(self, reason):
+        if self.capture is None or not self._cap_rows:
+            self._cap_rows = []; return
+        m = self.scenario.get('capture_meta', {})
+        cols = ['step', 'delta', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done'] + \
+               [f's{i}' for i in range(self.obs_spec.dim)]
+        np.savez(os.path.join(self.cfg.outdir, 'capture', f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
+                 cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', ''), kind=m.get('kind', ''),
+                 d0=m.get('d0', 0.0), grow=m.get('grow', 1.0), pattern=self.scenario.get('pattern', ''),
+                 wind_speed=float(self.scenario.get('wind_speed', 0.0)), direction=float(self.scenario.get('attack_direction') or 0.0),
+                 onset=self.capture.onset, reason=str(reason), delta_plan=self.scenario['plan'].delta, format='raw')
+        self._cap_rows = []
 
     def _plan_bias(self, step):
         """plan 이 있으면 이 스텝의 (공격 여부, roll_Nm, pitch_Nm). 없으면 None(구 버스트 방식)."""
@@ -1636,9 +1678,12 @@ class OnlineRLNode(Node):
         # (추락 벌점은 RewardTracker 가 terminated 로 처리 — 09-18)
         # ★2026-09-11 추락 벌점 없음(사용자 확정): 절벽 = terminated 부트스트랩 절단만. (잠시 넣었던 track-only −5 규칙 제거)
 
+        if self.capture is not None:                     # ★09-18 캡처: 기록만, 학습 없음
+            self._capture_log(state, nis_v_raw, nis_g_raw, done, term_reason)
+
         # ── Transition 저장 + 비동기 학습 ──
         if self.prev_state is not None and self.prev_action is not None:
-            if not self.eval_mode:
+            if not self.eval_mode and self.capture is None:
                 self.agent.push(self.prev_state, self.prev_action, reward, state, terminated)
                 if not self._is_learning_bg:
                     self._is_learning_bg = True
@@ -1651,6 +1696,8 @@ class OnlineRLNode(Node):
             with self._learn_lock:
                 action = self.agent.act(state, eps=0.0)
             eps = 0.0
+        elif self.capture is not None:
+            eps = 0.0; action = capture_action(self.capture, self.step_count)
         else:
             eps = self.agent.get_epsilon()
             with self._learn_lock:
@@ -1867,6 +1914,7 @@ class OnlineRLNode(Node):
     # ══════════════════════════════════════════════════════════
     def _end_episode(self, reason):
         self._send_attack_cmd(False); self.attack_active_flag = False
+        self._capture_flush(reason)
         self._flush_zu()
         self._flush_sysid()
 
@@ -2344,6 +2392,9 @@ def run_isaac(exp, log=print):
     iz = exp.isaac
     cfg.headless = bool(iz['headless']); cfg.sim_speed_factor = float(iz['speed'])
     cfg.isaac_sim_env = dict(iz.get('sim_env') or {}); cfg.use_compile = bool(iz.get('compile', True))
+    for _k in ('SENSOR_NOISE_SCALE', 'SPEED_SCALE'):          # 노드·run_sim 둘 다 읽는 키 → 노브에만 적어도 양쪽에 같은 값
+        if knob(_k) is not None and _k not in cfg.isaac_sim_env:
+            cfg.isaac_sim_env[_k] = knob(_k)
     os.makedirs(cfg.outdir, exist_ok=True)
 
     import random as _random

@@ -154,7 +154,7 @@ class SurrogateEnv:
         self.ep_idx += 1
         n, rng, cc = self.ep_steps, self.rng, self.cfg.crash
         self.t = 0; self.crashed = False
-        w = sample_wind(rng, self.wcfg) if ws is None else ws
+        w = sample_wind(rng, self.wcfg, self.ep_idx) if ws is None else ws   # ep_idx: 0 기준(축 B 스케줄)
         av = self.Q['_tiers']
         wi = int(w)
         if wi > 0 and av: wi = min(av, key=lambda x: abs(x - wi))

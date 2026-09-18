@@ -1,0 +1,25 @@
+# configs/overlays/isaac.yaml — Isaac 덮어쓰기 (extends 없음: 실험 설정 뒤에 --config 로 덧붙인다)
+#   구 isaac_tonight.sh(09-15) + frozen_v3.env 레시피를 옮긴 것. 바람은 새 설계대로 에피소드 전체 균등 U(0,6).
+env:
+  kind: isaac
+  isaac:
+    headless: true
+    speed: 2.5
+    sim_env: {WIND_MOMENT_ARM: 0.05}          # run_sim 플랜트 (MOTOR_TAU 0.014·THR_MDL_FAC 0.78 은 run_sim 기본값)
+    knobs:
+      SPEED_SCALE: 1.0
+      SENSOR_NOISE_SCALE: 1.0
+      SPEED_MOD_AMP: 0
+      ACCEL_FF: 1
+      COM_BIAS_STD: 0.05
+      FLIP_TERMINAL: 0
+      HOVER_DRIFT_SYM: 1
+      ATK_COND_DONE: 50
+      UKF_Q_GYRO: 2.0e-3
+      UKF_R_GYRO: 0.2
+      UKF_Q_EULER: 2.0e-3
+      UKF_Q_VEL: 1.0e-3
+      UKF_R_VEL: 0.1
+      FAILSAFE_PARAMS: "MC_RR_INT_LIM=1.0,MC_PR_INT_LIM=1.0,MC_ROLLRATE_I=0.8,MC_PITCHRATE_I=0.8"
+scenario:
+  wind: {mode: uniform, range: [0.0, 6.0]}
