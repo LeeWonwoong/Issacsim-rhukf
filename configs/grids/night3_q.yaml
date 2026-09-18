@@ -1,0 +1,12 @@
+# 밤샘 3단계 · q↓ = FPR↓ 확인(PQ: q1e-4 → F1 0.681±0.022 · FPR 0.0088 · Δ짝 +0.056) → q 더 낮게 × pΔ, 3시드
+#  원리: q 는 호라이즌에 누적돼 P(시그마 폭·K 의 무작위 방향)를 키움 → 호출마다 보정이 흔들려 평시 산발 hover. pΔ 는 K 레벨.
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night3
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sQ:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03}
+    axes: {agent.swirl.q: [1.0e-5, 0.0], agent.swirl.p_delta: [0.01, 0.03]}
