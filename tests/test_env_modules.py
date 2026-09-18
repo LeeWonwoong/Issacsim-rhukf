@@ -85,14 +85,6 @@ def test_multi_event_profile_and_grow_range():
     assert ks == {1, 2, 3} and gss == {3, 4, 5, 6}
 
 
-def test_fn_escalation_after_branch():
-    rc = RewardConfig(mode='cost', c_d=0.3, bonus=0.0, alive=0.0, esc_after=3, esc_tau=5.0, esc_max=4.0)
-    tr = RewardTracker(rc)
-    got = [round(tr.step(0, True, d), 3) for d in range(25)]
-    assert got[:4] == [-0.3] * 4                                  # prefix(d ≤ 3) 는 상수 — 애매 구간 보존
-    assert got[8] == round(-0.3 * 2.0, 3) and got[24] == round(-0.3 * 4.0, 3)   # d=8 → ×2, 이후 ×4 에서 포화
-
-
 def test_window_policy_per_event():
     from env.capture import make_policy
     from env.attack import _empty

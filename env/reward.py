@@ -7,11 +7,11 @@
   label4 : 4항 per-step 라벨 (2026-08-19 v3 ~ 09-18 격자 기준)
              평시 track +r_tn / hover r_fp,  공격 hover +r_tp / track FN(d)
              FN(d) = (fn_base + fn_per_step·min(d, delay_cap)) × (fn_onset_mult if 1≤d≤fn_onset_window)
-  cost   : 탐지 사건형 (2026-09-18 논의) — 오경보 비용 vs 탐지 지연 비용의 경쟁, TP 반복 보상 없음
-             평시 track 0 / hover −c_fa,  공격 track −c_d·g(d) / 버스트 첫 hover +bonus / hover 유지 0
-             g(d) = 분기 뒤 누적 가중(esc_*; 기본 끔 = 1)
-             + alive(모든 스텝 공통 상수: 정책 불변, 종료 시에만 효과 = 추락 벌점 alive/(1−γ) 와 동치)
-             버스트 첫 hover: 버스트 중 처음 hover 가 켜진 스텝(이미 hover 중에 온셋이어도 지급), 버스트당 1회.
+  cost   : 탐지기형 (2026-09-18 확정) — 오경보 비용 · 탐지 지연 비용 · 탐지 사건 보상
+             r = alive − c_fa·1{평시 hover} − c_d·1{공격 중 track} + bonus·1{사건별 첫 hover}
+             · 지연 비용은 놓친 스텝마다 상수 → 누적 비용 = c_d × 탐지 지연 (고전 QCD 지연 비용)
+             · bonus: 사건(버스트)마다 처음 hover 가 켜진 스텝 1회(이미 hover 중에 온셋이어도 지급) — 모든 공격을 잡는 감지기
+             · alive: 모든 스텝 공통 상수(정책 불변, 종료 시에만 효과 = 추락 비용)
 공통: 추락(terminated)이면 −terminal_penalty 추가.  마지막에 전체 × scale.
 """
 from __future__ import annotations
@@ -40,11 +40,6 @@ class RewardConfig:
     c_d: float = 0.3
     bonus: float = 1.0
     alive: float = 0.0
-    # 분기 뒤 누적 지연 비용: r_FN = −c_d·g(d),  g(d) = 1 (d ≤ esc_after),  min(1 + (d − esc_after)/esc_tau, esc_max) (이후)
-    #   d = 이번 공격 사건 온셋부터 경과 스텝. esc_tau = 0 이면 끔(상수 c_d).
-    esc_after: int = 3
-    esc_tau: float = 0.0
-    esc_max: float = 4.0
 
     def __post_init__(self):
         if self.mode not in ('label4', 'cost'):
@@ -101,8 +96,7 @@ class RewardTracker:
                 if prev_action == 1:
                     r -= rc.c_fa
             elif prev_action == 0:
-                g = 1.0 if rc.esc_tau <= 0 else min(1.0 + max(0, attack_delay - rc.esc_after) / rc.esc_tau, rc.esc_max)
-                r -= rc.c_d * g
+                r -= rc.c_d
             elif not self._paid:
                 r += rc.bonus
                 self._paid = True

@@ -22,16 +22,13 @@ scenario:
       - {name: trans_persist,  weight: 0.175, delta: [0.35, 0.60], kind: persistent, dur: [15, 30], grow: [1.3, 1.5], grow_steps: [3, 6]}
       - {name: strong_burst,   weight: 0.15,  delta: [0.72, 0.84], kind: burst,      dur: [3, 6]}
       - {name: strong_persist, weight: 0.15,  delta: [0.72, 0.84], kind: persistent, dur: [25, 40]}
-reward:
+reward:              # 탐지기형 (09-18 확정): 오경보 · 지연 · 탐지 사건
   mode: cost
   scale: 0.6          # alive 0.5 → V ≈ 0.6·0.5/(1−0.97) = 10 (CP 레짐 O(10))
   alive: 0.5
-  c_fa: 0.7
-  c_d: 0.3
-  bonus: 0.0          # ★09-18 권장(확인 대기): 보너스 없음 — 탐지 가치는 '앞으로 쌓일 비용 회피'로만(부트스트랩)
-  esc_after: 3        # ★09-18 권장(확인 대기): 분기 뒤 누적  r_FN = −c_d·min(1 + (d−3)⁺/5, 4)
-  esc_tau: 5.0
-  esc_max: 4.0
+  c_fa: 0.7           # 평시 hover (오경보)
+  c_d: 0.3            # 공격 중 track, 스텝마다 상수 → 누적 = c_d × 탐지 지연
+  bonus: 1.0          # 사건마다 첫 hover 1회 (burst 도 공격 — 잡는다)
   terminal_penalty: 0.0
 agent:
   gamma: 0.97

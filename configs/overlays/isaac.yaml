@@ -6,6 +6,7 @@ env:
     headless: true
     speed: 2.5
     sim_env: {WIND_MOMENT_ARM: 0.05}          # run_sim 플랜트 (MOTOR_TAU 0.014·THR_MDL_FAC 0.78 은 run_sim 기본값)
+    cfg: {eval_interval: 1000000}            # 구 평가 라운드(구 공격 형식) 끔 — 새 무대 성능은 스텝 기록·지표로
     knobs:
       SPEED_SCALE: 1.0
       SENSOR_NOISE_SCALE: 1.0
