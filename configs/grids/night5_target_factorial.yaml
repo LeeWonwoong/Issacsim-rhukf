@@ -1,0 +1,16 @@
+# 밤샘 5단계 · 새 기준 = act=target + batch 256 (F1 0.766±0.032 · FPR 0.0066 · cost/c −0.38 vs Adam B256 0.665 · −1.09)
+#  요인: q {1e-4, 1e-3} × buffer {1e4, 5e4} × eps decay {4000, 1e4} — SWIRL 3시드, 공유 노브(buffer·eps·batch) Adam 짝
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night5
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sT:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.q: [1.0e-4, 1.0e-3], agent.buffer: [10000, 50000], agent.eps.decay: [4000, 10000]}
+  aT:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256}
+    axes: {agent.buffer: [10000, 50000], agent.eps.decay: [4000, 10000]}
