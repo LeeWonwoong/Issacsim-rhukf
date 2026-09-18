@@ -1,0 +1,9 @@
+# 새 무대 첫 판독 (surrogate k-NN 풀 v0): SWIRL(CP 레짐) vs Adam(표준) × 시드 3, 200 에피소드, CPU
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/newenv_first
+seeds: [42, 43, 44]
+stages:
+  a: {run.device: cpu}
+learners:
+  swirl: {device: cpu, set: {agent.type: swirl}}
+  adam:  {device: cpu, set: {agent.type: adam}}

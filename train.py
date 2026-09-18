@@ -90,7 +90,7 @@ def run_surrogate(exp, log=print):
         genv.reset(); ob.reset(); tracker.reset()
         prev_s = None; prev_a = 0; dw_left = 0
         tp = fp = fn = tn = 0; wtp = wfn = stp = sfn = 0
-        epr = 0.0; losses = []; qs = []; tv = []; innov = []; adapt = []; nisf = []; flip = []
+        epr = 0.0; losses = []; qs = []; tv = []; innov = []; adapt = []; nisf = []; flip = []; n_r = 0; by_cls = {}
         det_delay = None; t = 0
         for t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
@@ -100,7 +100,10 @@ def run_surrogate(exp, log=print):
                 continue
             adly = genv.attack_delay()
             r = tracker.step(prev_a, atk, adly, terminated=genv.crashed)
+            n_r += 1
             if atk:
+                _c = genv.plan.cls_at(max(genv.t - (1 if genv.knn else 0), 0)); _b = by_cls.setdefault(_c, [0, 0])
+                _b[0 if prev_a == 1 else 1] += 1                       # 그룹별 [TP, FN]
                 weak = float(genv.plan.delta[genv.t]) < 0.35
                 if prev_a == 1:
                     tp += 1; wtp += weak; stp += (not weak)
@@ -140,6 +143,8 @@ def run_surrogate(exp, log=print):
                    dmax=genv.plan.dmax, cls=genv.plan.cls, n_events=len(genv.plan.events) or int(genv.plan.has_attack), ws=genv.ws, n_upd=len(innov), innov=mean(innov), adapt=mean(adapt),
                    nisf=mean(nisf), aflip=mean(flip), kgain=float(getattr(agent, '_last_kgain', 0.0) or 0.0),
                    pmax=float(getattr(agent, '_last_pmax', 0.0) or 0.0),
+                   reward_cost=epr - exp.reward.scale * exp.reward.alive * n_r,     # 생존 보상 뺀 부분(오경보·지연·탐지)
+                   rec_by_cls={k: (v[0] / (v[0] + v[1]) if v[0] + v[1] else None) for k, v in by_cls.items()},
                    wrec=(wtp / (wtp + wfn) if wtp + wfn else float('nan')), srec=(stp / (stp + sfn) if stp + sfn else float('nan')),
                    sec=time.time() - t0)
         if pe > 0 and ep % pe == 0:
