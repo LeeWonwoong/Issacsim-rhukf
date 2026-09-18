@@ -1,0 +1,19 @@
+# 밤샘 8단계 · 최종 레짐(act=target·B256·τ0.02) 위에서: εz-greedy 재비교(SWIRL·Adam, 무대 B) + R 민감도 {0.01, 0.1}, 3시드
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night8
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sZ:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256, agent.eps.z_cap: 30}
+    axes: {agent.eps.z_mu: [2.0]}
+  sR:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.R: [0.01, 0.1]}
+  aZ:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256, agent.eps.z_cap: 30}
+    axes: {agent.eps.z_mu: [2.0]}
