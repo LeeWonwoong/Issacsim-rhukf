@@ -27,6 +27,7 @@ class TensorReplayBuffer:
         self.current_ep = 0
 
         # ── N-step ──
+        self.cfg = cfg
         self.use_n_step = cfg.use_n_step
         self.n_step = cfg.n_step_size if self.use_n_step else 1
         self.gamma = cfg.gamma
@@ -107,13 +108,13 @@ class TensorReplayBuffer:
     def _sample_indices(self, batch_size: int):
         """★09-14 리플레이 모드(env REPLAY_MODE): uniform(기본) | cer(최신 전이 1개 포함, Zhang&Sutton 2017) | recency(나이 반감기 REPLAY_HALFLIFE 가중)"""
         sz = self.current_size
-        mode = os.environ.get('REPLAY_MODE', 'uniform').lower()
+        mode = str(getattr(self.cfg, 'replay_mode', 'uniform')).lower()
         if mode == 'cer' and sz > 1:
             idx = torch.randint(0, sz, (batch_size - 1,), device=self.device)
             newest = torch.tensor([(self.count - 1) % self.capacity], dtype=torch.long, device=self.device)
             return torch.cat([idx, newest])
         if mode == 'recency' and sz > 1:
-            hl = float(os.environ.get('REPLAY_HALFLIFE', '3000') or 3000)
+            hl = float(getattr(self.cfg, 'replay_halflife', 3000.0))
             pos = torch.arange(sz, device=self.device)
             if self.count <= self.capacity: age = (self.count - 1 - pos).to(DTYPE)
             else: age = (((self.count % self.capacity) - 1 - pos) % self.capacity).to(DTYPE)

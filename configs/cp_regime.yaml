@@ -1,0 +1,9 @@
+# configs/cp_regime.yaml — CartPole/LL 레짐 이식 격자(2026-09-18)의 중심 셀.
+#   γ0.97 · error-state · pΔ0.01 · huber5 · N5 · q1e-3 · 관측 [0,1] · 확약 없음 · 바람 {0,6} 균등
+#   보상 label4, FN 온셋가중 끔(선형 FN). 격자 축: reward.scale × agent.swirl.R × (tau, update_interval)
+extends: base.yaml
+run: {name: cp_regime, outdir: results/claudecodefortest/cp_regime_v2}
+reward: {mode: label4, scale: 0.6, fn_onset_mult: 1.0}
+agent:
+  gamma: 0.97
+  swirl: {form: error, p_delta: 0.01, huber_c: 5.0, N: 5, R: 1.0, q: 1.0e-3, alpha: 0.1}

@@ -1,94 +1,115 @@
-import os
-from dataclasses import dataclass
+"""env/reward.py — 보상 정의의 단일 출처 (Isaac·surrogate 공용).
 
-_FP_ESCAL = os.environ.get('FP_ESCAL', '') == '1'
+환경은 (공격 참값, 공격 경과 스텝, 추락 여부)만 알려준다. 보상은 오직 여기서 계산한다.
+라벨 규약(Isaac 과 동일): 스텝 t 의 보상은 **직전에 실행된 행동 a_{t−1}** 과 현재 공격 상태의 조합.
+
+모드 (YAML reward.mode)
+  label4 : 4항 per-step 라벨 (2026-08-19 v3 ~ 09-18 격자 기준)
+             평시 track +r_tn / hover r_fp,  공격 hover +r_tp / track FN(d)
+             FN(d) = (fn_base + fn_per_step·min(d, delay_cap)) × (fn_onset_mult if 1≤d≤fn_onset_window)
+  cost   : 탐지 사건형 (2026-09-18 논의) — 오경보 비용 vs 탐지 지연 비용의 경쟁, TP 반복 보상 없음
+             평시 track 0 / hover −c_fa,  공격 track −c_d / 버스트 첫 hover +bonus / hover 유지 0
+             + alive(모든 스텝 공통 상수: 정책 불변, 종료 시에만 효과 = 추락 벌점 alive/(1−γ) 와 동치)
+             버스트 첫 hover: 버스트 중 처음 hover 가 켜진 스텝(이미 hover 중에 온셋이어도 지급), 버스트당 1회.
+공통: 추락(terminated)이면 −terminal_penalty 추가.  마지막에 전체 × scale.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 
 @dataclass
 class RewardConfig:
-    # ════════════════════════════════════════════════════════════════════
-    #  ★ 2026-08-19 v3: FN 딜레이 그래디언트 복원 (v2 상수는 delay 2.0→3.78 악화·데드라인 초과).
-    #    TP/TN/FP/terminal 은 v2 그대로. FN 만 "구 온셋가중 곡선의 절반"으로 =
-    #      빠른 탐지 유인 부활 + max|r|≈3.87(≈huber_c) 유지(RHUKF 정합·TD 꼬리 낮음).
-    #    FP 는 v2 상수 -1 유지(FP는 이미 0.002로 문제 아니었음 → 단순 유지).
-    # ════════════════════════════════════════════════════════════════════
-    r_tp: float = 1.0          # ★2026-08-25 0.5→1.0: 탐지강조(recall/F1↑·지연↓). RHUKF 보수화 해소
-    r_tn: float = 0.5          # 평시 track   (정상)
-    r_fp: float = -0.7         # ★2026-08-25 -1.0→-0.7: FP 덜harsh → 탐지 적극화(recall↑)
-    # ★2026-09-09 terminal_penalty 재도입(A/B 중): γ0.85 절단 손실(3.3) < FN 1스텝(3.87) 이라
-    #   "사망이 한 스텝 미탐보다 싼" 서열 역전 발견 → -4.0 = max|r| 바로 위(사망>최악FN 최소값).
-    #   env TERMINAL_PEN 으로 조절 (0=기존 CartPole형 유지).
-    terminal_penalty: float = float(__import__('os').environ.get('TERMINAL_PEN', '0') or 0.0)
-    # ★2026-09-10 relapse 패널티(A/B 중): 공격 중 hover→track 재발 스텝에 FN 벌점 위에 추가.
-    #   약공격(δ<0.4)에서 PX4 보상으로 잔차가 가라앉아 정책이 track 으로 되돌아가는 플리커 억제용. env RELAPSE_PEN (0=없음).
-    relapse_penalty: float = float(__import__('os').environ.get('RELAPSE_PEN', '0') or 0.0)
-
-    # ── FN(미탐) 딜레이 에스컬레이션 = 조기탐지 직접 유인. 구곡선의 절반(2026-08-19). ──
-    #   신곡선 d0 -0.40 / d1 -1.35 / d2 -1.98 / d3 -2.61 / d4 -3.24 / d5 -3.87 (단조·온셋가중)
-    #   (구 v1: -0.80/-2.70/-3.96/-5.22/-6.48/-7.74 = 이것의 2배, TD 꼬리 9.8이라 폐기)
-    fn_base: float = -0.4         # delay 0
-    fn_per_step: float = -0.35    # delay당 추가
-    fn_onset_mult: float = float(__import__('os').environ.get('FN_ONSET_MULT', '1.8') or 1.8)   # ★09-16 env화(1.0 = 온셋 가중 끔 → FN 상수화)
+    mode: str = 'label4'           # label4 | cost
+    scale: float = 1.0
+    terminal_penalty: float = 0.0  # 추락 시 빼는 크기(≥0)
+    # ── label4 ──
+    r_tp: float = 1.0
+    r_tn: float = 0.5
+    r_fp: float = -0.7
+    fn_base: float = -0.4
+    fn_per_step: float = -0.35
+    fn_onset_mult: float = 1.8
     fn_onset_window: int = 5
     delay_cap: int = 5
+    relapse_penalty: float = 0.0   # 공격 중 hover→track 재발 스텝 추가 벌점(음수로 적는다)
+    fp_escalate: bool = False      # 평시 연속 오탐 에스컬레이션(첫 −0.2 … −1.2)
+    # ── cost ──
+    c_fa: float = 0.7
+    c_d: float = 0.3
+    bonus: float = 1.0
+    alive: float = 0.0
 
-    # ── heavy-tailed 보상 노이즈 (옵티마이저 강건성 실험 KNOB; 기본 OFF) ──
-    #    버퍼 저장 reward에만 가산(=칼만 measurement noise 채널). zero-mean mixture.
-    #    §6 강건성 스윕: reward_noise_outlier_sigma를 0,5,10,20으로 쓸며 RHUKF−Adam 이점 측정.
-    reward_noise_enabled: bool = False
-    reward_noise_sigma: float = 1.0          # 평상 가우시안 std (≈R 자릿수)
-    reward_noise_outlier_prob: float = 0.05  # outlier 발생 확률
-    reward_noise_outlier_sigma: float = 10.0 # outlier std (heavy-tail 세기 = 주 다이얼)
-
-
-DEFAULT_REWARD = RewardConfig()
-
-
-def sample_reward_noise(rc: RewardConfig = None) -> float:
-    """heavy-tailed 보상 노이즈 1샘플 (zero-mean mixture). 비활성/미설정이면 0.0.
-       버퍼 저장 reward에만 가산 → 칼만 measurement noise 채널을 직접 자극."""
-    import numpy as np
-    rc = rc if rc is not None else DEFAULT_REWARD
-    if not getattr(rc, 'reward_noise_enabled', False):
-        return 0.0
-    if np.random.rand() < rc.reward_noise_outlier_prob:
-        return float(np.random.randn() * rc.reward_noise_outlier_sigma)   # outlier(꼬리)
-    return float(np.random.randn() * rc.reward_noise_sigma)               # 평상
+    def __post_init__(self):
+        if self.mode not in ('label4', 'cost'):
+            raise ValueError(f'reward.mode={self.mode!r} (label4|cost)')
+        self.terminal_penalty = abs(float(self.terminal_penalty))   # 옛 설정은 음수로 적었다 → 크기로 정규화
 
 
-def calculate_reward(current_action, is_under_attack,
-                     attack_delay: int = 0, fp_run: int = 0,
-                     rc: RewardConfig = None, relapse: bool = False) -> float:
-    """
-    current_action:  0=track, 1=hover
-    is_under_attack: 현재 스텝 공격 활성 여부 (지면 진실; 관측엔 없음)
-    attack_delay:    공격 onset 후 경과 스텝 (FN 선형 에스컬레이션)
-    fp_run:          평시 연속 오탐(hover) 지속 길이 (FP 선형 에스컬레이션).
-                     호출부의 continuous_fp_count(또는 recovery_delay)를 그대로 전달하면 됨.
-    rc:              RewardConfig (None이면 DEFAULT_REWARD)
-    relapse:         이 스텝이 공격 중 hover→track 재발(직전 행동 1, 현 행동 0)이면 True → rc.relapse_penalty 가산
-    """
-    rc = rc if rc is not None else DEFAULT_REWARD
-    #  ★ 2026-08-19 v3: FN 만 딜레이 에스컬레이션, FP 는 상수. fp_run 인자 미사용.
-    if is_under_attack:
-        if current_action == 1:                                  # TP
+def label4_reward(rc: RewardConfig, prev_action: int, attack: bool, attack_delay: int,
+                  fp_run: int = 0, relapse: bool = False) -> float:
+    """4항 라벨 보상 (배율 적용 전). 구 calculate_reward 와 수치 동일(FN_MODE·FP_ESCAL env 는 폐기 → 설정)."""
+    if attack:
+        if prev_action == 1:
             return rc.r_tp
-        d = min(max(attack_delay, 0), rc.delay_cap)              # FN: 딜레이 선형+온셋가중
-        # ★2026-09-09 FN_MODE=linear (A/B): -C_FN·min(ℓ_k, ℓ_max), ℓ_k=경과스텝(발생 포함, ≥1).
-        #   C_FN=0.35 → 벌점열 0.35/0.70/1.05/1.40/1.75 (ℓ=1..5). 현행(onset_mult 곡선) 대비 단순·완만.
-        if os.environ.get('FN_MODE', '') == 'linear':
-            _c = float(os.environ.get('FN_C', '0.35'))
-            return -_c * min(d + 1, rc.delay_cap) + (rc.relapse_penalty if relapse else 0.0)
+        d = min(max(attack_delay, 0), rc.delay_cap)
         pen = rc.fn_base + rc.fn_per_step * d
         if 1 <= d <= rc.fn_onset_window:
             pen *= rc.fn_onset_mult
         if relapse:
-            pen += rc.relapse_penalty                              # ★2026-09-10 재발 추가벌점
+            pen += rc.relapse_penalty
         return pen
-    else:
-        if current_action == 0:
-            return rc.r_tn                                        # TN:+0.5
-        # env FP_ESCAL=1 → FP 에스컬레이션(첫 오탐 -0.2 싸게, 지속 -1.2까지). 미설정시 기존 상수 -0.7 (2026-08-29 변형실험 V1)
-        if _FP_ESCAL:
-            return -0.2 - 0.25 * max(0, min(fp_run, 5) - 1)
-        return rc.r_fp                                            # FP:-0.7(상수)
+    if prev_action == 0:
+        return rc.r_tn
+    if rc.fp_escalate:
+        return -0.2 - 0.25 * max(0, min(fp_run, 5) - 1)
+    return rc.r_fp
+
+
+class RewardTracker:
+    """에피소드 단위 상태(버스트 첫 hover 지급 여부·연속 오탐·재발)를 들고 스텝 보상(배율 적용)을 낸다.
+    호출 규약: 창이 찬 스텝마다 1회, prev_action = 이 스텝까지 실행되던 행동."""
+
+    def __init__(self, rc: RewardConfig):
+        self.rc = rc
+        self.reset()
+
+    def reset(self):
+        self._prev_atk = False
+        self._paid = False
+        self._pprev_action = 0
+        self._fp_run = 0
+
+    def step(self, prev_action: int, attack: bool, attack_delay: int, terminated: bool = False) -> float:
+        rc = self.rc
+        if attack and not self._prev_atk:
+            self._paid = False                     # 새 버스트
+        relapse = bool(attack and prev_action == 0 and self._pprev_action == 1)
+        self._fp_run = self._fp_run + 1 if (not attack and prev_action == 1) else 0
+
+        if rc.mode == 'label4':
+            r = label4_reward(rc, prev_action, attack, attack_delay, self._fp_run, relapse)
+        else:
+            r = rc.alive
+            if not attack:
+                if prev_action == 1:
+                    r -= rc.c_fa
+            elif prev_action == 0:
+                r -= rc.c_d
+            elif not self._paid:
+                r += rc.bonus
+                self._paid = True
+        if terminated:
+            r -= rc.terminal_penalty
+        self._prev_atk = attack
+        self._pprev_action = prev_action
+        return r * rc.scale
+
+
+# ── 구 호출부 호환 (분석 스크립트용; 새 코드는 RewardTracker) ─────────────────────
+DEFAULT_REWARD = RewardConfig()
+
+
+def calculate_reward(current_action, is_under_attack, attack_delay: int = 0, fp_run: int = 0,
+                     rc: RewardConfig = None, relapse: bool = False) -> float:
+    return label4_reward(rc or DEFAULT_REWARD, current_action, is_under_attack, attack_delay, fp_run, relapse)

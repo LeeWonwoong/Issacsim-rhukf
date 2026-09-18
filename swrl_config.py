@@ -56,7 +56,7 @@ class Config:
                                           # 주의: step은 crash 데드라인을 줄임 → sweep의 dhover(지연 호버) 생존곡선으로 대응가능성 검증 후 확정.
     attack_duration_range: Tuple[int, int] = (50, 100)
 
-    eps_action_probs: List[float] = field(default_factory=lambda: [1.0 - float(os.environ.get('EPS_HOVER_P', '0.15') or 0.15), float(os.environ.get('EPS_HOVER_P', '0.15') or 0.15)])  # 2026-08-19 탐험 track:hover=85:15 (★09-13 env EPS_HOVER_P 로 hover 탐험 비율 조정, 약속 D 실험용)
+    eps_action_probs: List[float] = field(default_factory=lambda: [0.85, 0.15])   # ★09-18: env EPS_HOVER_P 폐기 → YAML agent.eps.hover_p  # 2026-08-19 탐험 track:hover=85:15 (★09-13 env EPS_HOVER_P 로 hover 탐험 비율 조정, 약속 D 실험용)
 
     log_interval: int = 5
 
@@ -255,21 +255,21 @@ class Config:
     learning_warmup_steps: int = 10
 
     max_episodes: int = 300
-    episode_max_steps: int = int(os.environ.get('EP_MAX_STEPS', '400'))  # ★2026-09-07 v3 기본 400 ([OLD] 300). env override 유지
+    episode_max_steps: int = 400  # ★2026-09-07 v3 기본 400 ([OLD] 300). env override 유지
     sim_speed_factor: float = 10.0   # Isaac Sim 배속(2026-07-22): 모든 캡처·스윕 기본 10. --speed로 override. ※페어링(학습)은 RHUKF learn 지연 확인 필요.
 
     window_size: int = 4
     dimS: int = 12                   # window_size × 3
     num_actions: int = 2             # 0=궤도추종, 1=강제호버링
 
-    gamma: float = float(__import__('os').environ.get('GAMMA','0.85'))   # 하이퍼탐색 A: 0.85. 2026-09-09 env화(γ스캔용). Adam·RHUKF 공유.
+    gamma: float = 0.85   # 하이퍼탐색 A: 0.85. 2026-09-09 env화(γ스캔용). Adam·RHUKF 공유.
     scale_factor: float = 1.0
     reward_scale: float = 1.0      # ★2026-08-19: 스케일링 폐기(논문 가독성). 대신 RewardConfig 값 자체를 절반으로 재설계해 max|r|≈3.9(≈huber_c3)로 낮춤. 스케일 상수는 1.0 고정.
 
     # ── 탐험 ──
     eps_start: float = 0.99
     eps_end: float = 0.01
-    eps_decay_steps: int = int(__import__('os').environ.get('EPS_DECAY','10000'))  # 2026-09-09 env화. 기본 10000(탐험~100ep). CartPole은 2000이었음 — 빠른 decay가 초반 정책차 가시화
+    eps_decay_steps: int = 10000  # 2026-09-09 env화. 기본 10000(탐험~100ep). CartPole은 2000이었음 — 빠른 decay가 초반 정책차 가시화
 
     # ══════════════════════════════════════════════════════════
     #  D3QN 네트워크 구조
@@ -296,8 +296,8 @@ class Config:
     h0_prior_source: str = 'target'
     use_spas: bool = True                  # ★2026-09-07 기본 ON (사용자 확정 "아이작심에서 다 spas"). A/B 실측 무해(t=-1.59). [OLD] False
 
-    batch_size: int = int(__import__('os').environ.get('BATCH_SIZE', '128') or 128)   # 09-15 19:25 env화(배치 64 절제용). 기본 128 불변
-    buffer_size: int = int(__import__('os').environ.get('BUFFER_SIZE','20000'))   # 2026-09-09 env화(온라인성 스캔용)
+    batch_size: int = 128   # 09-15 19:25 env화(배치 64 절제용). 기본 128 불변
+    buffer_size: int = 20000   # 2026-09-09 env화(온라인성 스캔용)
     
     N_horizon: int = 5
     update_interval: int = 1               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
@@ -326,7 +326,7 @@ class Config:
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ── 로드맵 학습수정(2026-07-08): off→on, n=3 (memory.py 구현됨; 온셋 펄스 신호 부트스트랩 전파)
-    use_n_step: bool = (__import__('os').environ.get('NSTEP_OFF','')!='1')   # 2026-09-09 env화: NSTEP_OFF=1 → 1-step
+    use_n_step: bool = True   # 2026-09-09 env화: NSTEP_OFF=1 → 1-step
     n_step_size: int = 3
 
     # ── PER (이번 실험: PER off → Huber-R 단독 outlier 방어로 FIR 기여 isolate) ──
@@ -356,6 +356,18 @@ class Config:
     #  보상 설계 (env/reward.py로 분리)
     # ══════════════════════════════════════════════════════════
     reward: RewardConfig = field(default_factory=RewardConfig)
+
+    # ── ★2026-09-18 env → 설정 필드 이전 (YAML 이 값을 넣는다) ──
+    gyro_only: bool = False            # 관측에서 vel 제거 (obs.features 로 결정)
+    hover_dwell: int = 0               # hover 확약 스텝 (0 = 매 스텝 결정)
+    adam_amsgrad: bool = False
+    adam_init: str = 'default'         # default(PyTorch) | he (필터 에이전트와 같은 He-normal·bias0)
+    adam_optimizer: str = 'adam'       # adam | sgd (momentum 0)
+    adam_loss: str = 'huber'           # huber | mse
+    adam_huber_beta: float = 1.0
+    adam_grad_clip: float = 1.0
+    replay_mode: str = 'uniform'       # uniform | cer | recency
+    replay_halflife: float = 3000.0
 
     # ══════════════════════════════════════════════════════════
     #  평가 (고정 시나리오)
@@ -446,57 +458,12 @@ class Config:
     def __post_init__(self):
         self.r_inv_sqrt = 1.0 / self.r_init
         self.r_inv = 1.0 / (self.r_init ** 2)
-        # ★2026-08-31 GYRO_ONLY ablation: vel 채널 제거 → [nis_gyr, action]×W = W*2. 기본 OFF(12D 불변)
-        self._gyro_only = os.environ.get('GYRO_ONLY','')=='1'
+        # ★2026-09-18 env 변수 덮어쓰기 전면 폐기 → YAML(configs/*.yaml) + cfgload.py 가 값을 넣는다.
+        #   관측 차원은 obs 설정(env/observation.ObsSpec)이 정하고 cfgload 가 dimS/window_size 를 맞춘다.
+        self._gyro_only = bool(self.gyro_only)
         self.dimS = self.window_size * (2 if self._gyro_only else 3)
         if self.obs_scale is None or len(self.obs_scale) != self.dimS:
             self.obs_scale = [1.0] * self.dimS
-        # env RHUKF 하이퍼 오버라이드 ★2026-08-27 의미 정정: UI=update_interval, N=N_horizon (사용자 용어 확정)
-        #   ⚠ 08-25~27 오전까지 RHUKF_UI 가 N_horizon 을 바꿨다 — 그 런들은 upd=1 고정의 '비의도 옵티마이저'.
-        if os.environ.get('ATK_RAMP'): self.attack_ramp_duration = float(os.environ['ATK_RAMP'])
-        if os.environ.get('RHUKF_TAU'): self.tau_srrhuif = float(os.environ['RHUKF_TAU'])
-        if os.environ.get('RHUKF_UI'):  self.update_interval = int(os.environ['RHUKF_UI'])   # ★의미 변경: ui=update_interval
-        if os.environ.get('RHUKF_N'):   self.N_horizon = int(os.environ['RHUKF_N'])
-        if os.environ.get('RHUKF_R'):   self.r_init = self.r_end = float(os.environ['RHUKF_R'])
-        if os.environ.get('RHUKF_PD'):  self.p_delta_init = float(os.environ['RHUKF_PD'])   # 2026-08-27 pΔ 변형용
-        if os.environ.get('RHUKF_FORM'): self.state_form = os.environ['RHUKF_FORM']
-        if os.environ.get('RHUKF_MODE'): self.filter_mode = os.environ['RHUKF_MODE'].lower()          # 2026-09-13 ukf|ekf 베이스라인              # 2026-09-02 error|absolute
-        if os.environ.get('RHUKF_PINIT'): self.p_init = float(os.environ['RHUKF_PINIT'])         # 2026-09-02 absolute 모드 P0
-        if os.environ.get('RHUKF_Q'):   self.q_init = self.q_end = float(os.environ['RHUKF_Q'])       # 2026-08-27 Q 축
-        if os.environ.get('RHUKF_ALPHA'): self.alpha = float(os.environ['RHUKF_ALPHA'])
-        # 2026-09-03 유계영향(Huber-adaptive R) on/off 축. 크게 주면(1e9) clamp 가 항상 1 →
-        #   R_eff = r0 상수 = 순수 가우시안 R = 유계영향 비활성.
-        if os.environ.get('RHUKF_HUBER_C'): self.huber_c = float(os.environ['RHUKF_HUBER_C'])
-        # 2026-09-05 absolute 모드의 h=0 DDQN argmax 를 error-state 와 동일하게 맞춘다.
-        #   error : h0_online_moving_init='spas' (시그마 앙상블) · h>0 은 θ_current(moving)
-        #   abs   : use_spas=False 면 h=0 에서 θ_target argmax → 두 모드의 유일한 실질 차이였다.
-        #   RHUKF_SPAS=1 로 켜면 abs 도 h=0 에서 시그마 앙상블 → 두 모드가 파라미터화만 다른 동일 추정기.
-        if os.environ.get('RHUKF_SPAS'): self.use_spas = os.environ['RHUKF_SPAS'] not in ('0','false','False')               # 2026-08-27 σ스프레드 축
-        # ── 공격밀도 축 (2026-08-29): burst ON/OFF 길이 env 조절. 미설정시 기본값 불변. ──
-        #   밀도↑ = ON/OFF 짧게 = 전환(임펄스) 횟수↑ = RHUKF 샘플효율 무대 + 누적 하이재킹 유지.
-        if os.environ.get('ATK_ON_LO') and os.environ.get('ATK_ON_HI'):
-            self.attack_burst_on_range = (int(os.environ['ATK_ON_LO']), int(os.environ['ATK_ON_HI']))
-        if os.environ.get('ATK_OFF_LO') and os.environ.get('ATK_OFF_HI'):
-            self.attack_burst_off_range = (int(os.environ['ATK_OFF_LO']), int(os.environ['ATK_OFF_HI']))
-        if os.environ.get('ATK_DELTA_LO') and os.environ.get('ATK_DELTA_HI'):   # δ 대역 고정(시간축 실험)
-            self.attack_delta_range = (float(os.environ['ATK_DELTA_LO']), float(os.environ['ATK_DELTA_HI']))
-        if os.environ.get('RHUKF_UPD'): self.update_interval = int(os.environ['RHUKF_UPD'])           # 2026-08-27 실업데이트 주기
-        if os.environ.get('WP_CORNER_DECEL') is not None and os.environ.get('WP_CORNER_DECEL') != '':
-            self.wp_corner_decel = os.environ['WP_CORNER_DECEL'] not in ('0','false','False')   # 2026-08-27 기동 A/B 비교용
-        # env reward 오버라이드: R_TP·R_FP·FN_BASE·FN_PER
-        if os.environ.get('R_TP'):   self.reward.r_tp = float(os.environ['R_TP'])
-        if os.environ.get('R_FP'):   self.reward.r_fp = float(os.environ['R_FP'])
-        if os.environ.get('FN_BASE'):self.reward.fn_base = float(os.environ['FN_BASE'])
-        if os.environ.get('FN_PER'): self.reward.fn_per_step = float(os.environ['FN_PER'])
-        # ★2026-09-18 env REWARD_SCALE: 보상 전체 배율(CartPole/LL 레짐 격자 — reward×c vs R 에 따른 loss 개형). 미설정 = 1.0(기존)
-        if os.environ.get('REWARD_SCALE'): self.reward_scale = float(os.environ['REWARD_SCALE'])
-        # env PROB_CONSTANT_ATK: 상수(지속)공격 비율 override (캡처용 0=burst만)
-        _pc = os.environ.get('PROB_CONSTANT_ATK', '')
-        if _pc != '': self.prob_constant_attack = float(_pc)
-        # env NET_HIDDEN=16 → shared_layers=[16,16] (네트워크 크기 비교축). 기본 [24,24].
-        _nh = os.environ.get('NET_HIDDEN', '')
-        if _nh:
-            self.shared_layers = [int(_nh), int(_nh)]
         # ★2026-08-24: eval 시나리오를 확정분포(tilt·연속δ·약/중/강 × 패턴 × 바람)로 재생성.
         #   옛 loe_combined 고정 폐기. 난이도별 분리평가(약=POMDP, 강=easy). 지속공격(60~end, 결정론적).
         import math as _m

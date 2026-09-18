@@ -60,18 +60,17 @@ class OnlineAdamAgent:
 
         self.net = _DDQNNet(cfg.dimS, cfg.num_actions, cfg.shared_layers,
                             cfg.q_layers, cfg.activation_fn).float().to(cfg.device)
-        if os.environ.get('ADAM_INIT', '').lower() == 'he':   # ★09-14 초기화 동일화(필터 에이전트의 He-normal·bias0 과 같게)
+        if str(getattr(cfg, 'adam_init', 'default')).lower() == 'he':   # ★09-14 초기화 동일화(필터 에이전트의 He-normal·bias0 과 같게)
             with torch.no_grad():
                 for _m in self.net.modules():
                     if isinstance(_m, nn.Linear):
                         _m.weight.normal_(0.0, (2.0 / _m.in_features) ** 0.5); _m.bias.zero_()
         self.target_net = copy.deepcopy(self.net)
         # env override: ADAM_LR (학습률), ADAM_AMSGRAD (0|1) — Adam baseline sweep용
-        _lr = float(os.environ.get('ADAM_LR', cfg.adam_lr))
-        _ams_env = os.environ.get('ADAM_AMSGRAD', '')
-        self._amsgrad = (_ams_env == '1') if _ams_env != '' else getattr(cfg, 'adam_amsgrad', True)
+        _lr = float(cfg.adam_lr)
+        self._amsgrad = bool(getattr(cfg, 'adam_amsgrad', False))
         # env OPT=sgd → 순수 SGD(momentum 0) 베이스라인 (2026-09-02 3-옵티마이저 비교)
-        self._opt_type = os.environ.get('OPT', 'adam').lower()
+        self._opt_type = str(getattr(cfg, 'adam_optimizer', 'adam')).lower()
         if self._opt_type == 'sgd':
             self.optimizer = torch.optim.SGD(self.net.parameters(), lr=_lr, momentum=0.0)
         else:
@@ -90,7 +89,7 @@ class OnlineAdamAgent:
 
         n = sum(p.numel() for p in self.net.parameters())
         gpu = torch.cuda.get_device_name(0) if (cfg.device == 'cuda' and torch.cuda.is_available()) else 'N/A'
-        _loss_nm = 'MSE' if os.environ.get('ADAM_LOSS','').lower()=='mse' else 'Huber'
+        _loss_nm = 'MSE' if str(getattr(cfg, 'adam_loss', 'huber')).lower() == 'mse' else 'Huber'
         print(f"  Agent: {self._opt_type.upper()} DDQN + {_loss_nm} (baseline) | Params: {n} | "
               f"Device: {cfg.device} ({gpu}) | lr={self._eff_lr} | "
               f"AMSGrad: {'ON' if self._amsgrad else 'off'} | "
@@ -187,14 +186,14 @@ class OnlineAdamAgent:
                 pass
         # Huber(smooth_l1) 기본 / env ADAM_LOSS=mse → 순수 MSE (2026-09-02 순수 베이스라인)
         if getattr(self, '_loss_mse', None) is None:
-            self._loss_mse = (os.environ.get('ADAM_LOSS', '').lower() == 'mse')
+            self._loss_mse = (str(getattr(self.cfg, 'adam_loss', 'huber')).lower() == 'mse')
         if self._loss_mse:
             loss = (is_w * F.mse_loss(q_a, q_target, reduction='none')).mean()
         else:
-            loss = (is_w * F.smooth_l1_loss(q_a, q_target, reduction='none', beta=float(os.environ.get('ADAM_HUBER_BETA', '1.0') or 1.0))).mean()
+            loss = (is_w * F.smooth_l1_loss(q_a, q_target, reduction='none', beta=float(getattr(self.cfg, 'adam_huber_beta', 1.0)))).mean()
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.net.parameters(), float(getattr(self.cfg, 'adam_grad_clip', 1.0)))
         self.optimizer.step()
 
         # soft target update

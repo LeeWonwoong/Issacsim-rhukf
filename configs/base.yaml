@@ -1,0 +1,73 @@
+# configs/base.yaml — 모든 실험의 기본값. 실험 파일은 `extends: base.yaml` 후 바꿀 것만 적는다.
+# 실행: python3 train.py --config configs/<실험>.yaml [--set 키=값 ...]
+run:
+  name: base
+  seed: 42
+  episodes: 200
+  ep_steps: 300
+  outdir: results/claudecodefortest/untitled
+  device: auto               # auto | cuda | cpu
+
+env:
+  kind: surrogate            # surrogate | isaac
+  surrogate:
+    pool: results/claudecodefortest/night/train_pool_v5e.npz
+    pool_format: auto        # auto | raw | compressed (구 풀 v3–v5e 는 compressed → 원시 NIS 로 역변환)
+    pool_clip: 4.0
+    reseed_per_episode: true # (시드, 에피소드) 로 시나리오 재생성 = 학습기 간 짝 비교
+    crash:
+      ploc_tiers: {7: [0.70, 0.2, 0.76, 0.3, 0.80, 0.9, 0.84, 1.0], 10: [0.70, 0.3, 0.76, 0.7, 0.80, 0.8, 0.84, 1.0]}
+      dead_tiers: {10: [0.78, 26, 0.80, 16, 0.84, 4]}
+      plateau_curve: true
+      dead_mode: curve
+  isaac:
+    headless: true
+    speed: 1.0
+    sim_env: {}              # run_sim 서브프로세스에 넘길 플랜트 env (예: MOTOR_TAU: 0.014)
+
+scenario:
+  attack:
+    p_attack: 0.5
+    family: v5
+    start: [60, 200]
+    delta_lo: 0.10
+    split: 0.72
+    delta_hi: 0.84
+    p_upper: 0.5
+    hold: [25, 40]
+  wind:
+    mode: tiers
+    tiers: {0: 0.5, 6: 0.5}  # surrogate 풀 티어. Isaac 은 mode: uniform, range: [0, 6]
+
+obs:                          # 원시 NIS → min(log1p(√ε), clip)/div, 창 window
+  compress: log1p_sqrt
+  clip: 4.0
+  div: 4.0
+  window: 4
+  features: [vel, gyro, action]
+
+reward:
+  mode: label4               # label4 | cost
+  scale: 1.0
+  terminal_penalty: 0.0
+  fn_onset_mult: 1.8
+
+agent:
+  type: swirl                # swirl | adam | ukf | ekf
+  gamma: 0.9
+  n_step: 3
+  batch: 128
+  buffer: 50000
+  hidden: [16, 16]
+  tau: 0.005
+  update_interval: 1
+  hover_dwell: 0
+  eps: {start: 0.99, end: 0.01, decay: 4000, hover_p: 0.1}
+  replay: {mode: uniform}
+  swirl: {form: error, p_delta: 0.02, huber_c: 3.0, N: 5, R: 1.0, q: 1.0e-4, alpha: 0.1,
+          anchor: target, argmax: online_moving, h0: spas}
+  adam: {lr: 3.0e-4, amsgrad: false, init: he, optimizer: adam, loss: huber, huber_beta: 1.0, grad_clip: 1.0}
+
+log:
+  probe_every: 1             # 매 에피소드 greedy 프로브(학습 없음)
+  probe_n: 4
