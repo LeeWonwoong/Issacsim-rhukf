@@ -131,7 +131,8 @@ class Policy:
             return 0                                   # 무공격 에피소드: hold/window 는 track 과 같다
         if self.kind == 'hold':
             return int(step >= on[0] + self.K)
-        return int(on[0] + self.K <= step <= on[-1] + self.R)
+        evs = plan.events or [dict(start=int(on[0]), end=int(on[-1]) + 1)]      # window: 사건마다 온셋+K ~ 끝+R
+        return int(any(ev['start'] + self.K <= step <= ev['end'] - 1 + self.R for ev in evs))
 
 
 def make_policy(name: str, rng: np.random.Generator) -> Policy:

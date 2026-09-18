@@ -137,7 +137,7 @@ def run_surrogate(exp, log=print):
                    fpr=(fp / (fp + tn) if fp + tn else 0.0), delay=(float(det_delay) if det_delay is not None else float('nan')),
                    loss=mean(losses), qmax=(float(np.max(qs)) if qs else None), qavg=(float(np.mean(qs)) if qs else None),
                    tvar=(float(np.mean(tv)) if tv else None), has_atk=int(tp + fn > 0), crashed=int(genv.crashed),
-                   dmax=genv.plan.dmax, cls=genv.plan.cls, ws=genv.ws, n_upd=len(innov), innov=mean(innov), adapt=mean(adapt),
+                   dmax=genv.plan.dmax, cls=genv.plan.cls, n_events=len(genv.plan.events) or int(genv.plan.has_attack), ws=genv.ws, n_upd=len(innov), innov=mean(innov), adapt=mean(adapt),
                    nisf=mean(nisf), aflip=mean(flip), kgain=float(getattr(agent, '_last_kgain', 0.0) or 0.0),
                    pmax=float(getattr(agent, '_last_pmax', 0.0) or 0.0),
                    wrec=(wtp / (wtp + wfn) if wtp + wfn else float('nan')), srec=(stp / (stp + sfn) if stp + sfn else float('nan')),

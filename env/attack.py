@@ -28,7 +28,7 @@ class ProfileClass:
     kind: str                           # burst | persistent
     dur: Tuple[int, int]                # 총 활성 스텝 수 범위 (prefix·꼬리 포함)
     grow: Tuple[float, float] = (1.0, 1.0)   # persistent: prefix 이후 d0 → d0·g 로 선형 증가
-    grow_steps: int = 10
+    grow_steps: object = 10                  # 성장에 걸리는 스텝: 정수 또는 [lo, hi] (사건마다 추첨)
 
 
 @dataclass
@@ -47,6 +47,8 @@ class AttackConfig:
     prefix: List[float] = field(default_factory=lambda: [0.3, 0.6, 0.9, 1.0])   # d0 대비 초기 램프(형태 공통)
     tail: List[float] = field(default_factory=lambda: [0.7, 0.35])              # burst 꼬리(d0 대비)
     classes: List[ProfileClass] = field(default_factory=list)
+    events: Tuple[int, int] = (1, 1)    # profile: 공격 에피소드당 사건 수 범위 (사건마다 그룹 독립 추첨)
+    event_gap: Tuple[int, int] = (30, 60)   # profile: 사건 끝 → 다음 온셋 간격(스텝)
     authority_nm: float = 4.36          # δ → N·m (Isaac 주입용)
 
     def __post_init__(self):
@@ -66,8 +68,15 @@ class AttackPlan:
     active: np.ndarray                  # bool[n]
     delta: np.ndarray                   # float[n] (비활성 0)
     bstart: np.ndarray                  # int[n] 버스트 시작 스텝 (비활성 −1)
-    cls: str = 'none'                   # 'none' | 'v5' | profile class name
+    cls: str = 'none'                   # 'none' | 'v5' | 첫 사건의 profile class name
     direction: Optional[float] = None   # 틸트 방향 α (Isaac 전용; surrogate 는 뽑지 않음)
+    events: list = field(default_factory=list)   # profile: [{start, end, cls, d0, g, grow_steps}]
+
+    def cls_at(self, t: int) -> str:
+        for ev in self.events:
+            if ev['start'] <= t < ev['end']:
+                return ev['cls']
+        return self.cls if (self.active[min(t, self.n - 1)] and not self.events) else 'none'
 
     @property
     def has_attack(self) -> bool:
@@ -86,7 +95,15 @@ def _empty(n: int) -> AttackPlan:
     return AttackPlan(n, np.zeros(n, bool), np.zeros(n), np.full(n, -1, int))
 
 
-def _profile(c: ProfileClass, cfg: AttackConfig, d0: float, dur: int, g: float) -> np.ndarray:
+def _grow_steps(c: ProfileClass, rng=None) -> int:
+    gs = c.grow_steps
+    if isinstance(gs, (list, tuple)):
+        return int(rng.integers(int(gs[0]), int(gs[1]) + 1)) if rng is not None else int(gs[0])
+    return int(gs)
+
+
+def _profile(c: ProfileClass, cfg: AttackConfig, d0: float, dur: int, g: float, grow_steps: Optional[int] = None) -> np.ndarray:
+    gsteps = _grow_steps(c) if grow_steps is None else int(grow_steps)
     pre = [d0 * f for f in cfg.prefix]
     if c.kind == 'burst':
         tail = [d0 * f for f in cfg.tail]
@@ -95,7 +112,7 @@ def _profile(c: ProfileClass, cfg: AttackConfig, d0: float, dur: int, g: float) 
         return np.asarray(prof[:max(dur, 1)])
     body = []
     for k in range(max(0, dur - len(pre))):
-        frac = min(1.0, (k + 1) / max(c.grow_steps, 1))
+        frac = min(1.0, (k + 1) / max(gsteps, 1))
         body.append(d0 * (1.0 + (g - 1.0) * frac))
     return np.asarray((pre + body)[:max(dur, 1)])
 
@@ -115,16 +132,23 @@ def sample_attack(rng: np.random.Generator, cfg: AttackConfig, n: int, with_dire
             rng.integers(cfg.gap[0], cfg.gap[1] + 1)       # 구 구현의 다음 버스트 간격 추첨(버스트 1개라 미사용) — 난수 순서 유지
         plan.cls = 'v5'
     else:
-        w = np.array([c.weight for c in cfg.classes], float)
-        c = cfg.classes[int(rng.choice(len(w), p=w / w.sum()))]
-        d0 = float(rng.uniform(*c.delta)); dur = int(rng.integers(c.dur[0], c.dur[1] + 1)); g = float(rng.uniform(*c.grow))
+        plan = _empty(n); emax = n - 5
+        K = int(rng.integers(cfg.events[0], cfg.events[1] + 1)) if cfg.events[1] > cfg.events[0] else int(cfg.events[0])
         t = int(rng.integers(cfg.start[0], cfg.start[1] + 1))
-        prof = _profile(c, cfg, d0, dur, g)
-        e = min(t + len(prof), n - 5)
-        plan = _empty(n)
-        if e > t:
-            plan.delta[t:e] = np.clip(prof[:e - t], 0.0, 1.0); plan.active[t:e] = True; plan.bstart[t:e] = t
-        plan.cls = c.name
+        w = np.array([c.weight for c in cfg.classes], float)
+        for _ in range(K):                                  # 사건마다 그룹·세기·길이·성장 독립 추첨, 간격을 두고 이어 붙임
+            if t >= emax:
+                break
+            c = cfg.classes[int(rng.choice(len(w), p=w / w.sum()))]
+            d0 = float(rng.uniform(*c.delta)); dur = int(rng.integers(c.dur[0], c.dur[1] + 1)); g = float(rng.uniform(*c.grow))
+            gs = _grow_steps(c, rng)
+            prof = _profile(c, cfg, d0, dur, g, gs)
+            e = min(t + len(prof), emax)
+            if e > t:
+                plan.delta[t:e] = np.clip(prof[:e - t], 0.0, 1.0); plan.active[t:e] = True; plan.bstart[t:e] = t
+                plan.events.append(dict(start=t, end=e, cls=c.name, d0=d0, g=g, grow_steps=gs))
+            t = e + int(rng.integers(cfg.event_gap[0], cfg.event_gap[1] + 1))
+        plan.cls = plan.events[0]['cls'] if plan.events else 'none'
     if with_direction:
         plan.direction = float(rng.uniform(0.0, 2.0 * math.pi))
     return plan

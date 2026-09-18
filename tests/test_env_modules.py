@@ -66,6 +66,43 @@ def test_profile_prefix_shared_then_diverges():
     assert math.isclose(q[-1], 0.6)
 
 
+
+
+def test_multi_event_profile_and_grow_range():
+    cls = [dict(name='wp', weight=1, delta=[0.1, 0.3], kind='persistent', dur=[15, 30], grow=[1.8, 2.2], grow_steps=[3, 6]),
+           dict(name='wb', weight=1, delta=[0.1, 0.3], kind='burst', dur=[3, 6])]
+    cfg = AttackConfig(p_attack=1.0, family='profile', classes=cls, events=(1, 3), event_gap=(30, 60))
+    ks, gss = set(), set()
+    for s in range(300):
+        p = sample_attack(np.random.default_rng(s), cfg, 300)
+        ev = p.events; ks.add(len(ev))
+        assert 1 <= len(ev) <= 3 and ev[0]['start'] >= 60
+        for a, b in zip(ev, ev[1:]):
+            assert b['start'] - a['end'] >= 30                    # 간격 ≥ 30, 겹침 없음
+        for e_ in ev:
+            assert e_['end'] <= 295 and p.cls_at(e_['start']) == e_['cls']
+            if e_['cls'] == 'wp': gss.add(e_['grow_steps'])
+    assert ks == {1, 2, 3} and gss == {3, 4, 5, 6}
+
+
+def test_fn_escalation_after_branch():
+    rc = RewardConfig(mode='cost', c_d=0.3, bonus=0.0, alive=0.0, esc_after=3, esc_tau=5.0, esc_max=4.0)
+    tr = RewardTracker(rc)
+    got = [round(tr.step(0, True, d), 3) for d in range(25)]
+    assert got[:4] == [-0.3] * 4                                  # prefix(d ≤ 3) 는 상수 — 애매 구간 보존
+    assert got[8] == round(-0.3 * 2.0, 3) and got[24] == round(-0.3 * 4.0, 3)   # d=8 → ×2, 이후 ×4 에서 포화
+
+
+def test_window_policy_per_event():
+    from env.capture import make_policy
+    from env.attack import _empty
+    p = _empty(300); p.active[100:110] = True; p.active[160:170] = True
+    p.events = [dict(start=100, end=110), dict(start=160, end=170)]
+    pol = make_policy('window:2:3', np.random.default_rng(0))
+    a = np.array([pol.act(t, p) for t in range(300)])
+    assert a[102:113].all() and not a[113:162].any() and a[162:173].all() and not a[173:].any()
+
+
 if __name__ == '__main__':
     for k, f in list(globals().items()):
         if k.startswith('test_'): f(); print('ok', k)

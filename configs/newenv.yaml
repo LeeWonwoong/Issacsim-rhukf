@@ -11,13 +11,15 @@ scenario:
     p_attack: 0.5
     family: profile
     start: [60, 200]
+    events: [1, 3]           # 공격 에피소드당 사건 1–3 (사건마다 그룹 독립 추첨) — 09-18
+    event_gap: [30, 60]      # 사건 끝 → 다음 온셋 (3–6 s)
     prefix: [0.3, 0.6, 0.9, 1.0]
     tail: [0.7, 0.35]
-    classes:     # 등급 × 형태 (에피소드 시작 때 한 번 추첨). prefix 공통 → burst 는 꼬리로 사그라들고 persistent 는 스텝당 ≈+0.1 로 커진다
-      - {name: weak_burst,     weight: 0.175, delta: [0.15, 0.35], kind: burst,      dur: [3, 6]}
-      - {name: weak_persist,   weight: 0.175, delta: [0.15, 0.35], kind: persistent, dur: [15, 30], grow: [1.8, 2.2], grow_steps: 4}
+    classes:     # 등급 × 형태. prefix 공통(t0–t3) → burst 는 꼬리로 사그라들고 persistent 는 3–6 스텝에 걸쳐 커진다
+      - {name: weak_burst,     weight: 0.175, delta: [0.10, 0.30], kind: burst,      dur: [3, 6]}
+      - {name: weak_persist,   weight: 0.175, delta: [0.10, 0.30], kind: persistent, dur: [15, 30], grow: [1.8, 2.2], grow_steps: [3, 6]}
       - {name: trans_burst,    weight: 0.175, delta: [0.35, 0.60], kind: burst,      dur: [3, 6]}
-      - {name: trans_persist,  weight: 0.175, delta: [0.35, 0.60], kind: persistent, dur: [15, 30], grow: [1.3, 1.5], grow_steps: 4}
+      - {name: trans_persist,  weight: 0.175, delta: [0.35, 0.60], kind: persistent, dur: [15, 30], grow: [1.3, 1.5], grow_steps: [3, 6]}
       - {name: strong_burst,   weight: 0.15,  delta: [0.72, 0.84], kind: burst,      dur: [3, 6]}
       - {name: strong_persist, weight: 0.15,  delta: [0.72, 0.84], kind: persistent, dur: [25, 40]}
 reward:
@@ -26,7 +28,10 @@ reward:
   alive: 0.5
   c_fa: 0.7
   c_d: 0.3
-  bonus: 1.0
+  bonus: 0.0          # ★09-18 권장(확인 대기): 보너스 없음 — 탐지 가치는 '앞으로 쌓일 비용 회피'로만(부트스트랩)
+  esc_after: 3        # ★09-18 권장(확인 대기): 분기 뒤 누적  r_FN = −c_d·min(1 + (d−3)⁺/5, 4)
+  esc_tau: 5.0
+  esc_max: 4.0
   terminal_penalty: 0.0
 agent:
   gamma: 0.97
