@@ -1,0 +1,16 @@
+# 새 무대 · c5 + 고-K 결합(τ0.02·ui4·spas·huber42) 3시드 확인 (s42 는 newenv_swirl_cscale/a_sCll5_R1_s42)
+#   s42: loss 최고@ep13 → 후반/최고 0.33 (ρ −0.91), cost ρ +0.36, 후반 공격 F1 0.63 = Adam c0.6 0.66 · Adam c5 0.51
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/newenv_cll5
+seeds: [43, 44]
+stages:
+  a: {}
+learners:
+  sCll5:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, reward.scale: 5.0, agent.swirl.huber_c: 42.0}
+    axes: {agent.swirl.R: [1.0]}
+  adamC5:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes: {reward.scale: [5.0]}
