@@ -1,0 +1,12 @@
+[worker 0] ['P0.03_R1_Q3', 'P0.05_R1_Q3', 'P0.07_R1_Q3', 'P0.1_R1_Q3', 'P0.1_R1_Q2']
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.03_R1_Q3    h= 0.39 Peff=0.033 F1=0.935 prec=0.947 rec=0.924 fpr=0.141 pFP=0.075 wR=0.93 conv=72 stab=0.036 (569s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.05_R1_Q3    h= 0.51 Peff=0.053 F1=0.926 prec=0.946 rec=0.910 fpr=0.150 pFP=0.134 wR=0.94 conv=76 stab=0.041 (570s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.07_R1_Q3    h= 0.60 Peff=0.073 F1=0.929 prec=0.945 rec=0.916 fpr=0.157 pFP=0.101 wR=0.94 conv=74 stab=0.040 (568s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.1_R1_Q3     h= 0.72 Peff=0.103 F1=0.929 prec=0.945 rec=0.915 fpr=0.155 pFP=0.106 wR=0.94 conv=76 stab=0.035 (567s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.1_R1_Q2     h= 0.72 Peff=0.125 F1=0.920 prec=0.940 rec=0.904 fpr=0.165 pFP=0.101 wR=0.95 conv=76 stab=0.042 (568s)
+[worker 0] done

@@ -29,12 +29,13 @@
 """
 import argparse
 import math
-from offboard_common import OffboardSequenceNode, run
+from offboard_common import OffboardSequenceNode, run, add_postflight_args
 
 
 class F2Doublet(OffboardSequenceNode):
-    SEQ_NAME = 'f2_doublet'
-    NEED_ALT = 2.0                 # --need-alt 로 조정. 저고도 운용 시 낮춘다
+    SEQ_NAME = 'f3_doublet'   # F3 (스크립트명 f2_doublet 은 레거시)
+    CHECK_TYPE = 'doublet'   # 비행 후 check_ulog 가 자동으로 이 유형으로 판정
+    NEED_ALT = 1.0                 # --need-alt 로 조정 (2026-08-10: 1m 저고도 운용)
 
     # ── 자세명령 구간의 고도 유지 (저고도 안전) ──
     #  attitude 모드에서는 PX4 가 고도를 잡아주지 않고 thrust_body 를 그대로 쓴다.
@@ -138,11 +139,12 @@ if __name__ == '__main__':
     ap.add_argument('--settle', type=float, default=5.0, help='시작 전 안정화 [s]')
     ap.add_argument('--thrust', type=float, default=0.33,
                     help='자세명령 중 기준 추력 = 실측 호버 스로틀. F1 결과를 넣을 것 (test1 실측 0.329)')
-    ap.add_argument('--need-alt', type=float, default=1.5,
+    ap.add_argument('--need-alt', type=float, default=1.0,
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--bench-thrust', type=float, default=0.10,
                     help='bench 모드 추력 0~1. 0.10 은 아이들에 가까워 반응이 안 보인다. '
                          '모터 반응을 보려면 0.20~0.25 (프로펠러 제거 상태에서만!)')
     ap.add_argument('--outdir', default='field_logs')
+    add_postflight_args(ap)
     a = ap.parse_args()
-    run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)
+    run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir, args=a)

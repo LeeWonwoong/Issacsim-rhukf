@@ -1,0 +1,3 @@
+[wait] huber_off 완료 대기...
+[worker 0] ['M_swirl_s0.6', 'M_swirl_s0.9', 'M_swirl_s1.2', 'M_adamMSE_s0.6', 'M_adamMSE_s0.9', 'M_adamMSE_s1.2']
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3

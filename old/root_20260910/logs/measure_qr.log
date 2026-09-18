@@ -1,0 +1,12 @@
+════ QR/약공격 측정 시작 08-23 02:29:23 ════
+[02:29:23] G2_qg2e-3 Qg=2e-3 Qv=5e-3 START
+[03:04:14] G2_qg2e-3 DONE rc=0 rows=35095
+[03:04:14] G1_qg1e-3 Qg=1e-3 Qv=5e-3 START
+[03:14:18] G1_qg1e-3 DONE rc=0 rows=10585
+[03:14:18] G3_qg5e-3 Qg=5e-3 Qv=5e-3 START
+[03:24:19] G3_qg5e-3 DONE rc=0 rows=10585
+[03:24:19] V1_qv1e-3 Qg=2e-3 Qv=1e-3 START
+[03:34:19] V1_qv1e-3 DONE rc=0 rows=10585
+[03:34:19] V2_qv2e-2 Qg=2e-3 Qv=2e-2 START
+[03:44:19] V2_qv2e-2 DONE rc=0 rows=10585
+════ 완료 03:44:24 ════

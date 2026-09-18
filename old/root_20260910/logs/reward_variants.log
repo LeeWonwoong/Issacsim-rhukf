@@ -1,0 +1,19 @@
+[08-28 23:59] 변형체인 기동 — batch3b 완료 대기
+[08-29 10:45] batch3b 완료 감지 → 최적 config 선정
+  A_r10_pd001: F1=0.972 rwd=257.2 ep=159
+  A_r10_pd005: F1=0.972 rwd=262.4 ep=165
+  A_r15_pd001: F1=0.971 rwd=241.5 ep=158
+  A_r15_pd005: F1=0.972 rwd=270.9 ep=158
+  B_r10_pd001: F1=0.970 rwd=261.5 ep=159
+  B_r10_pd005: F1=0.971 rwd=286.5 ep=158
+  B_r15_pd001: F1=0.974 rwd=290.5 ep=159
+  B_r15_pd005: F1=0.973 rwd=257.8 ep=159
+★ 최적: B_r15_pd001 (F1 0.974 rwd 290.5)
+[08-29 10:45] 최적=B_r15_pd001 → 3 변형 시작
+[08-29 10:45] fpescal START env='NET_HIDDEN=16 RHUKF_N=5 RHUKF_Q=1e-3 RHUKF_TAU=0.005 RHUKF_UI=1 RHUKF_R=1.5 RHUKF_PD=0.01 FP_ESCAL=1' cli=''
+[08-29 14:15] fpescal END rc=124 ep=160
+[08-29 14:15] rhalf START env='NET_HIDDEN=16 RHUKF_N=5 RHUKF_Q=1e-3 RHUKF_TAU=0.005 RHUKF_UI=1 RHUKF_R=1.5 RHUKF_PD=0.01 ' cli='--reward-scale 0.5'
+[08-29 17:45] rhalf END rc=124 ep=166
+[08-29 17:45] clip35 START env='NET_HIDDEN=16 RHUKF_N=5 RHUKF_Q=1e-3 RHUKF_TAU=0.005 RHUKF_UI=1 RHUKF_R=1.5 RHUKF_PD=0.01 OBS_CLIP=3.5' cli=''
+[08-29 21:15] clip35 END rc=124 ep=160
+════ 변형 3런 완료 08-29 21:15 ════

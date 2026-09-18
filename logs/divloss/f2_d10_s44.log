@@ -1,0 +1,9 @@
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 1
+  SWIRL        후반100 보상   33.31 · 오경보 0.300 · 미탐 0.100 · 지연  4.90 · 전이 20,926 · 1821s
+  Agent: ADAM DDQN + Huber (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: ON | PER: off | n-step: 1
+  Adam3e-4ams  후반100 보상   39.26 · 오경보 0.200 · 미탐 0.040 · 지연  1.27 · 전이 22,731 · 680s
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 1
+  EKF-TD       후반100 보상   35.80 · 오경보 0.290 · 미탐 0.000 · 지연  4.24 · 전이 20,814 · 1455s
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 1
+  UKF-TD       후반100 보상   38.79 · 오경보 0.180 · 미탐 0.030 · 지연  1.61 · 전이 22,412 · 491s
+저장 results/claudecodefortest/divloss/f2_d10_s44.json

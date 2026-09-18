@@ -1,0 +1,8 @@
+[worker 0] ['v51_P0.002', 'v51_P0.01', 'v51_P0.05']  env5, obs_noise=0, ep_steps=300
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  v51_P0.002   F1=0.927 R=0.916 fpr=0.173 pFP=0.087 wR=0.93 conv=74 | IsaacF1=0.938 (604s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  v51_P0.01    F1=0.927 R=0.909 fpr=0.134 pFP=0.058 wR=0.93 conv=52 | IsaacF1=0.925 (605s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  v51_P0.05    F1=0.936 R=0.926 fpr=0.152 pFP=0.083 wR=0.95 conv=73 | IsaacF1=0.929 (606s)
+[worker 0] done

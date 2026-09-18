@@ -1,0 +1,10 @@
+[worker 1] ['T_P0.1err', 'T_P0.01err', 'T_adam3e4', 'T_adam1e3']  (CAL σ=(1.04, 0.86) atk_p=0.54)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  T_P0.1err    surrF1=0.922 P=0.943 R=0.905 fpr=0.170 conv=59 pFP=0.027 wR=0.71 | IsaacF1=0.921  (832s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  T_P0.01err   surrF1=0.925 P=0.932 R=0.921 fpr=0.202 conv=59 pFP=0.015 wR=0.67 | IsaacF1=0.916  (837s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: off | PER: off | n-step: 3
+  T_adam3e4    surrF1=0.925 P=0.932 R=0.921 fpr=0.205 conv=44 pFP=0.029 wR=0.72 | IsaacF1=0.927  (211s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  T_adam1e3    surrF1=0.927 P=0.931 R=0.926 fpr=0.208 conv=57 pFP=0.030 wR=0.70 | IsaacF1=0.924  (213s)
+[worker 1] done

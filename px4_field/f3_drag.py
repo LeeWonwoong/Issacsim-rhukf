@@ -27,12 +27,13 @@
 필요 공간: 기수 방향 v×leg×1.3, 기수 기준 오른쪽 같은 거리
 """
 import argparse
-from offboard_common import OffboardSequenceNode, run
+from offboard_common import OffboardSequenceNode, run, add_postflight_args
 
 
 class F3Drag(OffboardSequenceNode):
-    SEQ_NAME = 'f3_drag'
-    NEED_ALT = 3.0
+    SEQ_NAME = 'f4_drag'   # F4 (스크립트명 f3_drag 은 레거시)
+    CHECK_TYPE = 'drag'      # 비행 후 check_ulog 가 자동으로 이 유형으로 판정
+    NEED_ALT = 1.0
 
     def __init__(self, bench=False, outdir='field_logs', v=3.0, leg=8.0, pause=3.0,
                  settle=4.0, reps=2):
@@ -107,7 +108,7 @@ if __name__ == '__main__':
     ap.add_argument('--settle', type=float, default=4.0)
     ap.add_argument('--reps', type=int, default=4,
                     help='축당 왕복 횟수. 공간이 좁으면 구간을 줄이고 이걸 늘린다')
-    ap.add_argument('--need-alt', type=float, default=1.5,
+    ap.add_argument('--need-alt', type=float, default=1.0,
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--max-radius', type=float, default=0.0,
                     help='안전 반경 [m]. 0=자동 (구간거리×1.4, 최소 30)')
@@ -115,5 +116,6 @@ if __name__ == '__main__':
                     help='bench 모드 추력 0~1. 0.10 은 아이들에 가까워 반응이 안 보인다. '
                          '모터 반응을 보려면 0.20~0.25 (프로펠러 제거 상태에서만!)')
     ap.add_argument('--outdir', default='field_logs')
+    add_postflight_args(ap)
     a = ap.parse_args()
-    run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir)
+    run(lambda bench, outdir: build(bench, outdir, a), a.bench, a.outdir, args=a)

@@ -23,7 +23,7 @@ from .network import (
     InputNormalizer, forward_single, DTYPE, apply_tf32_config,
 )
 from .rhukf_core import (
-    rhukf_step_fv, rhukf_step_fv_error, init_error_horizon, compute_per_priorities,
+    rhukf_step_fv, rhukf_step_fv_error, init_error_horizon, compute_per_priorities, ekf_step,
 )
 
 
@@ -187,13 +187,34 @@ class OnlineRHUKFAgent:
         kgain_last = 0.0; dbg_last = None
         theta_before = self.theta.squeeze().detach().clone()   # argmax_flip용 스냅샷
 
-        if cfg.state_form == 'error':
+        _fm = getattr(cfg, 'filter_mode', 'rhukf')
+        if _fm in ('ukf', 'ekf'):   # ★09-13 KTD/EKF-TD 베이스라인: P 를 학습 호출 간 지속(무한 기억), 마지막 배치만, 시그마 앙상블 없음
+            _step = ekf_step if _fm == 'ekf' else rhukf_step_fv
+            _P = getattr(self, '_persist_P', None)
+            try:
+                self.theta, _P, l_val, t_var, kgain_last, dbg_last = _step(
+                    self.theta, self.theta_target, _P, self.batch_hist[-1], self.sp, (_P is None), cfg.p_init, self.fv_cache, cfg, need_diag=True)
+            except Exception as _e1:   # ★무한기억 P 의 PD 상실(KTD 알려진 문제): 고유값 클리핑으로 복구, 실패 시 P 리셋 (횟수 기록)
+                self._p_repairs = getattr(self, '_p_repairs', 0) + 1
+                import traceback as _tb; self._last_learn_err = _tb.format_exc()
+                if self._p_repairs <= 3 or self._p_repairs % 200 == 0: print(f'  [KTD-LEARN] {_fm} step 예외 #{self._p_repairs}: {type(_e1).__name__}: {str(_e1)[:160]}', flush=True)   # ★09-15 Isaac ekf 무학습(loss 0) 원인 추적용
+                try:
+                    _Ps = 0.5 * (_P + _P.t()); ev, U = torch.linalg.eigh(_Ps)
+                    _P = (U * ev.clamp(min=1e-6, max=float(cfg.p_init) * 100.0)) @ U.t()
+                    self.theta, _P, l_val, t_var, kgain_last, dbg_last = _step(
+                        self.theta, self.theta_target, _P, self.batch_hist[-1], self.sp, False, cfg.p_init, self.fv_cache, cfg, need_diag=True)
+                except Exception as _e2:
+                    if self._p_repairs <= 3 or self._p_repairs % 200 == 0: print(f'  [KTD-LEARN] 복구 실패 → P 리셋: {type(_e2).__name__}: {str(_e2)[:160]}', flush=True)
+                    _P = None; l_val, t_var, kgain_last, dbg_last = 0.0, 0.0, 0.0, None
+            self._persist_P = _P; loss = l_val; z_var_sum = t_var * cfg.N_horizon
+        elif cfg.state_form == 'error':
             ctx = init_error_horizon(self.theta, self.theta_target,
                                      list(self.batch_hist), self.sp, cfg, self.fv_cache)
             fs = None
             for h in range(cfg.N_horizon):
                 self.theta, fs, l_val, t_var, kgain_last, dbg_last = rhukf_step_fv_error(
-                    fs, ctx, self.batch_hist[h], h, self.sp, cfg, self.fv_cache)
+                    fs, ctx, self.batch_hist[h], h, self.sp, cfg, self.fv_cache,
+                    need_diag=(h == cfg.N_horizon - 1))
                 loss = l_val
                 z_var_sum += t_var
         else:  # absolute
@@ -201,7 +222,8 @@ class OnlineRHUKFAgent:
             for h in range(cfg.N_horizon):
                 self.theta, filter_state, l_val, t_var, kgain_last, dbg_last = rhukf_step_fv(
                     self.theta, self.theta_target, filter_state, self.batch_hist[h],
-                    self.sp, (h == 0), cfg.p_init, self.fv_cache, cfg)
+                    self.sp, (h == 0), cfg.p_init, self.fv_cache, cfg,
+                    need_diag=(h == cfg.N_horizon - 1))
                 loss = l_val
                 z_var_sum += t_var
 
@@ -211,6 +233,7 @@ class OnlineRHUKFAgent:
             self._last_pmax = float(dbg_last.get('max_P', 0.0))
             self._last_innov = float(dbg_last.get('innov_mean', 0.0))
             self._last_nis = float(dbg_last.get('nis_filter', 0.0))
+            self._last_adapt = float(dbg_last.get('adapt_ratio', 0.0))   # ★09-15 Huber R 팽창 비율(=mean max(|res|/c,1)) — 리플레이 방어·Huber c 스캔용
         try:
             s_probe = self.batch_hist[-1]['s']            # [dim_s, B]
             if self.normalizer:
@@ -305,7 +328,7 @@ class OnlineRHUKFAgent:
         print(f"  [Save] {path} ({self.info['total_params']} params)")
 
     def load(self, path: str):
-        ckpt = torch.load(path, map_location=self.device)
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)  # 우리 체크포인트(config 객체 포함) — torch>=2.6 기본 weights_only=True 회피
         self.theta = ckpt['theta']
         self.theta_target = ckpt['theta_target']
         self.steps_done = ckpt['steps_done']

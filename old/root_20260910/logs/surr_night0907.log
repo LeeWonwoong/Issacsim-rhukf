@@ -1,0 +1,3 @@
+[09-07 02:58] v6 tune stage1 시작 (30 config, 2 workers)
+[09-07 06:11] stage1 완료 → stage2 (top10 × N6/seed43)
+[09-07 08:29] v6 tune 전체 완료

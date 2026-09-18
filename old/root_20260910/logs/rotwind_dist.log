@@ -1,0 +1,10 @@
+[09-01 23:45:50] 대기: obs-scale(OBS_SCALE_DONE) 완료 + online_rl 소멸...
+[09-01 23:52:17] 대기: obs-scale(OBS_SCALE_DONE) 완료 + online_rl 소멸...
+[09-02 00:39:19] obs-scale 완료 확인 → rotwind 캡처 시작.
+[09-02 00:39:19] results_rotwind_a0.05 START (WIND_MOMENT_ARM=0.05 speed3 ep=30 zu-log)
+[09-02 00:53:30] results_rotwind_a0.05 END rc=0 zu=Y
+[09-02 00:53:30] results_rotwind_a0.10 START (WIND_MOMENT_ARM=0.10 speed3 ep=30 zu-log)
+[09-02 01:06:57] results_rotwind_a0.10 END rc=0 zu=Y
+[09-02 01:06:57] results_rotwind_a0.15 START (WIND_MOMENT_ARM=0.15 speed3 ep=30 zu-log)
+[09-02 01:23:26] results_rotwind_a0.15 END rc=0 zu=Y
+[09-02 01:23:31] 완료. 리플레이+플롯: python3 etc/scripts/rotwind_plot.py

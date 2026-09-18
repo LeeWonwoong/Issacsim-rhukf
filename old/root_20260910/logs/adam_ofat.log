@@ -1,0 +1,8 @@
+════ Adam OFAT sweep(5) 시작 08-23 14:11:03 ════
+[14:11:03] base_lr3e4_ams1_obs0_net24 lr=3e-4 ams=1 obs=0 net=24 START
+[16:44:58] base_lr3e4_ams1_obs0_net24 DONE rc=0 ep=293
+[16:44:58] var_lr1e3_ams1_obs0_net24 lr=1e-3 ams=1 obs=0 net=24 START
+[19:26:20] var_lr1e3_ams1_obs0_net24 DONE rc=0 ep=295
+[19:26:20] var_lr3e4_ams0_obs0_net24 lr=3e-4 ams=0 obs=0 net=24 START
+[22:08:58] var_lr3e4_ams0_obs0_net24 DONE rc=0 ep=294
+[22:08:58] var_lr3e4_ams1_obs1_net24 lr=3e-4 ams=1 obs=1 net=24 START

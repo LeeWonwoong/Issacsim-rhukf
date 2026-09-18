@@ -1,0 +1,51 @@
+# -*- coding: utf-8 -*-
+"""NIS surrogate 환경 — Isaac 없이 하이퍼파라미터 스캔용. 실제 rl/agent.py + reward 재사용.
+   충실도: ①NIS 조건별 분포(실측 empirical) ②정책의존성(호버→aliasing제거,공격→행동무관지속)
+   ③시간구조(burst on/off·온셋/오프셋 τ) ④reward=동일 TP/FP/FN. 검증=Isaac 격자 랭킹 대조."""
+import os, sys, json, numpy as np
+sys.path.insert(0,'.')
+np.random.seed(0)  # 데이터용
+import collections
+
+# ── 실측 NIS 분포 (config E, /tmp/nis_conds.json = compute 결과) ──
+C=json.load(open(__import__('os').path.join(__import__('os').path.dirname(__import__('os').path.abspath(__file__)),'nis_conds.json')))
+def samp(key,n=1):
+    g,v=C[key]; idx=np.random.randint(0,len(g),n); return np.array(g)[idx], np.array(v)[idx]
+BASE='① 평시 기동(무공격·무풍)'; MAN='④ 급기동 회전(scurve·무공격)'; ATK='② 기동+공격 track(PX4보상)'; WND='⑤ 바람 ws8(무공격)'
+
+class SurrogateEnv:
+    """스텝당 (nis_v, nis_g) 생성 + reward. 관측·window 는 러너가 구성."""
+    def __init__(self, ep_steps=400):
+        self.ep_steps=ep_steps
+    def reset(self):
+        self.t=0
+        self.maneuver = np.random.rand()<0.5   # 급기동 에피(aliasing↑) 여부
+        # 공격: 30% 무공격, 70% burst
+        self.has_atk = np.random.rand()>0.30
+        self.atk=np.zeros(self.ep_steps,dtype=bool)
+        if self.has_atk:
+            t=np.random.randint(80,150)  # 온셋
+            while t<self.ep_steps-20:
+                on=np.random.randint(40,81); off=np.random.randint(10,31)  # U(40,80)/U(10,30)
+                self.atk[t:min(t+on,self.ep_steps)]=True; t+=on+off
+        self._burst_start=None
+        return
+    def nis(self, action):
+        """action(prev): 0=track,1=hover. 정책의존 NIS 생성."""
+        a=self.atk[self.t] if self.t<self.ep_steps else False
+        if a:  # 공격 = 행동 무관 지속 (호버해도 토크 안 사라짐)
+            g,v=samp(ATK); g=g[0]; v=v[0]
+            # 온셋 상승 / 오프셋 감쇠 근사
+            if self._burst_start is None: self._burst_start=self.t
+            d=self.t-self._burst_start
+            if d<3: g*= (0.4+0.2*d)  # 온셋 3스텝 상승
+        else:
+            self._burst_start=None
+            if self.maneuver and action==0:  # track 중 급기동 → aliasing 스파이크
+                g,v=samp(MAN); g=g[0]; v=v[0]
+            elif np.random.rand()<0.35:      # 바람 등 약교란 가끔
+                g,v=samp(WND); g=g[0]; v=v[0]
+            else:                            # 호버 or gentle → 평시
+                g,v=samp(BASE); g=g[0]; v=v[0]
+        return float(np.clip(v,0,3.5)), float(np.clip(g,0,3.5)), bool(a)
+    def step(self): self.t+=1; return self.t>=self.ep_steps

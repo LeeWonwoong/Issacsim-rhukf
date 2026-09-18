@@ -1,0 +1,50 @@
+[worker 1] 24 jobs — 유계영향 양쪽 OFF, alias 0
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [1/24] SWnoH_P0.02_R1_d0.7_s42    F1=0.936 rec=0.940 fpr=0.193 pFP=0.096 wR=0.96 conv=73 rwd=145.1 (542s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [2/24] AdamMSE_1e3_d0.7_s42       F1=0.931 rec=0.924 fpr=0.164 pFP=0.118 wR=0.95 conv=74 rwd=143.1 (160s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [3/24] SGD_1e2_d0.7_s42           F1=0.913 rec=0.917 fpr=0.258 pFP=0.130 wR=0.92 conv=76 rwd=131.5 (158s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [4/24] SWnoH_P0.02_R1_d0.5_s42    F1=0.930 rec=0.932 fpr=0.202 pFP=0.121 wR=0.95 conv=74 rwd=138.2 (574s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [5/24] AdamMSE_1e3_d0.5_s42       F1=0.922 rec=0.925 fpr=0.214 pFP=0.085 wR=0.95 conv=76 rwd=142.3 (153s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [6/24] SGD_1e2_d0.5_s42           F1=0.899 rec=0.915 fpr=0.328 pFP=0.186 wR=0.95 conv=76 rwd=114.0 (158s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [7/24] SWnoH_P0.02_R1_d0.3_s42    F1=0.926 rec=0.928 fpr=0.213 pFP=0.163 wR=0.97 conv=76 rwd=146.7 (608s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [8/24] AdamMSE_1e3_d0.3_s42       F1=0.919 rec=0.923 fpr=0.219 pFP=0.086 wR=0.95 conv=76 rwd=146.9 (131s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [9/24] SGD_1e2_d0.3_s42           F1=0.917 rec=0.917 fpr=0.245 pFP=0.127 wR=0.97 conv=76 rwd=139.4 (145s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [10/24] SWnoH_P0.02_R1_d0.2_s42    F1=0.929 rec=0.933 fpr=0.195 pFP=0.072 wR=0.96 conv=52 rwd=147.7 (609s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [11/24] AdamMSE_1e3_d0.2_s42       F1=0.922 rec=0.917 fpr=0.194 pFP=0.090 wR=0.96 conv=52 rwd=129.0 (158s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [12/24] SGD_1e2_d0.2_s42           F1=0.918 rec=0.911 fpr=0.198 pFP=0.083 wR=0.95 conv=76 rwd=147.1 (143s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [13/24] SWnoH_P0.02_R1_d0.7_s43    F1=0.943 rec=0.936 fpr=0.140 pFP=0.019 wR=0.67 conv=75 rwd=209.3 (583s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [14/24] AdamMSE_1e3_d0.7_s43       F1=0.931 rec=0.923 fpr=0.171 pFP=0.085 wR=0.92 conv=71 rwd=194.6 (164s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [15/24] SGD_1e2_d0.7_s43           F1=0.932 rec=0.918 fpr=0.149 pFP=0.059 wR=0.91 conv=86 rwd=190.2 (147s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [16/24] SWnoH_P0.02_R1_d0.5_s43    F1=0.933 rec=0.926 fpr=0.152 pFP=0.058 wR=0.95 conv=72 rwd=199.4 (591s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [17/24] AdamMSE_1e3_d0.5_s43       F1=0.919 rec=0.902 fpr=0.163 pFP=0.075 wR=0.93 conv=84 rwd=161.8 (146s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [18/24] SGD_1e2_d0.5_s43           F1=0.922 rec=0.907 fpr=0.163 pFP=0.075 wR=0.92 conv=86 rwd=170.5 (158s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [19/24] SWnoH_P0.02_R1_d0.3_s43    F1=0.930 rec=0.929 fpr=0.190 pFP=0.074 wR=0.90 conv=72 rwd=199.7 (601s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [20/24] AdamMSE_1e3_d0.3_s43       F1=0.929 rec=0.932 fpr=0.207 pFP=0.068 wR=0.96 conv=72 rwd=187.0 (148s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [21/24] SGD_1e2_d0.3_s43           F1=0.915 rec=0.903 fpr=0.196 pFP=0.074 wR=0.93 conv=79 rwd=153.3 (137s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  [22/24] SWnoH_P0.02_R1_d0.2_s43    F1=0.934 rec=0.928 fpr=0.167 pFP=0.031 wR=0.86 conv=69 rwd=188.5 (517s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  [23/24] AdamMSE_1e3_d0.2_s43       F1=0.936 rec=0.935 fpr=0.171 pFP=0.097 wR=0.97 conv=67 rwd=203.9 (148s)
+  Agent: SGD DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.01 | AMSGrad: ON | PER: off | n-step: 3
+  [24/24] SGD_1e2_d0.2_s43           F1=0.924 rec=0.916 fpr=0.206 pFP=0.083 wR=0.94 conv=72 rwd=185.0 (141s)
+[worker 1] done

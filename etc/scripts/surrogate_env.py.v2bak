@@ -1,0 +1,213 @@
+# -*- coding: utf-8 -*-
+"""NIS surrogate 환경 v2 — Isaac 없이 RHUKF 하이퍼파라미터 스캔용.
+   실제 rl/agent.py + env/reward.py 재사용, 환경(NIS 관측 생성)만 대체.
+
+   ── v2 충실도 개선(2026-08-28) ────────────────────────────────────────
+   v1 문제: ①스파이크 iid(시간상관 없음) → 매 스텝 독립 오탐기회 → 정밀도 비현실 저하
+            ②행동→다음상태 동역학 없음(hover가 aliasing 즉시 제거) ③관측 raw[0,3.5](Isaac는 /3.5)
+            ④오프셋 감쇠 없음(복귀 즉시) ⑤결과성(crash) 신호 없음
+   v2 해결:
+     A. 잠재상태 man_energy ∈[0,1]: track→궤적 sharpness 추종, hover→시상수 감쇠.
+        스파이크 온셋확률 ∝ man_energy → hover가 aliasing 을 '몇 스텝에 걸쳐' 억제(행동→상태 결합).
+     B. 스파이크 = 상관 버스트(온셋 Poisson·길이 Geom) → tail 이 시간상 뭉침(실제 급회전).
+     C. 공격 = sustained(행동무관) + 온셋킥(overshoot) + 오프셋 지수감쇠(필터랙 → 복귀 난이도).
+     D. 관측은 러너가 /OBS_DIV 정규화(Isaac 정합). 여기선 raw NIS([0,clip]) 반환.
+     E. crash: 공격중 미대응(track) 지속 → drift 누적 → 임계 초과시 종단(consequentiality).
+
+   보정 타깃(Isaac set-A, results_g1_A_*): F1 0.972 / P 0.967 / R 0.976 / delay 2.1 / fpr 0.13
+   empirical(config E, nis_conds.json) body/tail 분해:
+     BASE   tail_frac 0.091 tail_mean 1.81 body N(0.518,0.327)  v N(0.527,0.221)
+     MAN    tail_frac 0.150 tail_mean 1.84 body N(0.470,0.296)  v N(0.532,0.224)
+     WND    tail_frac 0.011 tail_mean 1.59 body N(0.445,0.218)
+     ATK    tail_frac 0.968 tail_mean 2.17 (sustained)          v N(0.679,0.213)
+"""
+import os
+import numpy as np
+
+# ── empirical 보정 상수 (config E) ──────────────────────────────────────
+BODY_MEAN, BODY_STD = 0.50, 0.31        # 평시 gyro NIS body (스파이크 제외)
+BODY_CLIP = 1.5
+SPIKE_MEAN, SPIKE_STD = 1.84, 0.34      # aliasing 스파이크 진폭 (tail)
+SPIKE_MIN = 1.5
+ATK_MEAN, ATK_STD = 2.15, 0.25          # 공격 sustained gyro NIS
+ATK_ONSET_KICK = 0.0                   # 온셋 overshoot 가산(t=0..2 감쇠)
+V_BASE_MEAN, V_BASE_STD = 0.52, 0.22    # vel NIS body (평시)
+V_ATK_BUMP = 0.02                       # 공격시 vel 평균 상승(약판별)
+V_G_COUPLING = 0.08                     # vel 이 gyro 에 약하게 동조(corr≈0.19 재현)
+
+# ── 스파이크 프로세스 (man_energy=1 기준 온셋확률; 실제=P_SPIKE*man_energy) ──
+P_SPIKE_MAX = 0.15                       # aggr 트래킹(man~0.6)→tail_frac≈0.15, gentle(man~0.37)→0.09
+SPIKE_LEN_MEAN = 2.2                     # 버스트 평균 길이(Geom)
+
+# ── man_energy 동역학 ──
+MAN_HOVER_DECAY = 0.55                   # hover 시 man_energy *= 0.55 (드론 감속 → aliasing 소멸)
+MAN_TRACK_TAU = 0.4                      # track 시 man_energy → m_profile 로 1차 추종(계수)
+
+# ── 오프셋 감쇠 / crash ──
+OFF_TAU = 2.0                            # 공격종료 후 gyro NIS 지수감쇠 시상수(스텝)
+CRASH_DRIFT_TH = 12.0                    # drift 누적 임계(초과시 crash)
+CRASH_DRIFT_PER_FN = 1.0                 # 공격중 미대응 1스텝당 drift 가산(×δ스케일)
+
+
+class SurrogateEnv:
+    """스텝당 (nis_v, nis_g, atk) 생성. man_energy·스파이크·공격 동역학 내장.
+       관측/window 구성·정규화는 러너가 담당. 관측은 raw NIS(clip) 반환."""
+
+    def __init__(self, ep_steps=400, clip=3.0, crash=False, seed=None):
+        self.ep_steps = ep_steps
+        self.clip = clip
+        self.crash_on = crash
+        self.rng = np.random.default_rng(seed) if seed is not None else np.random
+
+    # ─────────────────────────────────────────────────────────────
+    def _rand(self):
+        return self.rng.random() if hasattr(self.rng, 'random') else np.random.rand()
+
+    def _randn(self):
+        return self.rng.standard_normal() if hasattr(self.rng, 'standard_normal') else np.random.randn()
+
+    def _randint(self, lo, hi):
+        return int(self.rng.integers(lo, hi)) if hasattr(self.rng, 'integers') else np.random.randint(lo, hi)
+
+    # ─────────────────────────────────────────────────────────────
+    def _make_profile(self):
+        """궤적 sharpness m_profile[t] ∈[0,1]: aggr=날카로운 회전 피크, gentle=완만."""
+        n = self.ep_steps
+        aggr = self._rand() < 0.5
+        base = 0.30 if aggr else 0.13
+        peak_h = 0.75 if aggr else 0.32
+        n_turns = self._randint(4, 9) if aggr else self._randint(2, 5)
+        prof = np.full(n, base)
+        for _ in range(n_turns):
+            c = self._randint(0, n)
+            w = self._randint(6, 20)          # 회전 지속폭
+            idx = np.arange(n)
+            prof += peak_h * np.exp(-0.5 * ((idx - c) / w) ** 2)
+        prof = np.clip(prof, 0.0, 1.0)
+        return prof, aggr
+
+    def reset(self):
+        n = self.ep_steps
+        self.t = 0
+        self.m_profile, self.aggr = self._make_profile()
+        self.man_energy = float(self.m_profile[0])
+
+        # 공격 스케줄: 30% 무공격, 70% burst (ON~U(40,80)/OFF~U(10,30))
+        self.has_atk = self._rand() > 0.30
+        self.delta = 0.1 + 0.6 * self._rand()          # 공격강도 δ∈[0.1,0.7] (swrl 정합)
+        self.atk = np.zeros(n, dtype=bool)
+        self.burst_start_of = np.full(n, -1, dtype=int)  # 각 t 가 속한 버스트의 시작
+        self.last_burst_end = np.full(n, -1, dtype=int)  # t 시점 직전 버스트 종료
+        if self.has_atk:
+            t = self._randint(80, 150)
+            prev_end = -1
+            while t < n - 20:
+                on = self._randint(40, 81); off = self._randint(10, 31)
+                e = min(t + on, n)
+                self.atk[t:e] = True
+                self.burst_start_of[t:e] = t
+                t = e + off
+                prev_end = e
+            # last_burst_end 채우기
+            ends = []
+            i = 0
+            while i < n:
+                if self.atk[i]:
+                    j = i
+                    while j < n and self.atk[j]:
+                        j += 1
+                    for k in range(j, n):
+                        if self.last_burst_end[k] == -1 or self.last_burst_end[k] < j:
+                            pass
+                    ends.append(j)
+                    i = j
+                else:
+                    i += 1
+            for e in ends:
+                self.last_burst_end[e:] = e
+
+        self.spike_rem = 0            # 남은 스파이크 버스트 길이
+        self.spike_amp = 0.0         # 현 스파이크 진폭
+        self.off_level = 0.0         # 오프셋 감쇠 잔여 gyro 레벨
+        self.drift = 0.0             # crash 용 drift 누적
+        self.crashed = False
+        return
+
+    # ─────────────────────────────────────────────────────────────
+    def _update_man_energy(self, prev_action):
+        """행동→잠재상태: track→profile 추종, hover→감쇠. (핵심 action-transition)"""
+        if prev_action == 1:                       # hover: 드론 감속 → aliasing 소멸
+            self.man_energy *= MAN_HOVER_DECAY
+        else:                                      # track: 궤적 sharpness 로 1차 추종
+            tgt = float(self.m_profile[min(self.t, self.ep_steps - 1)])
+            self.man_energy += MAN_TRACK_TAU * (tgt - self.man_energy)
+        self.man_energy = float(np.clip(self.man_energy, 0.0, 1.0))
+
+    def nis(self, prev_action):
+        """현 스텝 (v, g, atk) 생성. prev_action 으로 man_energy·drift 갱신."""
+        t = self.t
+        a = bool(self.atk[t]) if t < self.ep_steps else False
+        self._update_man_energy(prev_action)
+
+        if a:
+            # ── 공격: sustained(행동무관) + 온셋킥 ──
+            bs = self.burst_start_of[t]
+            age = t - bs if bs >= 0 else 0
+            if age == 0:                            # 온셋 1스텝: 스파이크와 구분불가(확인 필요)
+                g = SPIKE_MEAN + SPIKE_STD * self._randn()
+            elif age == 1:                          # 온셋 2스텝: 중간(상승중)
+                g = 0.5 * (SPIKE_MEAN + ATK_MEAN) + ATK_STD * self._randn()
+            else:                                   # sustained
+                g = ATK_MEAN + ATK_STD * self._randn()
+            # δ 약변조(강한 공격일수록 약간 더 뚜렷)
+            g += 0.3 * (self.delta - 0.4)
+            self.off_level = max(self.off_level, ATK_MEAN)   # 오프셋 시드
+            # crash용 drift: 미대응(track)이면 누적, 대응(hover)이면 해소
+            if prev_action == 0:
+                self.drift += CRASH_DRIFT_PER_FN * (0.5 + self.delta)
+            else:
+                self.drift = max(0.0, self.drift - 1.5)
+        else:
+            # ── 평시: body + 오프셋 감쇠 잔여 + 상관 스파이크 버스트 ──
+            g = BODY_MEAN + BODY_STD * self._randn()
+            g = min(g, BODY_CLIP)
+            # 오프셋 감쇠(공격종료 직후 gyro NIS 잔존 → 복귀 난이도)
+            if self.off_level > BODY_MEAN:
+                self.off_level *= np.exp(-1.0 / OFF_TAU)
+                g = max(g, self.off_level + 0.15 * self._randn())
+            # 스파이크 버스트: man_energy 에 비례한 온셋(상관 유지)
+            if self.spike_rem > 0:
+                self.spike_rem -= 1
+                g = max(g, self.spike_amp + 0.15 * self._randn())
+            elif self._rand() < P_SPIKE_MAX * self.man_energy:
+                self.spike_rem = max(0, int(self.rng.geometric(1.0 / SPIKE_LEN_MEAN)) - 1) \
+                    if hasattr(self.rng, 'geometric') else max(0, np.random.geometric(1.0 / SPIKE_LEN_MEAN) - 1)
+                self.spike_amp = max(SPIKE_MIN, SPIKE_MEAN + SPIKE_STD * self._randn())
+                g = max(g, self.spike_amp)
+            self.drift = max(0.0, self.drift - 2.0)   # 평시엔 drift 빠르게 해소
+
+        # ── vel NIS: 약판별(공격시 소폭↑) + gyro 약동조 ──
+        v = V_BASE_MEAN + V_BASE_STD * self._randn()
+        if a:
+            v += V_ATK_BUMP
+        v += V_G_COUPLING * (g - BODY_MEAN)
+        v = float(np.clip(v, 0.0, self.clip))
+        g = float(np.clip(max(g, 0.0), 0.0, self.clip))
+
+        # crash 판정
+        if self.crash_on and self.drift >= CRASH_DRIFT_TH:
+            self.crashed = True
+        return v, g, a
+
+    def attack_delay(self):
+        """현 버스트 온셋 후 경과(공격중), 아니면 0."""
+        t = min(self.t, self.ep_steps - 1)
+        if t < self.ep_steps and self.atk[t]:
+            bs = self.burst_start_of[t]
+            return max(0, t - bs) if bs >= 0 else 0
+        return 0
+
+    def step(self):
+        """t 전진. done = 에피종료 or crash."""
+        self.t += 1
+        return self.t >= self.ep_steps or self.crashed

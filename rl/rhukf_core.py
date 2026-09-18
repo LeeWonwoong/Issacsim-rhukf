@@ -24,6 +24,7 @@ import numpy as np
 import torch
 
 from .network import forward_single, forward_bmm, DTYPE
+_FS_EAGER = forward_single   # ★09-15 EKF-TD 야코비안 전용 eager 참조: Isaac warmup_compile() 이 모듈 이름을 torch.compile 판으로 바꾸면 autograd(vmap) 가 깨져 학습이 조용히 0 이 됨
 
 JITTER = 1e-6
 JITTER_TRIA = 1e-6
@@ -85,7 +86,7 @@ def _apply_is_weight_to_R(R_diag_eff, batch, cfg):
 #  Absolute-state RHUKF (Full-Vector, Covariance form)
 # ═════════════════════════════════════════════════════════════
 def rhukf_step_fv(theta_current_in, theta_target, filter_P_cov, batch, sp,
-                  is_first, p_init_val, fv_cache, cfg):
+                  is_first, p_init_val, fv_cache, cfg, need_diag=True):
     """Receding-Horizon UKF, full vector, covariance form (full P, no sqrt)."""
     device, info, batch_sz = sp['device'], sp['info'], sp['batch_sz']
     n_x = info['total_params']
@@ -195,6 +196,12 @@ def rhukf_step_fv(theta_current_in, theta_target, filter_P_cov, batch, sp,
         P_new = P_new + cfg.tikhonov_lambda * eye_n
 
     # ── [J] Diagnostics ─────────────────────────────────────────────
+    # ★2026-09-03 need_diag: agent 는 호라이즌 **마지막 스텝**의 loss/k_gain/dbg 만 쓴다
+    #   (agent.py 루프에서 loss=l_val / kgain_last / dbg_last 가 매 스텝 덮어쓰기됨).
+    #   중간 스텝에서 .item() 을 부르면 device→host 동기화(≈0.28ms)가 걸려 순수 낭비.
+    #   target_var 는 N 스텝 합산에 쓰이므로 항상 계산한다. 로그되는 값은 전부 불변.
+    if not need_diag:
+        return theta_new, P_new, 0.0, target_var, 0.0, None
     P_diag = torch.diagonal(P_new)
     k_gain_norm = torch.norm(K).item()
     innov_abs = torch.abs(residual)
@@ -283,7 +290,7 @@ def init_error_horizon(theta_active, theta_target, batch_hist, sp, cfg, fv_cache
 # ═════════════════════════════════════════════════════════════
 #  Error-state RHUKF (Full-Vector, Covariance form)
 # ═════════════════════════════════════════════════════════════
-def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
+def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache, need_diag=True):
     """error-state(Δμ) covariance UKF 1-step. θ_active = θ_anchor + Δμ."""
     device, info, batch_sz = sp['device'], sp['info'], sp['batch_sz']
     n_x = info['total_params']
@@ -406,6 +413,11 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
 
     theta_active = (theta_anchor + mu_delta_new).view(-1, 1)
 
+    filter_state_new = {'mu_delta': mu_delta_new, 'P_delta': P_delta_new}
+    # ★2026-09-03 need_diag — 위 absolute 쪽 주석 참조 (마지막 스텝 값만 소비됨)
+    if not need_diag:
+        return theta_active, filter_state_new, 0.0, target_var, 0.0, None
+
     P_diag = torch.diagonal(P_delta_new)
     k_gain_norm = torch.norm(K).item()
     innov_abs = torch.abs(residual)
@@ -423,7 +435,6 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache):
         'mu_delta_norm': torch.norm(mu_delta_new).item(),
         'nis_filter': nis_filter,
     }
-    filter_state_new = {'mu_delta': mu_delta_new, 'P_delta': P_delta_new}
     return theta_active, filter_state_new, loss.item(), target_var, k_gain_norm, dbg
 
 
@@ -471,3 +482,62 @@ def compute_per_priorities(theta, theta_target, batch_hist, sp, cfg, force=False
         td = r_all - h_w
 
     return idx_all, td.abs()
+
+
+# ═════════════════════════════════════════════════════════════
+#  EKF-TD baseline (2026-09-13): 시그마포인트 대신 야코비안 H=∂Q(s,a;θ)/∂θ (Singhal&Wu 1989 / KOVA 형).
+#  나머지(DDQN 타깃, Q, R(Huber 적응 옵션), K, P 갱신)는 rhukf_step_fv 와 동일 → 공정 ablation.
+# ═════════════════════════════════════════════════════════════
+def ekf_step(theta_current_in, theta_target, filter_P_cov, batch, sp, is_first, p_init_val, fv_cache, cfg, need_diag=True):
+    device, info, batch_sz = sp['device'], sp['info'], sp['batch_sz']
+    n_x = info['total_params']
+    theta_pred = theta_current_in.clone(); theta_pred_flat = theta_pred.squeeze()
+    s_batch, s_next = batch['s'].t(), batch['s_next'].t()
+    if sp.get('normalizer'):
+        s_batch = sp['normalizer'].normalize(s_batch); s_next = sp['normalizer'].normalize(s_next)
+    eye_n = fv_cache.eye_n
+    P_prev = (p_init_val * eye_n) if (is_first or filter_P_cov is None) else filter_P_cov
+    P_pred = P_prev + cfg.q_init * eye_n
+    P_pred = 0.5 * (P_pred + P_pred.t())
+    # ── 야코비안 H [B, n_x] (autograd) ──
+    with torch.enable_grad():
+        th = theta_pred_flat.detach().to(torch.float32).requires_grad_(True)
+        def _f(t):
+            q = _FS_EAGER(t, info, s_batch)                            # [nA, B]  (eager: compile 판은 vmap/autograd 불가)
+            return q[batch['a'], torch.arange(batch_sz, device=device)].to(torch.float32)
+        H = torch.autograd.functional.jacobian(_f, th, vectorize=True).to(DTYPE)   # [B, n_x]
+        z_hat = _f(th).detach().to(DTYPE).view(-1, 1)
+    # ── DDQN 타깃 (rhukf_step_fv 와 동일) ──
+    Q_tgt = forward_bmm(theta_target.squeeze().unsqueeze(0), info, s_next)[0]      # [nA, B]
+    a_best_next = forward_single(theta_pred_flat, info, s_next).argmax(dim=0)
+    target_gamma = (cfg.gamma ** cfg.n_step_size) if cfg.use_n_step else cfg.gamma
+    idx = torch.arange(batch_sz, device=device)
+    not_term = (1.0 - batch['term']).to(DTYPE)
+    z_measured = (batch['r'].to(DTYPE) + target_gamma * not_term * Q_tgt[a_best_next, idx].to(DTYPE)).view(-1, 1)
+    target_var = torch.var(z_measured).item()
+    residual = z_measured - z_hat
+    loss = torch.mean(residual ** 2)
+    # ── R (Huber 적응, huber_c 크면 사실상 상수) + PER IS ──
+    res_abs = torch.abs(residual).squeeze(-1)
+    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0)
+    current_r_std = sp.get('current_r_std', cfg.r_init)
+    R_diag_eff = _apply_is_weight_to_R(current_r_std * adapt_factor, batch, cfg)
+    # ── EKF 갱신 ──
+    PH = P_pred @ H.t()                                # [n_x, B]
+    P_zz = H @ PH + torch.diag(R_diag_eff)             # [B, B]
+    P_zz = 0.5 * (P_zz + P_zz.t())
+    eye_b = torch.eye(batch_sz, dtype=DTYPE, device=device)
+    try: L_zz = torch.linalg.cholesky(P_zz + JITTER * eye_b)
+    except Exception: L_zz = torch.linalg.cholesky(P_zz + 1e-4 * eye_b)
+    tmp = torch.linalg.solve_triangular(L_zz, PH.t(), upper=False)
+    K = torch.linalg.solve_triangular(L_zz.t(), tmp, upper=True).t()   # [n_x, B]
+    theta_new_flat = theta_pred_flat + (K @ residual).squeeze(-1)
+    if not torch.isfinite(theta_new_flat).all(): theta_new_flat = theta_pred_flat.clone()
+    K_L = K @ L_zz
+    P_new = P_pred - K_L @ K_L.t(); P_new = 0.5 * (P_new + P_new.t())
+    if cfg.tikhonov_lambda > 0: P_new = P_new + cfg.tikhonov_lambda * eye_n
+    if not need_diag: return theta_new_flat.view(-1, 1), P_new, loss.item(), target_var, 0.0, None
+    P_diag = torch.diagonal(P_new); innov_abs = torch.abs(residual)
+    dbg = {'innov_mean': innov_abs.mean().item(), 'innov_max': innov_abs.max().item(), 'avg_P': P_diag.mean().item(), 'max_P': P_diag.max().item(),
+           'ht_norm': torch.norm(PH).item(), 'resid_norm': torch.norm(residual).item(), 'adapt_ratio': adapt_factor.mean().item()}
+    return theta_new_flat.view(-1, 1), P_new, loss.item(), target_var, torch.norm(K).item(), dbg

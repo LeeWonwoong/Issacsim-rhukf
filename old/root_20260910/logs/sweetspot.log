@@ -1,0 +1,5 @@
+[09-02 09:25:56] results_sweetspot_a0.05 START (arm=0.05, ws{6,9}, δ{0.6,0.7}, 4패턴, track+hover, 4ep, speed3, WIND_START=40)
+[09-02 09:51:34] results_sweetspot_a0.05 END rc=0 rows=81
+[09-02 09:51:34] results_sweetspot_a0.10 START (arm=0.10, ws{6,9}, δ{0.6,0.7}, 4패턴, track+hover, 4ep, speed3, WIND_START=40)
+[09-02 10:17:57] results_sweetspot_a0.10 END rc=0 rows=81
+[09-02 10:18:02] 완료.

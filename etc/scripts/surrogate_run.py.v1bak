@@ -1,0 +1,82 @@
+# -*- coding: utf-8 -*-
+import os, sys, json, numpy as np, collections, time
+sys.path.insert(0, '.')
+sys.path.insert(0, 'etc/scripts')
+from surrogate_env import SurrogateEnv
+from env.reward import calculate_reward, RewardConfig
+RC = RewardConfig()
+
+
+def run_config(env_vars, n_ep=60, seed=42):
+    for k, v in env_vars.items():
+        os.environ[k] = str(v)
+    os.environ['SURROGATE'] = '1'
+    import importlib, swrl_config
+    importlib.reload(swrl_config)
+    cfg = swrl_config.Config()
+    import torch
+    torch.manual_seed(seed); np.random.seed(seed)
+    from rl.agent import OnlineRHUKFAgent
+    agent = OnlineRHUKFAgent(cfg)
+    W = cfg.window_size
+    genv = SurrogateEnv(ep_steps=400)
+    hist = []
+    eps = 1.0
+    for ep in range(n_ep):
+        genv.reset()
+        wb = collections.deque(maxlen=W)
+        prev_s = None; prev_a = 0
+        tp = fp = fn = tn = 0; epr = 0.0; losses = []; burst_start = None
+        for t in range(400):
+            v, g, atk = genv.nis(prev_a)
+            wb.append([v, g, float(prev_a)])
+            if len(wb) < W:
+                genv.step(); continue
+            s = np.array(wb).flatten()
+            a = agent.act(s, eps)
+            if atk:
+                if burst_start is None:
+                    burst_start = t
+                dly = t - burst_start
+            else:
+                burst_start = None; dly = 0
+            r = calculate_reward(a, atk, dly, 0, RC) * getattr(cfg, 'reward_scale', 1.0)
+            epr += r
+            if atk:
+                if a == 1: tp += 1
+                else: fn += 1
+            else:
+                if a == 1: fp += 1
+                else: tn += 1
+            if prev_s is not None:
+                agent.push(prev_s, prev_a, r, s, False)
+                out = agent.learn()
+                if out is not None and out[0] is not None:
+                    losses.append(out[0])
+            prev_s = s; prev_a = a
+            if genv.step():
+                break
+        eps = max(0.01, eps * 0.97)
+        prec = tp / (tp + fp) if tp + fp > 0 else 0
+        rec = tp / (tp + fn) if tp + fn > 0 else 0
+        f1 = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0
+        hist.append(dict(ep=ep, reward=epr, f1=f1, prec=prec, rec=rec,
+                         loss=float(np.mean(losses)) if losses else 0.0, has_atk=int(tp + fn > 0)))
+    return hist
+
+
+CONFIGS = {
+    'A_r10_pd001': dict(NET_HIDDEN=16, RHUKF_N=5, RHUKF_Q='1e-3', RHUKF_TAU=0.02, RHUKF_UI=4, RHUKF_R=1.0, RHUKF_PD=0.01),
+    'A_r10_pd005': dict(NET_HIDDEN=16, RHUKF_N=5, RHUKF_Q='1e-3', RHUKF_TAU=0.02, RHUKF_UI=4, RHUKF_R=1.0, RHUKF_PD=0.05),
+    'A_r15_pd001': dict(NET_HIDDEN=16, RHUKF_N=5, RHUKF_Q='1e-3', RHUKF_TAU=0.02, RHUKF_UI=4, RHUKF_R=1.5, RHUKF_PD=0.01),
+    'A_r15_pd005': dict(NET_HIDDEN=16, RHUKF_N=5, RHUKF_Q='1e-3', RHUKF_TAU=0.02, RHUKF_UI=4, RHUKF_R=1.5, RHUKF_PD=0.05),
+}
+if __name__ == '__main__':
+    out = {}
+    for name, ev in CONFIGS.items():
+        t0 = time.time(); h = run_config(ev, n_ep=60)
+        atk = [r for r in h if r['has_atk']]
+        f1 = np.mean([r['f1'] for r in atk[-20:]]); R = np.mean([r['reward'] for r in h[-10:]]); lo = np.mean([r['loss'] for r in h[-10:]])
+        print(f"  {name}: F1 {f1:.3f} reward {R:.1f} loss {lo:.2f}  ({time.time()-t0:.0f}s)", flush=True)
+        out[name] = h
+    json.dump(out, open('/tmp/surrogate_out.json', 'w'))

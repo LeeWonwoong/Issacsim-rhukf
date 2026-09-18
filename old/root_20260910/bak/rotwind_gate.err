@@ -1,0 +1,4 @@
+arm 0.05: d(wind-benign)=0.68  wind_med=0.69 benign_med=0.50 (nw=8919)
+arm 0.10: d(wind-benign)=1.18  wind_med=0.90 benign_med=0.49 (nw=6862)
+arm 0.15: d(wind-benign)=1.25  wind_med=0.95 benign_med=0.49 (nw=5291)
+==> best arm=0.15 d=1.25 (thresh 0.4)

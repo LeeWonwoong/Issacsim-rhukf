@@ -1,0 +1,10 @@
+[worker 0] 4 configs, 160ep, seed=42
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  a0.30_P0.2     h=3.042 F1=0.962 conv=37 stab=0.015 pFP=0.013 wR=0.95 rwd=279.0 loss=1.093 (1115s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  a0.10_P0.2     h=1.014 F1=0.974 conv=33 stab=0.010 pFP=0.019 wR=0.97 rwd=286.7 loss=0.718 (1118s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  a0.30_P0.1     h=2.151 F1=0.969 conv=39 stab=0.013 pFP=0.052 wR=0.96 rwd=281.7 loss=0.838 (1173s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  a0.10_P0.1     h=0.717 F1=0.974 conv=32 stab=0.011 pFP=0.013 wR=0.96 rwd=286.2 loss=0.760 (1117s)
+[worker 0] done

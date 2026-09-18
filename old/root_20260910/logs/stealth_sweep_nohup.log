@@ -1,0 +1,9 @@
+[14:51] s08_swirl SKIP
+[09-01 14:51] s08_adam agent=adam STEALTH=0.8 START
+[09-01 18:21] s08_adam END rc=124 ep=160
+[18:21] s05_swirl SKIP
+[09-01 18:21] s05_adam agent=adam STEALTH=0.5 START
+[09-01 21:52] s05_adam END rc=124 ep=160
+[21:52] s00_swirl SKIP
+[21:52] s00_adam SKIP
+════ stealth_sweep 6런 완료 09-01 21:52 ════

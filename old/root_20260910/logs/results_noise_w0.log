@@ -1,0 +1,10 @@
+[worker 0] ['swirl_P0.2_s0.15', 'swirl_P0.2_s0.3', 'swirl_P0.1_s0.15', 'swirl_P0.1_s0.3']
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  swirl_P0.2_s0.15   F1=0.968 conv=33 stab=0.013 pFP=0.002 wR=0.93 sR=0.96 rwd=279.2 (729s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  swirl_P0.2_s0.3    F1=0.963 conv=37 stab=0.015 pFP=0.011 wR=0.91 sR=0.96 rwd=272.9 (496s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  swirl_P0.1_s0.15   F1=0.968 conv=33 stab=0.013 pFP=0.005 wR=0.94 sR=0.96 rwd=279.5 (449s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  swirl_P0.1_s0.3    F1=0.961 conv=33 stab=0.015 pFP=0.013 wR=0.91 sR=0.96 rwd=272.5 (439s)
+[worker 0] done

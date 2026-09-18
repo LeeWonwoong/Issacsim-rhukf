@@ -1,0 +1,8 @@
+════ 채움 시작 12:52:58 ════
+[12:52:58] 채움 const pats=figure8
+[12:55:18] const 종료 rows=1747
+  results_sm_const 병합후 rows=14073
+[12:55:23] 채움 accel pats=figure8,aggressive
+[13:01:49] accel 종료 rows=3493
+  results_sm_accel 병합후 rows=13096
+════ 채움 완료 13:01:55 ════

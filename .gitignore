@@ -16,3 +16,13 @@ results_*/
 # 감시 로그 (재현 가능한 실행 산출물)
 px4_field/field_logs/
 px4_field/*_watch.csv
+
+# ★2026-09-18 재구성 전 체크포인트: 대용량 산출물·수동 백업은 디스크에만 (코드·문서만 추적)
+old/root_20260910/scratchpad/
+etc/media/
+*.npz
+*.npy
+*.bak_*
+*.bak
+*_console.log
+isaac_*.log

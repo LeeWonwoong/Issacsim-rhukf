@@ -12,12 +12,13 @@
 절차: Position 모드로 수동 이륙 → 고도 4~5m 안정 → 오프보드 스위치 ON
 """
 import argparse
-from offboard_common import OffboardSequenceNode, run
+from offboard_common import OffboardSequenceNode, run, add_postflight_args
 
 
 class F1Hover(OffboardSequenceNode):
-    SEQ_NAME = 'f1_hover'
-    NEED_ALT = 3.0
+    SEQ_NAME = 'f11_hover'   # F11(호버 baseline)·F12(공격) 공용 (VRA 상태는 로그에)
+    CHECK_TYPE = 'hover'       # 비행 후 check_ulog 가 자동으로 이 유형으로 판정
+    NEED_ALT = 1.0
 
     def __init__(self, bench=False, outdir='field_logs', dur=90.0):
         self.dur = dur
@@ -34,12 +35,13 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--bench', action='store_true', help='지상 검증(사전조건 완화)')
     ap.add_argument('--dur', type=float, default=90.0, help='호버 유지 [s] (권장 90~120)')
-    ap.add_argument('--need-alt', type=float, default=1.5,
+    ap.add_argument('--need-alt', type=float, default=1.0,
                     help='진입 최소 고도 [m]. 저고도(2m) 운용 기준. 실내 지상검증은 0')
     ap.add_argument('--bench-thrust', type=float, default=0.10,
                     help='bench 모드 추력 0~1. 0.10 은 아이들에 가까워 반응이 안 보인다. '
                          '모터 반응을 보려면 0.20~0.25 (프로펠러 제거 상태에서만!)')
     ap.add_argument('--outdir', default='field_logs')
+    add_postflight_args(ap)
     a = ap.parse_args()
 
     def build(bench, outdir):
@@ -47,4 +49,4 @@ if __name__ == '__main__':
         node = F1Hover(bench, outdir, a.dur)
         node.bench_thrust = a.bench_thrust
         return node
-    run(build, a.bench, a.outdir)
+    run(build, a.bench, a.outdir, args=a)

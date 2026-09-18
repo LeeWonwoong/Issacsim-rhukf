@@ -1,0 +1,26 @@
+════ tune_batch2 시작 08-27 01:59:29 (config E + 신기동) ════
+[01:59:29] adam_lr3e4 agent=adam env='ADAM_LR=3e-4' START
+[04:12:42] adam_lr3e4 DONE rc=0 ep=200
+[04:12:42] adam_lr1e3 agent=adam env='ADAM_LR=1e-3' START
+[06:31:01] adam_lr1e3 DONE rc=0 ep=200
+[06:31:01] GPU 대기 중 util=100% (0s 경과)
+[07:01:02] GPU 대기 중 util=100% (1800s 경과)
+[07:31:02] GPU 대기 중 util=100% (3600s 경과)
+[08:01:03] GPU 대기 중 util=100% (5400s 경과)
+[08:15:03] GPU 한가(util=1%, 5분 지속) → RHUKF 진행
+[08:15:03] rhukf_t02u4 agent=rhukf env='RHUKF_TAU=0.02 RHUKF_UI=4 RHUKF_R=1.0' START
+════ batch2b (RHUKF 강행) 시작 08-27 09:52:35 ════
+[09:52:35] rhukf_t02u4 agent=rhukf env='RHUKF_TAU=0.02 RHUKF_UI=4 RHUKF_R=1.0' START (GPU util=6%)
+[10:57:29] batch2c: t02u4 종료 대기
+[11:07:13] batch2c: t02u4 종료 대기
+[11:31:07] batch2c: t02u4 종료 대기
+[11:52:47] batch2c: t02u4 종료 대기
+[11:53:11] batch2c: t02u4 종료 대기
+[11:56:07] batch3: batch2 완료 대기
+[11:59:05] batch3: batch2 완료 대기
+[12:01:42] rhukf_t02u4 DONE(고아) ep=200
+[12:01:42] traj_wp 캡처 START (waypoint δ0.6/0.8 × track,whover2 공격 15-25s)
+[12:03:25] traj_wp DONE rc=0
+[12:03:25] scurve_val 검증비행 START (무풍+강풍 각 1회, 공격 없음)
+[12:04:37] scurve_val DONE rc=0
+[12:04:37] adam_n16 agent=adam env='ADAM_LR=1e-3 NET_HIDDEN=16' START (GPU util=0%)

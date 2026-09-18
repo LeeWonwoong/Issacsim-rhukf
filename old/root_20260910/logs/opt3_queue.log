@@ -1,0 +1,17 @@
+[09-02 20:14] adam_mse_1e3 START agent=adam
+[09-02 21:38] adam_mse_1e3 END rc=0 ep=200
+[09-02 21:38] adam_mse_3e4 START agent=adam
+[09-02 23:02] adam_mse_3e4 END rc=0 ep=200
+[09-02 23:02] sgd_1e2 START agent=adam
+[09-03 00:26] sgd_1e2 END rc=0 ep=200
+[09-03 00:26] sgd_1e3 START agent=adam
+[09-03 01:49] sgd_1e3 END rc=0 ep=200
+[09-03 01:49] swirl_base START agent=rhukf
+[09-03 03:13] swirl_base END rc=0 ep=200
+[09-03 03:13] swirl_pd01 START agent=rhukf
+[09-03 04:36] swirl_pd01 END rc=0 ep=200
+[09-03 04:36] swirl_abs001 START agent=rhukf
+[09-03 05:59] swirl_abs001 END rc=0 ep=200
+[09-03 05:59] swirl_abs01 START agent=rhukf
+[09-03 07:22] swirl_abs01 END rc=0 ep=200
+[09-03 07:22] 8런 완료.

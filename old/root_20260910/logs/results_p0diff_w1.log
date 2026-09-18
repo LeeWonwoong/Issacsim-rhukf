@@ -1,0 +1,5 @@
+[wait] alpha 스윕 완료 대기...
+[worker 1] 1 configs: ['a0.10_P0.4']
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  a0.10_P0.4     h=1.434 F1=0.971 conv=33 stab=0.011 pFP=0.005 wR=0.95 rwd=285.5 loss=0.857 (764s)
+[worker 1] done

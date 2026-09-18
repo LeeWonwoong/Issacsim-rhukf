@@ -1,0 +1,21 @@
+[09-01 18:46:26] 대기: stealth_sweep(s05_adam) 종료 + online_rl 프로세스 소멸...
+[09-01 19:37:51] 대기: stealth_sweep(s05_adam) 종료 + online_rl 소멸...
+[09-01 21:37:06] 대기: stealth_sweep(s05_adam) 종료 + online_rl 소멸...
+[09-01 21:52:07] sweep 종료 확인 → A/B 시작.
+[09-01 21:52:07] results_spdtest_swirl_spd1 START (agent=rhukf speed=1 seed42 ep=40)
+[09-01 22:45:21] results_spdtest_swirl_spd1 END rc=0 ep=40
+[09-01 22:45:21]   RTF 달성: 
+[09-01 22:45:21]   learn: │ learn-step: mean=8.6ms max=9.6ms (n=386) | step예산=100ms@speed1.0
+[09-01 22:45:21] results_spdtest_swirl_spd3 START (agent=rhukf speed=3 seed42 ep=40)
+[09-01 23:06:05] results_spdtest_swirl_spd3 END rc=0 ep=40
+[09-01 23:06:05]   RTF 달성: 
+[09-01 23:06:05]   learn: │ learn-step: mean=8.7ms max=11.7ms (n=386) | step예산=33ms@speed3.0
+[09-01 23:06:05] results_spdtest_adam_spd1 START (agent=adam speed=1 seed42 ep=40)
+[09-01 23:59:23] results_spdtest_adam_spd1 END rc=0 ep=40
+[09-01 23:59:23]   RTF 달성: 
+[09-01 23:59:23]   learn: │ learn-step: mean=2.1ms max=3.2ms (n=386) | step예산=100ms@speed1.0
+[09-01 23:59:23] results_spdtest_adam_spd3 START (agent=adam speed=3 seed42 ep=40)
+[09-02 00:19:52] results_spdtest_adam_spd3 END rc=0 ep=40
+[09-02 00:19:52]   RTF 달성: 
+[09-02 00:19:52]   learn: │ learn-step: mean=2.0ms max=2.7ms (n=386) | step예산=33ms@speed3.0
+[09-02 00:19:52] A/B 완료. 비교: python3 etc/scripts/speed_ab_compare.py

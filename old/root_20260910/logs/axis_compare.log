@@ -1,0 +1,6 @@
+════ 축모드 비교 시작 08-22 03:18:33 ════
+[03:18:33] single (yaw_ratio=0.0) START
+[11:00:55] single DONE rows=349482
+[11:00:55] balanced (yaw_ratio=1.0) START
+[18:40:18] balanced DONE rows=374463
+════ 완료 18:40:18 ════

@@ -1,0 +1,9 @@
+════ maneuver A/B 시작 15:13:19 ════
+[15:13:19] zu_constA START (WP_CORNER_DECEL=0)
+[15:17:37] traj_delta: A/B 완료 대기
+[15:24:09] zu_constA DONE rc=0
+[15:24:09] zu_decelB START (WP_CORNER_DECEL=1)
+[15:35:02] zu_decelB DONE rc=0
+════ 완료 15:35:07 ════
+[15:35:37] traj_delta START (20셀)
+[15:51:46] traj_delta DONE rc=0

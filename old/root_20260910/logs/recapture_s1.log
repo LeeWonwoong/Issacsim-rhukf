@@ -1,0 +1,10 @@
+════ recapture_s1 시작 08-27 13:35:14 ════
+[13:35:14] [1] track_check START
+[13:39:45] [1] DONE rc=0
+[13:39:45] [2] traj_wp START
+[13:43:20] [2] DONE rc=0
+[13:43:20] [3] scurve_val START
+[13:45:29] [3] DONE rc=0
+[13:45:29] [4] zu_s1 START
+[13:58:50] [4] DONE rc=0
+════ recapture_s1 완료 13:58:55 ════

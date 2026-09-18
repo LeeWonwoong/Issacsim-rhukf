@@ -6,6 +6,7 @@ RL, 드론 물리, 보상, 공격/외란 풀, 커리큘럼, 시나리오 샘플�
 
 보상 설계는 env/reward.py 의 RewardConfig 로 분리됨 (cfg.reward).
 """
+import math
 import os
 import random
 import torch
@@ -49,13 +50,13 @@ class Config:
     #  에피소드 구조
     # ══════════════════════════════════════════════════════════
     warmup_seconds: float = 3.0
-    attack_start_range: Tuple[int, int] = (50, 150)
+    attack_start_range: Tuple[int, int] = (20, 40)     # FDI 캠페인 시작(2026-08-19)
     attack_ramp_duration: float = 0.0     # ★0.0=step 공격(즉시 full) 확정(2026-07-23). 펄스 시그니처(t=1~2 스파이크) 선명화=즉각감지 서사.
                                           #   EADR 논거(효과적 액추에이터 공격=abrupt/고진폭). ⚠기존 0.3은 온셋 뭉갬→펄스 약화(학습이 0.3으로 돌던 버그).
                                           # 주의: step은 crash 데드라인을 줄임 → sweep의 dhover(지연 호버) 생존곡선으로 대응가능성 검증 후 확정.
     attack_duration_range: Tuple[int, int] = (50, 100)
 
-    eps_action_probs: List[float] = field(default_factory=lambda: [0.8, 0.2])  # 탐험 track:hover=80:20 (50/50은 평시 FP폭증·교란)
+    eps_action_probs: List[float] = field(default_factory=lambda: [1.0 - float(os.environ.get('EPS_HOVER_P', '0.15') or 0.15), float(os.environ.get('EPS_HOVER_P', '0.15') or 0.15)])  # 2026-08-19 탐험 track:hover=85:15 (★09-13 env EPS_HOVER_P 로 hover 탐험 비율 조정, 약속 D 실험용)
 
     log_interval: int = 5
 
@@ -65,15 +66,67 @@ class Config:
     natural_lag: float = 1.0
     max_error: float = 10.0          # drift 종료용 '통제상실' 경계(추적오차 판정 아님). 회복가능 상황엔 안 터지게 크게
     min_altitude: float = -0.5
-    flight_altitude: float = 5.0
-    flight_radius: float = 5.0
-    flight_omega: float = 0.5
+    flight_altitude: float = 2.5   # ★2026-09-07 5.0→2.5 (사용자확정 10×10×4m). tilt공격 추락=crash_flip 이라 고도는 데드라인 아닌 flip여유
+    #  ★ 2026-08-07: 실기 속도제한(MPC_XY_VEL_MAX=2.0)에 맞춰 재설정.
+    #    구값 R=5.0·w=0.5 → 접선 2.50 m/s 로 실기에서 클램프됐다.
+    #    현값 R=3.5·w=0.5 → 1.75 m/s (여유 12.5%). 공간 circle 7x7 m.
+    # ★2026-09-07 실공간 복원(사용자 확정: 10×10×4m 정상 비행에서 측정). [OLD] 1.6/0.75 는
+    #   v2 회전여기 논리(폐기)의 산물 — 화면으로 확인 시 비정상적으로 좁은 선회였다.
+    #   08-12 실기 안전값 2.8 복원 + ω 0.45: 접선 2.8×0.45=1.26, 가감속 amp0.5 피크 1.89 < 상한 2.0 (여유 5%)
+    flight_radius: float = 3.4   # ★2026-09-07 2.8→3.4 (반경 확대, circle Ø6.8m). ω 동반하향으로 속도 유지
+                                 #   (구 3.5 는 1.75 로 여유 14% 뿐이라 명령속도가 2.00 에 상시 포화 →
+                                 #    기체가 뒤처져도 못 따라잡아 추종 RMSE 1.4~2.9 m. 실기 08-12 실측)
+                                 #   ★ 실기 f5_pattern.py --R 기본값과 **반드시 같이** 바꾼다.
+    flight_omega: float = 0.38   # ★2026-09-07 0.45→0.38 (반경 3.4 확대 동반). 접선 3.4×0.38=1.29·가감속피크 1.94<2.0
+    #  figure8 만 반경을 1/sqrt(2) 배로 쓴다.
+    #    x=R sin(wt), y=(R/2) sin(2wt) → vx=Rw cos(wt), vy=Rw cos(2wt) 라
+    #    t=0 에서 둘이 동시에 최대 → |v|max = R*w*sqrt(2) = 2.47 m/s 로 클램프된다.
+    #    R 을 1/sqrt(2) 배 하면 |v|max 가 circle 과 같은 R*w 가 된다.
+    fig8_radius_scale: float = 0.70710678
+    wp_box_halfwidth: float = 3.2   # ★2026-08-27 waypoint 박스 반폭[m] — R 에서 분리.
+    #   구 구현은 kk=R/5 로 R 축소(2.8→1.6)가 박스를 5.6→3.2m 로 같이 줄였는데, 코너 선회반경은
+    #   물리 고정(v²/ACC_HOR = 0.48~1.08m)이라 레그 1.6m 에선 코너 라운딩이 레그를 잠식(피크속도
+    #   에선 2.16m>1.6m = 모양 붕괴, 코너 체류 38% = 상시 과도 진동). 3.2 → 레그 3.2m, 박스 6.4m
+    #   (circle 7×7 공간 내). 실기 f5_pattern 도 동일 값 필요.
+    # ★2026-08-27 코너 감속 프로파일 (사용자 확정: '코너 감속 + 직선 가속' = 기하 연동 가감속).
+    #   레그별 사다리꼴 속도: 코너 v_corner → a_prof 로 가속 → v_cruise → 코너 전 감속.
+    #   코너 라운딩 r = v_corner²/3.0 = 0.08m (각진 코너) · 과도(피치±선회)가 코너마다 구조적으로 발생
+    #   = 실기 오토미션과 같은 주행 문법. waypoint 는 사인 SPEED_MOD 대신 이것을 쓴다.
+    wp_corner_decel: bool = True
+    wp_v_corner: float = 0.5       # 코너 통과 속도 [m/s]
+    wp_v_cruise: float = 1.7       # 직선 순항 속도 [m/s] (< 상한 2.0)
+    wp_a_prof: float = 2.0         # 프로파일 가감속 [m/s²] (< ACC_HOR 3.0, 횡가속 여유 확보)
+
+    # ── aggressive 패턴 파라미터 (2026-08-07: 하드코딩 → config) ──
+    #  ★ **실기에서 안전하게 날 수 있는 값**으로 잡는다. sim 이 그 값을 따른다.
+    #    실기에서 못 나는 궤적은 sim 에서 아무리 잘 돌아도 검증할 수 없기 때문.
+    #    실기 스크립트: px4_field/f5_pattern.py --pattern aggressive (--agg-R)
+    #  구값(하드코딩): R=4.0, dz1=3.0, dz2=2.0 → 반원 2.51 m/s, 수직 1.88 m/s
+    #  현값          : R=2.0, dz1=1.0, dz2=0.7 → 반원 1.26 m/s, 수직 0.63 m/s
+    #                  (circle R=3·w=0.5 의 접선속도 1.50 m/s 와 비슷한 영역)
+    #  ⚠ 완화하면 aliasing 난이도가 내려간다(급기동이 RL 존재 이유이므로).
+    #    [3] 재측정에서 분리도가 너무 쉽게 나오면 여기를 올려 재조정할 것.
+    agg_radius: float = 2.24       # ★2026-09-07 실공간 복원 (08-12 배율 0.8×2.8). [OLD] 1.28
+    # ★2026-09-07 scurve 활성화(5번째 패턴) + 실공간 확대. Rs 1.1→2.0, 접선 v=R·ω=1.29.
+    #   a_lat=v²/Rs=0.83, 반전점 Δa=1.66<ACC 4.0. S 폭 = 2·Rs·arcs 방향 전개, 고도 ±0.8.
+    scurve_radius: float = 2.0
+    scurve_arcs: int = 3
+    scurve_dz: float = 0.8
+    agg_dz1: float = 1.0           # phase0 상하 진폭 [m]
+    agg_dz2: float = 0.7           # phase2 상하 진폭 [m]
+    agg_phase_s: float = 5.6       # ★2026-09-10 3.35→4.7→5.6: 속도변조(×1.5 피크) 포함 반원 접선 π·2.24/5.6=1.26, 피크 1.88 < 2.0 (여유 6%, circle 피크 1.94 와 동급).
+    #   [4.7 은 변조 미고려: 피크 2.25 > 캡]  원 주석: 반경 2.24 복원(09-07) 때 Tp 를 안 고쳐 반원속도 π·2.24/3.35=2.10 m/s
+    #   > MPC_XY_VEL_MAX 2.0 이라 안쪽으로 파고들었다(trajcheck RMSE 1.18). 4.7 → 접선 1.50 m/s, 구심 1.0 m/s².
+    #   실기 f5_pattern.py --agg-phase 와 **반드시 같이** 바꾼다.
+    # [OLD] 3.35     # phase 하나 길이 [s]  ★2026-08-27 5.0→3.35: 반원 속도 = Ra·π/Tp 라
+    #   반경만 2.24→1.28 로 줄이면(08-26 ③) 속도가 1.41→0.80 로 같이 느려진다(Tp 미조정 버그).
+    #   3.35 = 1.28π/1.20 → 반원 접선속도 1.20 m/s(circle 과 동일), 선회각속도 0.94 rad/s(circle 0.75 보다 급).
 
     # ══════════════════════════════════════════════════════════
     #  비행 패턴 풀
     # ══════════════════════════════════════════════════════════
     flight_patterns: List[str] = field(default_factory=lambda: [
-        'waypoint', 'circle', 'figure8', 'aggressive'
+        'waypoint', 'circle', 'figure8', 'aggressive', 'scurve'
     ])
 
     # ══════════════════════════════════════════════════════════
@@ -81,15 +134,36 @@ class Config:
     # ══════════════════════════════════════════════════════════
     attack_enabled: bool = True
     attack_types: List[str] = field(default_factory=lambda: [
-        'loe_combined',   # 추력+토크 LoE. 토크 결손이 자세붕괴=결과성+탐지가능. (loe_thrust는 PX4가 보상=무해라 제거; FP압력은 기동/바람이 담당)
+        'tilt',   # 2026-08-19 확정: torque-only 틸트(roll+pitch 랜덤방향, thrust=0). (B)궤적이탈·불변식.
     ])
-    prob_no_attack: float = 0.15
+    prob_constant_attack: float = 0.30   # 공격 에피 중 상수(지속) 비율. 나머지는 FDI 랜덤버스트.
+    attack_delta_range: Tuple[float, float] = (0.1, 0.7)   # ★2026-08-27 상한 0.8→0.7 (사용자 확정).
+    #   근거: 호버 위치격리 문턱 실측 — δ0.6: 1.7m / δ0.7: 4.0m 격리·즉시복귀 / δ0.8: 32m(격리 불가,
+    #   공격이 위치루프 권한 초과). 상한 0.7 = 밴드 전체에서 '감지→강제홀딩→복귀' 서사가 성립.
+    #   δ0.7 도 관측상 easy anchor 유지(고원 2.4+, BErr<0.01). 하한 0.1 은 현 비교 유지, 본실험서 0.4 검토.
+    #   (구 0823 근거: δ0.1=탐지하한, δ0.05 제외 — 유지)
+    attack_tq_authority_nm: float = 4.36                   # δ→N·m 환산(주입 정규화용)
+    prob_no_attack: float = 0.30     # 2026-08-19: 70%공격/30%무공격(FP 캘리브)
 
     # ── 공격 시간 구조: burst(on-off-on 반복)로 비정상성 강조 — FIR이 이기는 regime ──
-    attack_mode: str = 'single'                                  # 'burst' | 'single'
+    attack_mode: str = 'burst'     # 2026-08-19 FDI: 'burst'(랜덤 on/off) | 'single'
     attack_burst_count_range: Tuple[int, int] = (2, 4)          # 에피소드당 버스트 개수
-    attack_burst_on_range: Tuple[int, int] = (15, 35)           # 각 버스트 ON 길이 (RL steps@10Hz)
-    attack_burst_off_range: Tuple[int, int] = (20, 50)          # 버스트 사이 OFF 길이
+    # ★2026-09-07 FROZEN-v3.1 기본값 정착: 버스트 = intermittent fault (온셋킥, 탐지 POMDP 담당).
+    #   [OLD] (40,80) 2026-08-28 지속 hijacking — v3 환경 복구로 폐기 (적분 여유가 커서 늦은 탐지가 무벌점이었음).
+    #   결과성(절벽)은 버스트가 아니라 ramp 클래스(incipient, 아래 v3.1 블록)가 담당한다.
+    attack_burst_on_range: Tuple[int, int] = (10, 20)   # ★v3.1: 1~2s 온셋킥. 창(4스텝)의 2.5~5배 = 지속성 특징 표현
+    attack_burst_off_range: Tuple[int, int] = (25, 40)  # ★v3.1: 필터감쇠 2~3스텝 + 복귀결정 여유. ramp 클래스와 동일(OFF로 클래스 누설 방지)
+
+    # ── ★2026-09-07 v3.1 ramp 공격 클래스 (incipient fault — 결과성 절벽 담당) ──
+    #   목적: "관측 자명 시점"과 "결정 시점"의 분리 — 자명해지면 늦고, 애매 구간에서 헤징해야 생존.
+    #   ⚠ 샘플러 구현은 [B2] whover 지연곡선("늦으면 죽는다") 통과 후 [C] 동결 때 붙인다.
+    #   설계 근거·검토 필수사항 = SWRL 프레임워크 아티팩트 §frozen-v31 5절 (코드 설계 전 반드시 읽을 것).
+    # ★2026-09-08 최종 (ramp 클래스 폐기 — 점진은 트림 흡수로 비치명 실측): 결과성 = 급작 버스트.
+    #   flipband/bandfill 실측: δ0.78~0.82 무풍 track 25/25 사망 ∧ 호버 25/25 생존. LOC lag p10 0.6s 중앙 2.8s.
+    #   δ0.85 = 호버도 전멸(천장, 절대 초과 금지). 치명선은 0.70~0.78 에서 패턴·바람 따라 확률적(은닉).
+    prob_lethal_attack: float = float(__import__('os').environ.get('PROB_LETHAL','0.30'))   # 공격 에피 중 결과성 비율. env PROB_LETHAL 조절
+    lethal_delta_range: Tuple[float, float] = (0.74, 0.80)   # ★2026-09-09 bandfill 확정: 0.72 무해·0.74~0.76 확률적·0.78+ 확정치명. 0.82는 호버도 死(33~58%) → 상한 0.80
+    lethal_hold_range: Tuple[int, int] = (40, 60)       # 4~6s (LOC lag 6~32스텝 커버)
 
     # ── 공격 = 가산(additive) 복합 바이어스 (유일 형태; 곱셈형 LoE는 무해·미검출로 폐기) ──
     #   명령 무관 고정 오프셋을 ramp·intensity로 스케일해 플랜트에 주입.
@@ -113,12 +187,22 @@ class Config:
     bias_torque_z:  float = 0.1
     bias_thrust_n:  float = 2.5
 
+    # ── 공격 주입 정규화 상수 (2026-08-08, allocator 경로) ──────────────────
+    #  외부 wrench 폐기 → PX4 allocator c[0] 가산으로 통일(sim=실기). c[0] 는 정규화값이라
+    #  online_rl 이 물리 bias(N·m,N)를 정규화(=권한 대비 비율)로 바꿔 DDS 로 쏜다:
+    #      normalized = physical / authority
+    #  ⚠⚠ PROVISIONAL: 아래는 구 플랜트 근사(CLAUDE.md). **밴드 재측정 시 정규화 단위로
+    #     재정의**하면 이 환산 자체가 불필요해진다(밴드를 처음부터 정규화로 스윕).
+    attack_tq_authority:  float = 4.36    # 롤/피치 토크 권한 [N·m] (동결 s=1.34 → 31%)
+    attack_yaw_authority: float = 4.36    # 요 토크 권한 [N·m] (미측정 — 롤과 동일 가정)
+    attack_th_authority:  float = 40.0    # 최대 추력 [N] ≈ T/W 3 × mg 13.15
+
     # ── 공격 에피소드 기동: 실제 공격은 모든 기동 궤적에 들어간다 → 평시와 동일한 패턴 분포 ──
     #    (2026-07-23 수정: 기존 ['aggressive'] 강제는 버그였음. 추락 밴드는 aggressive에서 검증됐지만
     #     학습 공격은 전 패턴에 랜덤 세기로 주입하는 것이 의도된 설계. deadline 스윕(hover/waypoint/figure8
     #     @1.37·1.40)이 밴드 유지 확인 역할. flight_patterns 전체 사용.)
     attack_flight_patterns: List[str] = field(default_factory=lambda: [
-        'waypoint', 'circle', 'figure8', 'aggressive'
+        'waypoint', 'circle', 'figure8', 'aggressive', 'scurve'
     ])
 
     # ── 탐험 편향은 eps_action_probs(=[0.8,0.2])로 처리 ──
@@ -157,30 +241,35 @@ class Config:
     #   바람 확정(2026-07-22, 캡처A 근거): constant/gust 제거(정상 NIS바닥 불변) — turbulence만 바닥 상승(median 0.013→0.030@7).
     #   wind_speed_range (0.3,7.0)→(1.0,5.0): 강도 3~7서 온셋여유 0.9 포화 → 5 초과 무의미, 하한 1.0(무풍은 none 40%가 담당).
     wind_speed_range: Tuple[float, float] = (1.0, 5.0)
+    # ── 2026-08-19: 바람 nominal(약풍) 75% / 강풍(aliasing) 25% ──
+    prob_strong_wind: float = 0.35   # ★확정0823: 강풍 35% (POMDP 노출 확보)
+    wind_nominal_range: Tuple[float, float] = (0.5, 2.0)    # 약풍(현실 ambient)
+    wind_strong_range:  Tuple[float, float] = (4.0, 6.0)    # ★2026-09-08 (4,8)→(4,6): ws8+ 는 δ0.8 호버도 사망(실측) = 조건③ 붕괴. ws6 은 호버 12/12 생존. ⚠ bandfill ws7 결과로 상한 7 재검토
+    # ★FROZEN-ENV v2: 강풍은 에피 전체가 아니라 윈도우 — 안정화 후 온셋(U 20-100), 길이 U(150,300)스텝(공격 burst 40-80 보다 충분히 큼). 약풍은 에피 전체(무해).
+    wind_window_start_range: Tuple[int, int] = (20, 100)
+    wind_window_len_range:   Tuple[int, int] = (150, 300)
 
     # ══════════════════════════════════════════════════════════
     #  RL 하이퍼파라미터
     # ══════════════════════════════════════════════════════════
     learning_warmup_steps: int = 10
 
-    max_episodes: int = 200
-    episode_max_steps: int = 300
+    max_episodes: int = 300
+    episode_max_steps: int = int(os.environ.get('EP_MAX_STEPS', '400'))  # ★2026-09-07 v3 기본 400 ([OLD] 300). env override 유지
     sim_speed_factor: float = 10.0   # Isaac Sim 배속(2026-07-22): 모든 캡처·스윕 기본 10. --speed로 override. ※페어링(학습)은 RHUKF learn 지연 확인 필요.
 
     window_size: int = 4
     dimS: int = 12                   # window_size × 3
     num_actions: int = 2             # 0=궤도추종, 1=강제호버링
 
-    gamma: float = 0.85            # 하이퍼탐색 A 종결(2026-07-21): 0.85 확정. cfg.gamma 단일필드 → Adam(agent_adam.py:73)·RHUKF 공유. Adam도 0.85.
+    gamma: float = float(__import__('os').environ.get('GAMMA','0.85'))   # 하이퍼탐색 A: 0.85. 2026-09-09 env화(γ스캔용). Adam·RHUKF 공유.
     scale_factor: float = 1.0
-    reward_scale: float = 1.0      # 하이퍼탐색 A 종결(2026-07-21): 0.18(캘리브레이션 실험)→1.0 원 config 복귀. loss탐색 종결(DQN loss=성능지표 아님). c=0.4비교는 reward_scale·p_delta 교란 → 파킹.
-    batch_size: int = 128
-    buffer_size: int = 20000
+    reward_scale: float = 1.0      # ★2026-08-19: 스케일링 폐기(논문 가독성). 대신 RewardConfig 값 자체를 절반으로 재설계해 max|r|≈3.9(≈huber_c3)로 낮춤. 스케일 상수는 1.0 고정.
 
     # ── 탐험 ──
-    eps_start: float = 0.9
+    eps_start: float = 0.99
     eps_end: float = 0.01
-    eps_decay_steps: int = 6000
+    eps_decay_steps: int = int(__import__('os').environ.get('EPS_DECAY','10000'))  # 2026-09-09 env화. 기본 10000(탐험~100ep). CartPole은 2000이었음 — 빠른 decay가 초반 정책차 가시화
 
     # ══════════════════════════════════════════════════════════
     #  D3QN 네트워크 구조
@@ -198,14 +287,18 @@ class Config:
     # ══════════════════════════════════════════════════════════
     filter_form: str = 'covariance'        # RHUKF
     state_form: str = 'error'              # 'error'(기본) | 'absolute'
+    filter_mode: str = 'rhukf'             # ★09-13 'rhukf'(FIR 창) | 'ukf'(KTD형 무한기억 UKF-TD) | 'ekf'(EKF-TD, 야코비안)
     decoupling_mode: str = 'fv'            # 현재 FV만 지원
     measurement_mode: str = 'q_target'     # z = r + γ^n·Q_target
     anchor_type: str = 'target'            # error-state θ_anchor
     ddqn_argmax: str = 'online_moving'
     h0_online_moving_init: str = 'spas'    # RHUKF 고-K(2026-07-14): prev_est→spas (h0 argmax만 시그마앙상블, 고T_Var 강건)
     h0_prior_source: str = 'target'
-    use_spas: bool = False                 # absolute h=0 sigma-ensemble argmax (off)
+    use_spas: bool = True                  # ★2026-09-07 기본 ON (사용자 확정 "아이작심에서 다 spas"). A/B 실측 무해(t=-1.59). [OLD] False
 
+    batch_size: int = int(__import__('os').environ.get('BATCH_SIZE', '128') or 128)   # 09-15 19:25 env화(배치 64 절제용). 기본 128 불변
+    buffer_size: int = int(__import__('os').environ.get('BUFFER_SIZE','20000'))   # 2026-09-09 env화(온라인성 스캔용)
+    
     N_horizon: int = 5
     update_interval: int = 1               # Phase0: 1→4 (원본 rhukf.py 정합; transient 누적 완화). N번 learn 호출마다 1번 실제 업데이트
     tau_srrhuif: float = 0.005             # soft target update 비율
@@ -221,7 +314,10 @@ class Config:
     q_init: float = 1e-4                   # RHUKF 고-K(2026-07-14): 1e-2→1e-4 (P재팽창 억제, 고T_Var 안정)
     q_end: float = 1e-4
 
-    r_init: float = 1.0                    # RHUKF 고-K(2026-07-14): 2.0→1.0
+    r_init: float = 1.0                    # ★2026-08-20 1.5→1.0 복귀: 고-T_Var RL은 고-K(r낮게)로 추적+강건성기제(spas/huber/느린타깃)가 문서(LL-6) 검증. r↑(K↓)는 고전칼만직관이나 RL실증과 반대. (2026-07-14: 2.0→1.0)
+    # ★2026-08-20 센서 σ 정합(현실성+강건성 축): gyro 실기 실측 σ [rad/s]. GPS는 run_sim(0.9×).
+    #   SENSOR_NOISE_SCALE env 로 clean(0)/real(1)/stress(2·3) 스윕. 실기 3소티: [.072,.069,.023]/[.079,.060,.021]/[.134,.116,.032]
+    gyro_sensor_sigma: Tuple[float, float, float] = (0.066, 0.070, 0.044)  # 실측 field σ (f11_hover log33, SIM_ALIGN)
     r_end: float = 1.0
 
     p_init: float = 0.05                   # 초기 파라미터 공분산 (absolute 모드용)
@@ -230,7 +326,7 @@ class Config:
     tikhonov_lambda: float = 1e-8
 
     # ── n-step ── 로드맵 학습수정(2026-07-08): off→on, n=3 (memory.py 구현됨; 온셋 펄스 신호 부트스트랩 전파)
-    use_n_step: bool = True
+    use_n_step: bool = (__import__('os').environ.get('NSTEP_OFF','')!='1')   # 2026-09-09 env화: NSTEP_OFF=1 → 1-step
     n_step_size: int = 3
 
     # ── PER (이번 실험: PER off → Huber-R 단독 outlier 방어로 FIR 기여 isolate) ──
@@ -350,9 +446,77 @@ class Config:
     def __post_init__(self):
         self.r_inv_sqrt = 1.0 / self.r_init
         self.r_inv = 1.0 / (self.r_init ** 2)
-        self.dimS = self.window_size * 3
+        # ★2026-08-31 GYRO_ONLY ablation: vel 채널 제거 → [nis_gyr, action]×W = W*2. 기본 OFF(12D 불변)
+        self._gyro_only = os.environ.get('GYRO_ONLY','')=='1'
+        self.dimS = self.window_size * (2 if self._gyro_only else 3)
         if self.obs_scale is None or len(self.obs_scale) != self.dimS:
             self.obs_scale = [1.0] * self.dimS
+        # env RHUKF 하이퍼 오버라이드 ★2026-08-27 의미 정정: UI=update_interval, N=N_horizon (사용자 용어 확정)
+        #   ⚠ 08-25~27 오전까지 RHUKF_UI 가 N_horizon 을 바꿨다 — 그 런들은 upd=1 고정의 '비의도 옵티마이저'.
+        if os.environ.get('ATK_RAMP'): self.attack_ramp_duration = float(os.environ['ATK_RAMP'])
+        if os.environ.get('RHUKF_TAU'): self.tau_srrhuif = float(os.environ['RHUKF_TAU'])
+        if os.environ.get('RHUKF_UI'):  self.update_interval = int(os.environ['RHUKF_UI'])   # ★의미 변경: ui=update_interval
+        if os.environ.get('RHUKF_N'):   self.N_horizon = int(os.environ['RHUKF_N'])
+        if os.environ.get('RHUKF_R'):   self.r_init = self.r_end = float(os.environ['RHUKF_R'])
+        if os.environ.get('RHUKF_PD'):  self.p_delta_init = float(os.environ['RHUKF_PD'])   # 2026-08-27 pΔ 변형용
+        if os.environ.get('RHUKF_FORM'): self.state_form = os.environ['RHUKF_FORM']
+        if os.environ.get('RHUKF_MODE'): self.filter_mode = os.environ['RHUKF_MODE'].lower()          # 2026-09-13 ukf|ekf 베이스라인              # 2026-09-02 error|absolute
+        if os.environ.get('RHUKF_PINIT'): self.p_init = float(os.environ['RHUKF_PINIT'])         # 2026-09-02 absolute 모드 P0
+        if os.environ.get('RHUKF_Q'):   self.q_init = self.q_end = float(os.environ['RHUKF_Q'])       # 2026-08-27 Q 축
+        if os.environ.get('RHUKF_ALPHA'): self.alpha = float(os.environ['RHUKF_ALPHA'])
+        # 2026-09-03 유계영향(Huber-adaptive R) on/off 축. 크게 주면(1e9) clamp 가 항상 1 →
+        #   R_eff = r0 상수 = 순수 가우시안 R = 유계영향 비활성.
+        if os.environ.get('RHUKF_HUBER_C'): self.huber_c = float(os.environ['RHUKF_HUBER_C'])
+        # 2026-09-05 absolute 모드의 h=0 DDQN argmax 를 error-state 와 동일하게 맞춘다.
+        #   error : h0_online_moving_init='spas' (시그마 앙상블) · h>0 은 θ_current(moving)
+        #   abs   : use_spas=False 면 h=0 에서 θ_target argmax → 두 모드의 유일한 실질 차이였다.
+        #   RHUKF_SPAS=1 로 켜면 abs 도 h=0 에서 시그마 앙상블 → 두 모드가 파라미터화만 다른 동일 추정기.
+        if os.environ.get('RHUKF_SPAS'): self.use_spas = os.environ['RHUKF_SPAS'] not in ('0','false','False')               # 2026-08-27 σ스프레드 축
+        # ── 공격밀도 축 (2026-08-29): burst ON/OFF 길이 env 조절. 미설정시 기본값 불변. ──
+        #   밀도↑ = ON/OFF 짧게 = 전환(임펄스) 횟수↑ = RHUKF 샘플효율 무대 + 누적 하이재킹 유지.
+        if os.environ.get('ATK_ON_LO') and os.environ.get('ATK_ON_HI'):
+            self.attack_burst_on_range = (int(os.environ['ATK_ON_LO']), int(os.environ['ATK_ON_HI']))
+        if os.environ.get('ATK_OFF_LO') and os.environ.get('ATK_OFF_HI'):
+            self.attack_burst_off_range = (int(os.environ['ATK_OFF_LO']), int(os.environ['ATK_OFF_HI']))
+        if os.environ.get('ATK_DELTA_LO') and os.environ.get('ATK_DELTA_HI'):   # δ 대역 고정(시간축 실험)
+            self.attack_delta_range = (float(os.environ['ATK_DELTA_LO']), float(os.environ['ATK_DELTA_HI']))
+        if os.environ.get('RHUKF_UPD'): self.update_interval = int(os.environ['RHUKF_UPD'])           # 2026-08-27 실업데이트 주기
+        if os.environ.get('WP_CORNER_DECEL') is not None and os.environ.get('WP_CORNER_DECEL') != '':
+            self.wp_corner_decel = os.environ['WP_CORNER_DECEL'] not in ('0','false','False')   # 2026-08-27 기동 A/B 비교용
+        # env reward 오버라이드: R_TP·R_FP·FN_BASE·FN_PER
+        if os.environ.get('R_TP'):   self.reward.r_tp = float(os.environ['R_TP'])
+        if os.environ.get('R_FP'):   self.reward.r_fp = float(os.environ['R_FP'])
+        if os.environ.get('FN_BASE'):self.reward.fn_base = float(os.environ['FN_BASE'])
+        if os.environ.get('FN_PER'): self.reward.fn_per_step = float(os.environ['FN_PER'])
+        # ★2026-09-18 env REWARD_SCALE: 보상 전체 배율(CartPole/LL 레짐 격자 — reward×c vs R 에 따른 loss 개형). 미설정 = 1.0(기존)
+        if os.environ.get('REWARD_SCALE'): self.reward_scale = float(os.environ['REWARD_SCALE'])
+        # env PROB_CONSTANT_ATK: 상수(지속)공격 비율 override (캡처용 0=burst만)
+        _pc = os.environ.get('PROB_CONSTANT_ATK', '')
+        if _pc != '': self.prob_constant_attack = float(_pc)
+        # env NET_HIDDEN=16 → shared_layers=[16,16] (네트워크 크기 비교축). 기본 [24,24].
+        _nh = os.environ.get('NET_HIDDEN', '')
+        if _nh:
+            self.shared_layers = [int(_nh), int(_nh)]
+        # ★2026-08-24: eval 시나리오를 확정분포(tilt·연속δ·약/중/강 × 패턴 × 바람)로 재생성.
+        #   옛 loe_combined 고정 폐기. 난이도별 분리평가(약=POMDP, 강=easy). 지속공격(60~end, 결정론적).
+        import math as _m
+        A = self.attack_tq_authority_nm; e = self.episode_max_steps - 5
+        def _tilt(delta, alpha, pat, ws):
+            roll, pitch = delta*A*_m.cos(alpha), delta*A*_m.sin(alpha)
+            return {'pattern': pat, 'attack_type': 'tilt' if delta > 0 else 'none',
+                    'attack_intensity': 1.0 if delta > 0 else 0.0,
+                    'attack_bursts': ([(s, min(s+10,e), roll, pitch) for s in range(60,e,30)] if delta > 0 else []),  # burst ON10/OFF20
+                    'bias_scale': delta, 'attack_direction': alpha,
+                    'attack_start_step': 60 if delta > 0 else 0, 'attack_end_step': e,
+                    'disturbance_type': 'wind_turbulence' if ws > 0 else 'none', 'wind_speed': ws}
+        WS = 8.0  # 강풍 고정(vel POMDP 노출)
+        self.eval_scenarios = [
+            _tilt(0.0, 0, 'aggressive', 0.0),   _tilt(0.0, 0, 'aggressive', WS),   _tilt(0.0, 0, 'circle', WS),     # 평시(FA baseline, 무풍/강풍)
+            _tilt(0.15, 0, 'aggressive', 0.0),  _tilt(0.15, 0, 'circle', WS),      _tilt(0.15, 0, 'aggressive', WS),# 약공격(POMDP)
+            _tilt(0.40, 0, 'aggressive', 0.0),  _tilt(0.40, 0, 'circle', 0.0),     _tilt(0.40, 0, 'aggressive', WS),# 중공격
+            _tilt(0.70, 0, 'aggressive', 0.0),  _tilt(0.70, 0, 'circle', 0.0),                                     # 강공격(easy)
+            _tilt(0.40, _m.pi/4, 'aggressive', 0.0),                                                              # 동시축(방향 일반화)
+        ]
         os.makedirs(self.outdir, exist_ok=True)
 
 
@@ -378,6 +542,16 @@ def get_curriculum_intensity(episode: int, cfg: Config) -> Tuple[float, float]:
 #  시나리오 샘플러
 # ══════════════════════════════════════════════════════════════
 def sample_episode_scenario(episode: int, cfg: Config) -> dict:
+    """★2026-09-15 짝비교용 시나리오 RNG 고정: env SCENARIO_SEED=S 이면 (S, episode) 로 시드한 전역 random 상태에서 추첨하고 원상복구.
+    (없으면 기존처럼 전역 random — 정책의 ε-greedy 가 같은 RNG 를 소비해 학습기마다 시나리오가 갈라진다: isaac_v30 swirl/adam 실측)"""
+    _ss = os.environ.get('SCENARIO_SEED', '').strip()
+    if not _ss: return _sample_episode_scenario_impl(episode, cfg)
+    _st = random.getstate(); random.seed(int(_ss) * 1000003 + int(episode))
+    try: return _sample_episode_scenario_impl(episode, cfg)
+    finally: random.setstate(_st)
+
+
+def _sample_episode_scenario_impl(episode: int, cfg: Config) -> dict:
     scenario = {
         'pattern': random.choice(cfg.flight_patterns),
         'attack_type': 'none',
@@ -388,58 +562,95 @@ def sample_episode_scenario(episode: int, cfg: Config) -> dict:
         'disturbance_type': 'none',
         'wind_speed': 0.0,
     }
-    if cfg.attack_enabled and random.random() > cfg.prob_no_attack:
-        scenario['attack_type'] = random.choice(cfg.attack_types)
-        # 공격 에피소드도 전 기동 패턴에 랜덤 주입 (평시와 동일 분포; 2026-07-23 수정)
+    if cfg.attack_enabled and random.random() > float(os.environ.get('PROB_NO_ATTACK', '') or cfg.prob_no_attack):   # ★2026-09-12 env
+        # ★ 2026-08-19 확정: torque-only 틸트 FDI. 방향 α=에피소드당 랜덤, 크기 δ=버스트마다 랜덤.
+        #   attack_bursts = [(start, end, roll_Nm, pitch_Nm)] — 버스트별 크기를 담아 주입 시 조회.
+        scenario['attack_type'] = 'tilt'
         scenario['pattern'] = random.choice(getattr(cfg, 'attack_flight_patterns', cfg.flight_patterns))
-        if getattr(cfg, 'sample_bias_box', True):
-            # combined 추락 ray (s, 0.2·s, 5·s) 주변 tube 샘플 — scale 하나로 묶어야 ray를 안 벗어남.
-            scenario['attack_intensity'] = 1.0
-            s = random.uniform(*cfg.bias_scale_range)
-            j = cfg.bias_jitter
-            # ★ s≥1.41 클립: ±10% jitter가 유효강도를 crash 오염밴드(hover도 붕괴 ≥1.42)로 밀어
-            #   delay/crash 신호를 노이즈로 만든다 → 지터 상한을 동결밴드 상단(1.40)으로 클램프.
-            #   추력(crash 주채널, 물리#4)도 같은 스케일이라 coherent 하게 차단됨. 하단은 유지(약공격=무해).
-            sclip = cfg.bias_scale_range[1]
-            sj = lambda: min(s * random.uniform(1.0 - j, 1.0 + j), sclip)
-            scenario['bias_torque_xy'] = sj()
-            scenario['bias_torque_z']  = cfg.bias_yaw_ratio * sj()
-            scenario['bias_thrust_n']  = cfg.bias_ft_ratio  * sj()
-            scenario['bias_scale'] = min(s, sclip)   # 로깅/분석용 (밴드 대비 위치)
+        scenario['attack_intensity'] = 1.0
+        alpha = random.uniform(0.0, 2.0 * math.pi)
+        A = cfg.attack_tq_authority_nm
+        dlo, dhi = cfg.attack_delta_range
+        # ★2026-09-01 STEALTH_FRAC: 약공격(≤0.3, 보상한계 아래=stealthy) 비율 env조절. 기본=균일(현행).
+        _stealth = float(os.environ.get('STEALTH_FRAC', '0') or 0.0)  # 0=균일 / 0.5,0.8=약공격 비율
+        def _bb():
+            if _stealth > 0 and random.random() < _stealth:
+                d = random.uniform(dlo, min(0.3, dhi))   # 약공격(stealthy)
+            else:
+                d = random.uniform(dlo, dhi)             # 균일(강 포함)
+            return (d * math.cos(alpha) * A, d * math.sin(alpha) * A, d)
+        t0 = random.randint(*cfg.attack_start_range)
+        emax = cfg.episode_max_steps - 5
+        # ★2026-09-08 결과성 클래스 (급작 강버스트 1회): track 유지 시 LOC = 에피 절단(절벽).
+        #   호버만이 막는다(실측 25/25). 그 외는 기존 약버스트 체인(탐지 채널).
+        if os.environ.get('ATK_FAMILY', '') == 'v5':
+            # ★2026-09-12 v5 단일 가족(사용자 확정): δ ~ 0.5·U(lo, split) + 0.5·U(split, hi), plateau ~ U(ON_LO, ON_HI),
+            #   온셋 ~ U(START_LO, START_HI), 버스트 1개/에피, 온셋 step(플랜트 τ). 결과성은 플랜트가 정한다(밴드 실측 09-11/12).
+            _lo = float(os.environ.get('ATK_DELTA_LO', '0.15')); _hi = float(os.environ.get('ATK_DELTA_HI', '0.84'))
+            _sp = float(os.environ.get('ATK_SPLIT', '0.72')); _pu = float(os.environ.get('ATK_P_UPPER', '0.5'))
+            d = random.uniform(_sp, _hi) if random.random() < _pu else random.uniform(_lo, _sp)
+            hold = random.randint(int(os.environ.get('ATK_ON_LO', '25')), int(os.environ.get('ATK_ON_HI', '50')))
+            t0 = random.randint(int(os.environ.get('ATK_START_LO', '60')), int(os.environ.get('ATK_START_HI', '200')))
+            r, p = d * math.cos(alpha) * A, d * math.sin(alpha) * A
+            scenario['attack_bursts'] = [(t0, min(t0 + hold, emax), r, p)]
+            scenario['bias_scale'] = d
+            scenario['lethal_class'] = bool(d >= 0.80)
+        elif random.random() < getattr(cfg, 'prob_lethal_attack', 0.0):
+            dl_lo, dl_hi = cfg.lethal_delta_range
+            d = random.uniform(dl_lo, dl_hi)
+            hold = random.randint(*cfg.lethal_hold_range)
+            r, p = d * math.cos(alpha) * A, d * math.sin(alpha) * A
+            scenario['attack_bursts'] = [(t0, min(t0 + hold, emax), r, p)]
+            scenario['bias_scale'] = d
+            scenario['lethal_class'] = True
+        elif random.random() < cfg.prob_constant_attack:
+            r, p, d = _bb()
+            scenario['attack_bursts'] = [(t0, emax, r, p)]
+            scenario['bias_scale'] = d
         else:
-            lo, hi = get_curriculum_intensity(episode, cfg)
-            scenario['attack_intensity'] = random.uniform(lo, hi)
-            scenario['bias_torque_xy'] = cfg.bias_torque_xy
-            scenario['bias_torque_z']  = cfg.bias_torque_z
-            scenario['bias_thrust_n']  = cfg.bias_thrust_n
-
-        if getattr(cfg, 'attack_mode', 'single') == 'burst':
-            # 버스트 일정: ON 구간을 여러 번 (on-off-on …) → 반복적 빠른 적응 요구
-            bursts = []
-            t = random.randint(*cfg.attack_start_range)
-            for _ in range(random.randint(*cfg.attack_burst_count_range)):
+            bursts = []; t = t0; ds = []
+            while t < emax:
                 on = random.randint(*cfg.attack_burst_on_range)
-                bursts.append((t, t + on))
-                t = t + on + random.randint(*cfg.attack_burst_off_range)
-                if t > cfg.episode_max_steps - 10:
-                    break
+                r, p, d = _bb(); ds.append(d)
+                bursts.append((t, min(t + on, emax), r, p))
+                t += on + random.randint(*cfg.attack_burst_off_range)
             scenario['attack_bursts'] = bursts
-            scenario['attack_start_step'] = bursts[0][0]      # 로깅 호환
-            scenario['attack_end_step'] = bursts[-1][1]
-        else:
-            scenario['attack_start_step'] = random.randint(*cfg.attack_start_range)
-            duration = random.randint(*cfg.attack_duration_range)
-            scenario['attack_end_step'] = scenario['attack_start_step'] + duration
-            scenario['attack_bursts'] = [(scenario['attack_start_step'], scenario['attack_end_step'])]
+            scenario['bias_scale'] = sum(ds) / len(ds) if ds else 0.0
+        scenario['attack_direction'] = alpha
+        scenario['attack_start_step'] = scenario['attack_bursts'][0][0]
+        scenario['attack_end_step'] = scenario['attack_bursts'][-1][1]
 
     if cfg.disturbance_enabled:
-        _w = getattr(cfg, 'disturbance_weights', None)
-        if _w and len(_w) == len(cfg.disturbance_types):
-            scenario['disturbance_type'] = random.choices(cfg.disturbance_types, weights=_w)[0]
+        # 항상 turbulence. nominal(약풍) 65% / 강풍 35%.
+        scenario['disturbance_type'] = 'wind_turbulence'
+        if random.random() < cfg.prob_strong_wind:
+            scenario['wind_speed'] = random.uniform(*cfg.wind_strong_range)
+            # ★FROZEN-ENV v2: 강풍은 윈도우로만 (안정화 후 온셋, 공격 burst 보다 긴 구간)
+            ws0 = random.randint(*cfg.wind_window_start_range)
+            scenario['wind_window'] = (ws0, min(ws0 + random.randint(*cfg.wind_window_len_range),
+                                                cfg.episode_max_steps - 5))
         else:
-            scenario['disturbance_type'] = random.choice(cfg.disturbance_types)
-        if scenario['disturbance_type'] != 'none':
-            scenario['wind_speed'] = random.uniform(*cfg.wind_speed_range)
+            scenario['wind_speed'] = random.uniform(*cfg.wind_nominal_range)
+    # ★2026-09-15 에피소드 스케줄 바람 티어 (Isaac v30 급변 블록 검증): env WIND_SCHED="0-59:0:0.6,7:0.4;60-109:10:1;110-:0:0.6,7:0.4"
+    #   → 해당 에피소드 구간의 티어 분포에서 ws 추첨. ws=0 → none, ws>0 → turbulence 를 창 WIND_WIN(기본 60,290, cert 캡처와 동일)에서만.
+    #   surrogate env8 의 SURR_TIER_SCHED 와 같은 문법. 설정되면 위 nominal/strong 추첨을 덮어쓴다.
+    _ws_sched = os.environ.get('WIND_SCHED', '').strip()
+    if _ws_sched:
+        spec = None
+        for seg in _ws_sched.split(';'):
+            rng_, sp_ = seg.split(':', 1); a_, _, b_ = rng_.partition('-')
+            if int(a_ or 0) <= episode and (b_ == '' or episode <= int(b_)): spec = sp_; break
+        if spec:
+            it = [(float(x.split(':')[0]), float(x.split(':')[1])) for x in spec.split(',')]; z = sum(p for _, p in it)
+            u = random.random() * z; acc = 0.0; ws = it[-1][0]
+            for w, p in it:
+                acc += p
+                if u <= acc: ws = w; break
+            scenario['wind_speed'] = float(ws)
+            scenario['disturbance_type'] = 'wind_turbulence' if ws > 0 else 'none'
+            _win = os.environ.get('WIND_WIN', '60,290').split(',')
+            if ws > 0: scenario['wind_window'] = (int(_win[0]), min(int(_win[1]), cfg.episode_max_steps - 5))
+            else: scenario.pop('wind_window', None)
     return scenario
 
 

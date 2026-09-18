@@ -1,0 +1,10 @@
+[worker 1] ['P0.02_R1_a0.50', 'P0.02_R2_a0.50', 'P0.1_R1_a0.50', 'P0.1_R2_a0.50']  env5.1
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.02_R1_a0.50     h= 1.60 F1=0.925 P=0.927 R=0.924 fpr=0.212 pFP=0.064 wR=0.95 sR=0.97 conv=73 stab=0.043 (576s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.02_R2_a0.50     h= 1.60 F1=0.913 P=0.929 R=0.901 fpr=0.202 pFP=0.039 wR=0.81 sR=0.95 conv=76 stab=0.045 (575s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.1_R1_a0.50      h= 3.58 F1=0.908 P=0.915 R=0.904 fpr=0.236 pFP=0.185 wR=0.92 sR=0.95 conv=76 stab=0.053 (575s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  P0.1_R2_a0.50      h= 3.58 F1=0.913 P=0.929 R=0.901 fpr=0.183 pFP=0.053 wR=0.62 sR=0.86 conv=76 stab=0.049 (571s)
+[worker 1] done

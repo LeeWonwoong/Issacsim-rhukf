@@ -5,10 +5,15 @@
 
 사용:
     python3 check_ulog.py <log>.ulg --type ground     # 지상 30초 (사전 점검)
-    python3 check_ulog.py <log>.ulg --type hover      # F1 정지 호버 60초
-    python3 check_ulog.py <log>.ulg --type doublet    # F2 자세 여기
-    python3 check_ulog.py <log>.ulg --type drag       # F3 직선 왕복
-    python3 check_ulog.py <log>.ulg --mass 1.372      # 질량 주면 C_thrust 즉석 추정
+    python3 check_ulog.py <log>.ulg --type hover      # F1 정지 호버
+    python3 check_ulog.py <log>.ulg --type doublet    # F3 자세 여기 (구 F2)
+    python3 check_ulog.py <log>.ulg --type drag       # F4 직선 왕복 (구 F3)
+    python3 check_ulog.py <log>.ulg --type pattern    # F5~F8 기동 패턴  ★2026-08-07 신규
+    python3 check_ulog.py <log>.ulg --mass 1.340      # 질량 주면 C_thrust 즉석 추정
+
+★ 종료 코드 (2026-08-07 추가)  0 = PASS,  1 = FAIL,  2 = 로그를 못 읽음
+  offboard_common 이 비행 직후 이걸 자동 실행해서 합격/불합격을 그 자리에서 말해준다.
+  사람이 판정할 필요가 없다 — 다시 떠야 하는지를 스크립트가 말한다.
 
 필요: pip install pyulog
 """
@@ -30,9 +35,11 @@ REQUIRED = [
     'vehicle_local_position',
 ]
 # GPS 는 PX4 버전마다 이름이 다르다
-GPS_ALIASES = ['sensor_gps', 'vehicle_gps_position']
+# vehicle_gps_position(10Hz) 을 먼저 본다. sensor_gps 는 1Hz 라 σ 표본이 너무 적다.
+GPS_ALIASES = ['vehicle_gps_position', 'sensor_gps']
 OPTIONAL = ['vehicle_angular_velocity', 'battery_status', 'vehicle_status',
-            'esc_status', 'vehicle_imu_status']
+            'esc_status', 'vehicle_imu_status',
+            'vehicle_local_position_setpoint']   # pattern 추종오차용 (2026-08-07)
 
 OK, BAD, WARN = '  [OK]  ', '  [FAIL]', '  [warn]'
 
@@ -61,14 +68,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('ulg')
     ap.add_argument('--type', default='hover',
-                    choices=['ground', 'hover', 'doublet', 'drag'])
+                    choices=['ground', 'hover', 'doublet', 'drag', 'pattern'])
+    ap.add_argument('--vmax', type=float, default=2.0,
+                    help='pattern: 제어기 수평속도 제한 [m/s] (MPC_XY_VEL_MAX, 기본 2.0)')
     ap.add_argument('--mass', type=float, default=None, help='AUW [kg] — 주면 C_thrust 추정')
     args = ap.parse_args()
 
     try:
         ulog = ULog(args.ulg)
     except Exception as e:
-        sys.exit(f"[!] 로그를 열 수 없습니다: {e}")
+        print(f"[!] 로그를 열 수 없습니다: {e}")
+        return 2
 
     dur = (ulog.last_timestamp - ulog.start_timestamp) * 1e-6
     print("=" * 72)
@@ -100,6 +110,7 @@ def main():
                 fails.append(f"{name} 누락")
         else:
             print(f"{OK} {name:28s} {len(d.data['timestamp']):7d} rows  {rate(d):7.1f} Hz")
+    sc = get(ulog, 'sensor_combined')      # 자이로 σ 용 (아래 [3] 에서 씀)
     gps = None
     for a in GPS_ALIASES:
         gps = get(ulog, a)
@@ -146,8 +157,7 @@ def main():
             fails.append(f"{name} 레이트 부족({r:.0f}<{need})")
 
     if args.type == 'ground':
-        verdict(fails, "지상 점검")
-        return
+        return verdict(fails, "지상 점검")
 
     # ── 3) 유형별 품질 게이트 ────────────────────────────────
     lp = get(ulog, 'vehicle_local_position')
@@ -155,8 +165,7 @@ def main():
     tq = get(ulog, 'vehicle_torque_setpoint')
 
     if lp is None or ts is None or tq is None:
-        verdict(fails, args.type)
-        return
+        return verdict(fails, args.type)
 
     t_lp = lp.data['timestamp'] * 1e-6
     vx = fld(lp, 'vx'); vy = fld(lp, 'vy'); vz = fld(lp, 'vz')
@@ -262,7 +271,85 @@ def main():
                 print("         → 전후 왕복만 했다면 좌우 왕복도 추가할 것")
             print(f"       속도 중앙 {np.median(vh[fast]):.2f} m/s, 최대 {vh.max():.2f} m/s")
 
-    verdict(fails, args.type)
+    elif args.type == 'pattern':
+        # F5~F8. 계수를 뽑는 비행이 아니라 **기동 영역 기준선**을 얻는 비행이다.
+        # 그래서 게이트도 "계수가 뽑히나" 가 아니라 "이 소티를 sim 과 비교해도 되나" 다.
+        #   ① 오프보드 구간이 실제로 있었나 (스위치를 못 켰으면 아무것도 아니다)
+        #   ② ★ 속도가 클램프됐나 — 클램프되면 궤적이 설계와 달라져 **비교가 깨진다**
+        #   ③ 추종 오차 — 너무 크면 그 소티의 NIS 는 패턴이 아니라 추종실패를 본 것
+        #   ④ EKF 리셋 — 리셋 순간의 위치 점프는 NIS 에 그대로 들어간다
+        offb = None
+        if vs is not None:
+            ns = fld(vs, 'nav_state')
+            if ns is not None:
+                t_vs = vs.data['timestamp'] * 1e-6
+                # PX4 NAVIGATION_STATE_OFFBOARD = 14
+                offb = np.interp(t_lp, t_vs, (ns == 14).astype(float)) > 0.5
+        if offb is None or not offb.any():
+            print(f"{BAD} 오프보드 구간을 찾지 못했습니다 — 스위치를 못 켰거나 vehicle_status 누락")
+            fails.append("오프보드 구간 없음")
+            offb = np.ones(len(t_lp), dtype=bool)
+        else:
+            seg = longest_run(offb, t_lp)
+            ok = seg >= 15.0
+            print(f"{OK if ok else BAD} 오프보드 최장 구간 {seg:.1f}s   (패턴 1바퀴에 최소 15s 필요)")
+            if not ok:
+                fails.append(f"오프보드 구간 부족({seg:.0f}s)")
+
+        # ② 속도 클램프 — 이게 이 게이트의 존재 이유다
+        vmax = args.vmax
+        vh_o = vh[offb]
+        if len(vh_o):
+            near = (vh_o > 0.97 * vmax).mean()
+            print(f"{OK if near < 0.02 else BAD} 수평속도 최대 {vh_o.max():.2f} m/s "
+                  f"(제한 {vmax:.2f}),  제한의 97% 이상인 시간 {near*100:.1f}%")
+            if near >= 0.02:
+                print(f"         → **클램프됐다.** 궤적이 설계와 달라져 sim 비교가 깨진다.")
+                print(f"           R 또는 omega 를 낮추고 **sim swrl_config 도 같이** 낮출 것")
+                fails.append("수평속도 클램프")
+            print(f"       속도 중앙 {np.median(vh_o):.2f} m/s")
+
+        # ③ 추종 오차 — setpoint 를 lp 시간축으로 옮겨 비교
+        sp = get(ulog, 'vehicle_local_position_setpoint')
+        if sp is None:
+            print(f"{WARN} vehicle_local_position_setpoint 없음 — 추종 오차를 못 잰다")
+        else:
+            t_sp = sp.data['timestamp'] * 1e-6
+            sx, sy, sz = fld(sp, 'x'), fld(sp, 'y'), fld(sp, 'z')
+            px_, py_ = fld(lp, 'x'), fld(lp, 'y')
+            if all(v is not None for v in (sx, sy, px_, py_)):
+                # setpoint 의 nan(미지정 축)은 비교에서 뺀다
+                fin = np.isfinite(sx) & np.isfinite(sy)
+                if fin.sum() > 10:
+                    ex = px_ - np.interp(t_lp, t_sp[fin], sx[fin])
+                    ey = py_ - np.interp(t_lp, t_sp[fin], sy[fin])
+                    e = np.hypot(ex, ey)[offb]
+                    if len(e):
+                        rmse, emax = float(np.sqrt((e**2).mean())), float(e.max())
+                        ok = rmse < 1.5
+                        print(f"{OK if ok else BAD} 수평 추종 RMSE {rmse:.2f} m, 최대 {emax:.2f} m")
+                        if not ok:
+                            print("         → 추종이 무너진 소티다. 이 로그의 NIS 는 "
+                                  "패턴이 아니라 추종실패를 본 것이다")
+                            fails.append(f"추종 RMSE 과대({rmse:.1f}m)")
+                if sz is not None and z is not None:
+                    fz = np.isfinite(sz)
+                    if fz.sum() > 10:
+                        ez = np.abs(z - np.interp(t_lp, t_sp[fz], sz[fz]))[offb]
+                        if len(ez):
+                            print(f"       고도 추종 RMSE {np.sqrt((ez**2).mean()):.2f} m "
+                                  f"(aggressive 는 상하 기동이 있어 크게 나온다)")
+
+        # ④ EKF 리셋 — 위치 점프는 NIS 에 그대로 들어간다
+        nres = 0
+        for c in ('xy_reset_counter', 'z_reset_counter', 'heading_reset_counter'):
+            v = fld(lp, c)
+            if v is not None:
+                nres += int((np.diff(v) != 0).sum())
+        print(f"{OK if nres == 0 else WARN} EKF 리셋 {nres}회"
+              + ("" if nres == 0 else "   ← 리셋 시각 부근은 NIS 해석에서 제외할 것"))
+
+    return verdict(fails, args.type)
 
 
 def mask_from(t_target, t_ref, good_ref):
@@ -295,6 +382,11 @@ def count_excursions(v, thr):
 
 
 def verdict(fails, label):
+    """판정을 찍고 **종료 코드**를 돌려준다. 0 = PASS, 1 = FAIL.
+
+    호출부가 이 값을 그대로 sys.exit 에 넘긴다. 자동 판정의 핵심이다 —
+    사람이 화면을 읽고 결정하는 게 아니라 스크립트가 결정한다.
+    """
     print("\n" + "=" * 72)
     if fails:
         print(f"  ✗ FAIL ({label}) — {len(fails)}건: " + ", ".join(fails))
@@ -302,7 +394,8 @@ def verdict(fails, label):
     else:
         print(f"  ✓ PASS ({label}) — 사용 가능")
     print("=" * 72)
+    return 1 if fails else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

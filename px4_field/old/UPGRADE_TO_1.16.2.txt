@@ -1,0 +1,743 @@
+════════════════════════════════════════════════════════════════════════
+  PX4 v1.15.4 → v1.16.2 통일                              (2026-08-06)
+════════════════════════════════════════════════════════════════════════
+
+  목표: 기체 · 젯슨 · GPU서버(sim) 세 곳을 v1.16.2 로 맞춘다.
+        그러면 GPS 가 8Hz → 10Hz 가 되고, px4_msgs 불일치가 사라지고,
+        sim 과 실기가 같은 제어기로 난다.
+        ※ 노트북은 QGC 만 쓴다 — ROS2 / px4_msgs 는 건드리지 않는다.
+
+  기계별 방식
+        GPU 서버   git/GitHub 사용 OK (여기서만)
+        젯슨·노트북 USB 로 파일만 옮긴다. git 명령 0개. 롤백은 폴더 이름 바꾸기.
+
+  ★ 어떤 측정도 [5] 를 통과한 뒤에 한다. 중간 상태 수치는 전부 버린다.
+
+
+  전체 흐름 ─────────────────────────────────────────────────────────
+                                                        담당
+    [1] 백업              되돌릴 길 확보          15분   노트북+젯슨
+         ↓
+    [2] 기체              펌웨어 빌드              1~2h  ▣GPU서버 (완료)
+                          → USB → 플래시                 노트북(QGC)
+         ↓
+    [3] 젯슨              px4_msgs 1.16 + 지상확인 30분   젯슨(SSH)
+         ↓
+    [4] GPU서버 sim       PX4+px4_msgs+SITL 재빌드 1시간  ▣GPU서버
+         ↓
+    [5] Isaac 수동조종    ★ 게이트                        ▣GPU서버 + 조종기
+         ↓
+    [6] 실기체 비행       파라미터 → 오토튠 → F1/F2/F3    현장(젯슨·노트북)
+         ↓
+    [7] 측정 재개         재정합 로드맵 [1] 부터          ▣GPU서버
+
+    [8] 롤백 (언제든)                                     해당 기계에서
+
+  ▣ = GPU 워크스테이션 작업. **현장에서 할 일이 아니다.**
+      USB 를 들고 나갔을 때 실제로 보는 것은 [1](2)(3) · [2-5][2-6] · [3] · [6] 이다.
+      나머지는 책상에서 끝난다(또는 이미 끝나 있다).
+
+  ⚠ [2] 는 별도 worktree 에서 빌드한다. [4] 전까지 지금 sim 은 그대로 돌아간다.
+  ⚠ 왜 1.17 이 아니라 1.16.2 인지, Pegasus 호환 근거 등은 맨 뒤 [부록] 참조.
+  ⚠ 구버전(v1.15.4) 문서는 px4_field/old/ 로 옮겼다. 현장에서 열지 말 것.
+
+
+════════════════════════════════════════════════════════════════════════
+[1]  백업 — 되돌릴 수 있게 만들고 시작            [노트북 QGC + 젯슨]
+════════════════════════════════════════════════════════════════════════
+
+ (1) 현재 펌웨어 파일 — 이미 있다. 지우지 말 것.
+       px4_field/firmware/px4_fmu-v6c_v1.15.4_dds.px4
+       md5 75f51a649ea6042facc968cd05aac68c
+
+ (2) 기체 파라미터 백업 — QGC → 기체설정 → 파라미터 → 도구 → "Save to file"
+       저장명 예:  PX4_1154_before_upgrade_20260806.params
+
+ (3) ★ 젯슨 현재 px4_msgs 버전 확인 — **노트북이 아니라 젯슨이다.**
+     (노트북은 이번에 안 바꾸므로 확인할 필요도 없다.
+      참고: 2026-08-06 확인 시 노트북 = 1.15 계열, ~/test_ws — 다른 드론과 맞다)
+     ※ git 커밋을 적을 필요 없다. 젯슨 롤백은 폴더 백업으로 한다 → [3-1](b)
+
+ssh <젯슨유저>@<젯슨IP>
+
+source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+ros2 interface show px4_msgs/msg/VehicleAttitudeSetpoint | awk 'NR<=6'
+
+       roll_body 로 시작        → 1.15 계열
+       yaw_sp_move_rate 로 시작 → 1.16+ 계열
+       ※ `| head -3` 은 쓰지 말 것. ros2 가 SIGPIPE 를 못 받아 BrokenPipeError
+         트레이스백을 뱉는다(무해하지만 놀란다). awk 는 입력을 끝까지 읽어 안 난다.
+
+ ✅ 판정: (1)(2) 가 손에 있고 (3) 을 확인했으면 진행.
+
+
+════════════════════════════════════════════════════════════════════════
+[2]  기체 — 펌웨어 빌드 후 플래시     [빌드=▣GPU서버 / 플래시=노트북 QGC]
+════════════════════════════════════════════════════════════════════════
+
+ ── (2-1) worktree 생성 (GPU 워크스테이션) ─────────────────────────
+   메인 트리에는 SITL 빌드가 물려 있다. 건드리지 않기 위해 따로 뽑는다.
+   ⚠ 서브모듈 포함 약 1.1 GB. 디스크 여유 확인.
+
+git -C ~/PX4-Autopilot worktree add ~/PX4-v1162 v1.16.2
+
+cd ~/PX4-v1162 && git submodule update --init --recursive
+
+ ── (2-2) dds_topics.yaml 에 토픽 2개 추가 ─────────────────────────
+   제어입력 u(추력·토크)를 ROS2 로 읽기 위해 필요하다. 순정 펌웨어엔 없다.
+
+nano ~/PX4-v1162/src/modules/uxrce_dds_client/dds_topics.yaml
+
+   84번째 줄이 `subscriptions:` 다. 그 바로 위(마지막 publication =
+   home_position 다음)에 아래를 넣는다. 들여쓰기 2칸, 탭 금지.
+
+  - topic: /fmu/out/vehicle_thrust_setpoint
+    type: px4_msgs::msg::VehicleThrustSetpoint
+
+  - topic: /fmu/out/vehicle_torque_setpoint
+    type: px4_msgs::msg::VehicleTorqueSetpoint
+
+   확인:
+
+python3 -c "import yaml,os;f=os.path.expanduser('~/PX4-v1162/src/modules/uxrce_dds_client/dds_topics.yaml');p=[x['topic'] for x in yaml.safe_load(open(f))['publications']];[print(('OK  ' if t in p else 'MISS'),t) for t in ['/fmu/out/vehicle_thrust_setpoint','/fmu/out/vehicle_torque_setpoint']];print('total pub',len(p))"
+
+ ── (2-3) 빌드 ─────────────────────────────────────────────────────
+
+cd ~/PX4-v1162 && make px4_fmu-v6c_default
+
+   ✅ 실측 완료 (2026-08-06 15:24, GPU 워크스테이션)
+        FLASH  1938396 B / 1920 KB = 98.59%   ← 통과
+        참고)  v1.15.4+2줄 은 1943500 B = 98.85% 였다. 오히려 5104 B 더 여유.
+        DDS 토픽  publications 26 + subscriptions 27 = 53 (기본 51 + 우리가 넣은 2)
+     → [부록 B] 토픽 쳐내기는 하지 않아도 된다.
+   ⚠ 그래도 넘치면(region `flash' overflowed) → 아래 [부록 B] 예비책.
+
+ ── (2-4) 생성물 확인 ──────────────────────────────────────────────
+
+grep -c "ORB_ID(vehicle_thrust_setpoint)" ~/PX4-v1162/build/px4_fmu-v6c_default/src/modules/uxrce_dds_client/dds_topics.h
+
+   → 1 이상이어야 한다. 0 이면 (2-2) 편집이 안 먹은 것.
+   ✅ 실측: vehicle_thrust_setpoint 4회 / vehicle_torque_setpoint 4회
+
+cp ~/PX4-v1162/build/px4_fmu-v6c_default/px4_fmu-v6c_default.px4 \
+   ~/projects/Issacsim-rhukf/px4_field/firmware/px4_fmu-v6c_v1.16.2_dds.px4
+
+md5sum ~/projects/Issacsim-rhukf/px4_field/firmware/px4_fmu-v6c_v1.16.2_dds.px4
+
+ ── (2-5) USB 로 옮겨 플래시 ───────────────────────────────────────
+
+   ★ 방식(2026-08-06 확정): **px4_field 폴더를 통째로 USB 에 담아 나간다.**
+     42 MB 라 용량 문제 없다. 스크립트·문서·펌웨어·px4_msgs tar 가 한 번에 간다.
+
+cp -a ~/projects/Issacsim-rhukf/px4_field /media/$USER/<USB>/
+sync && udisksctl unmount -b /dev/sdX1
+
+   ⚠ 통째로 담으면 firmware/ 안의 **1.15.4 파일도 같이 따라온다**.
+     (지우면 안 된다 — [8] 롤백 수단이다.)
+     헷갈림 방지 장치 두 가지:
+       ① px4_field/firmware/README_WHICH_FILE.txt  — 어느 걸 굽는지 명시
+       ② px4_field/usb_payload/ — 1.16.2 파일만 들어 있는 폴더.
+          QGC 파일 선택창에서 **이쪽을 고르면 구버전을 고를 수가 없다.**
+
+   ── 굽기 직전 (노트북) ─────────────────────────────────────
+
+md5sum /media/$USER/<USB>/px4_field/usb_payload/px4_fmu-v6c_v1.16.2_dds.px4
+      → f7e1b6b98f977cdb367866e2f2f8a2db  (한 글자라도 다르면 전송이 깨진 것.
+        안전 제거를 안 했을 때 흔하다. 다시 복사할 것)
+
+   QGC → 기체설정 → 펌웨어 → 기체 USB 연결 →
+   "Advanced settings" → "Custom firmware file"
+   → <USB>/px4_field/usb_payload/px4_fmu-v6c_v1.16.2_dds.px4
+
+ ── (2-6) 부팅 확인 — QGC MAVLink 콘솔 ─────────────────────────────
+
+ver all
+
+   → PX4 version 1.16.2, git-hash 가 빌드한 것과 같은지
+
+gps status
+
+   ★ 여기서 볼 것 = **rate position / rate velocity / rate publication**
+     (v1.16.2 gps.cpp:1160-1165)
+     → 10.00 Hz 로 나오면 이번 업그레이드의 목적 달성.
+       8.00 근처면 [3-5] 로 간다.
+     status: OK, baudrate, sat info: disabled 도 같이 찍힌다.
+
+   ⚠⚠ QGC 파라미터에 **GPS Hz 항목은 없다.** 검색해도 안 나오는 게 정상이다.
+      v1.16.2 의 GPS 파라미터 전체:
+        GPS_1_CONFIG / GPS_1_GNSS / GPS_1_PROTOCOL / GPS_2_* /
+        GPS_DUMP_COMM / GPS_SAT_INFO / GPS_YAW_OFFSET /
+        GPS_UBX_BAUD2 / GPS_UBX_CFG_INTF / GPS_UBX_DYNMODEL / GPS_UBX_MODE /
+        SER_GPS1_BAUD
+      레이트는 ubx.cpp 에 하드코딩돼 있다 (rate_meas=100 기본, F9P 계열만 예외).
+      → 파라미터로 못 바꾼다. **버전을 올려야만 8Hz→10Hz 가 된다.**
+        (파라미터화한 GPS_UBX_RATE 는 v1.18.0-alpha1 부터. 1.16/1.17 엔 없다)
+
+   레이트 확인 3가지 — 앞의 둘은 평균이라 에폭 유실을 못 잡는다:
+        QGC 콘솔   gps status  → rate position / velocity / publication
+        젯슨       ros2 topic hz /fmu/out/vehicle_gps_position
+        ★ ulog    check_ulog.py → utc dt 가 100ms 로 균일한지  ← 가장 엄밀
+          (1.15.4 때 겉보기 7Hz = 8Hz 설정 + 14.4% 유실이었던 것을 이걸로 잡았다)
+
+   ⚠ MOD= / FWVER= (GPS 모델명) 은 `gps status` 에 **안 나온다.**
+     드라이버가 부팅 시 설정하면서 한 번만 찍는 INFO 다. 보려면:
+
+dmesg
+
+     에서 "u-blox firmware version" / "MOD=" 줄을 찾는다.
+     ※ 굳이 안 봐도 된다. 이미 간접 확정돼 있다:
+        v1.15.4 에서 device_id devtype=0xA5(제네릭 UBX) = M6/7/8/9/F9P 가 아님
+        + CFG-VALSET 경로(protover≥27) + 기본 8Hz + 31 sats
+        + 1.16.2 에서 정확히 10Hz(= F9P 가 아닌 u-blox 의 기본값)
+        → M10 계열로 일관됨.
+     ※ QGC 화면에 제네릭 u-blox 로 뜨는 것도 정상 (1.16 엔 UBX_10 매핑 없음).
+
+ ✅ 판정: ver all 이 1.16.2, gps status 의 rate 가 10 Hz 면 통과.
+
+
+ ── (2-7) 파라미터 확인 — 1.15.4→1.16.2 에서는 **복원 불필요** ─────
+
+   ✅ 실측 (2026-08-06): 플래시 후 파라미터가 **하나도 초기화되지 않았다.**
+        · QGC 에 기체 정보가 그대로 뜸
+        · 백업 params 를 Load 하니 "There are no differences"
+      → 아무것도 하지 말고 [3] 으로 간다.
+
+   왜 안 날아갔나 (근거):
+        v1.16.2 rcS:246-254 는 SYS_PARAM_VER ≠ PARAM_DEFAULTS_VER 일 때만
+        "Switched to different parameter version. Resetting parameters." 후 리셋한다.
+          v1.16.2 rcS:43            set PARAM_DEFAULTS_VER 1
+          v1.16.2 system_params.c:97  PARAM_DEFINE_INT32(SYS_PARAM_VER, 1)
+        둘 다 1 이라 조건이 안 걸린다. (v1.15.4 엔 이 메커니즘 자체가 없다)
+
+   ⚠ 다른 버전으로 올릴 때는 이 보장이 없다. 그때는 아래를 확인할 것:
+        QGC → 파라미터 → 검색 "UXRCE"
+          UXRCE_DDS_CFG 가 원래 포트(TELEM2 등)면 정상, Disabled/0 이면 초기화된 것
+        또는 MAVLink 콘솔에서  dmesg  →
+          "Switched to different parameter version" 이 있으면 초기화된 것
+
+      초기화됐다면 [1-2] 백업 params 를 Load 하고 재부팅한 뒤 확인:
+        UXRCE_DDS_CFG (없으면 젯슨과 통신 자체가 안 된다)  /  SER_TEL2_BAUD 921600
+        SYS_AUTOSTART  /  UXRCE_DDS_DOM_ID 0 유지 ([3-2] 참조)
+      ※ 리셋되더라도 SYS_AUTOSTART · CAL_*(센서 캘리브) · RC*(조종기 캘리브) 는
+        살아남는다 (rcS:195). 캘리브레이션을 다시 할 필요는 없다.
+
+ ✅ 판정: 기체가 QGC 에 정상 인식되면 [3] 으로.
+
+
+════════════════════════════════════════════════════════════════════════
+[3]  젯슨 — ROS2 환경 + 지상 확인                        [젯슨 SSH]
+════════════════════════════════════════════════════════════════════════
+
+ ★ 어느 기계를 고쳐야 하나 — RUN.txt:5-7 의 역할 분담이 답이다.
+     [젯슨]  오프보드/오토튠 스크립트 + 감시창을 전부 돌린다 → ★ 반드시 1.16 으로
+     [노트북] QGC(플래시·파라미터·로그 다운로드) + 로그 분석
+              → ROS2 / colcon / px4_msgs 는 전혀 안 건드린다.
+                QGC 는 px4_msgs 와 무관하므로 버전 충돌이 없다.
+     [조종기] 스크립트 없음                                  → 무관
+
+   젯슨은 내 드론 전용 기기다. 다른 드론과 공유하지 않으므로
+   **워크스페이스를 나눌 필요 없이 그냥 바꾸면 된다.** 공존 고민은 노트북에만 해당.
+
+ ── (3-1) 젯슨: px4_msgs 를 release/1.16 으로  [USB 방식, git 명령 0개] ──
+   ★ 원칙(2026-08-06 확정): **git/GitHub 은 GPU 서버에서만 쓴다.**
+     젯슨·노트북은 USB 로 파일을 옮기는 방식만 쓴다. SSH 키 등록도, 인터넷도
+     필요 없다. 롤백도 git 이 아니라 **폴더 이름 바꾸기**로 한다.
+     (old/REAL_AIRFRAME_DDS_SETUP.txt 의 "git clone 은 쓰지 않는다" 와 같은 방침)
+
+   ★ 젯슨 워크스페이스는 **~/ros2_ws** 다 (2026-08-06 사용자 실측:
+     build / install / log / src 구조, colcon_ws 는 없음).
+     ⚠ RUN.txt:71 · GROUND_CHECK.txt:73 의 `~/colcon_ws` 는 **GPU 서버/노트북**
+       기준 표기다. 젯슨에 그대로 쓰면 안 된다.
+
+   ── (a) 젯슨으로 옮기기 — USB 또는 네트워크 ──────────────────
+     ★ 2026-08-06 실제로 쓴 경로: 노트북 ~/Downloads/px4_field → 젯슨 ~/px4_field
+       (git 이 아니라 파일 복사이므로 "git 은 GPU 서버만" 방침에 어긋나지 않는다)
+
+     네트워크가 되면 (젯슨 = quad@172.20.10.2):
+
+rsync -av --exclude='__pycache__' --exclude='ulog' --exclude='firmware' \
+  --exclude='field_logs' --exclude='*.ulg' --exclude='*.csv' --exclude='*.params' \
+  ~/Downloads/px4_field/ quad@172.20.10.2:~/px4_field/
+
+       ⚠ 양쪽 끝의 `/` 둘 다 필요하다. 빼면 ~/px4_field/px4_field/ 가 된다.
+       ⚠ `--delete` 는 넣지 않는다 — 젯슨에만 있는 예전 현장 로그가 지워진다.
+       rsync 가 없으면:  scp -r ~/Downloads/px4_field quad@172.20.10.2:~/
+
+     USB 를 젯슨에 직접 꽂았다면 tar 경로만 바뀐다:
+       /media/<유저>/<USB>/px4_field/usb_payload/px4_msgs_release_1.16.tar.gz
+
+   ── (a-2) 꾸러미 내용 ────────────────────────────────────────
+     px4_field/usb_payload/px4_msgs_release_1.16.tar.gz
+       71263 B   md5 6fa988fa3b6b4653ee60ffbfacede034
+     ※ tar 는 `git archive origin/release/1.16` 로 뽑았다(.git 없음, 순수 소스).
+       검증: 이 소스의 12개 메시지 = 펌웨어 v1.16.2 와 12/12 일치 확인 완료.
+     ※ 다시 만들 일이 있으면 GPU 서버에서:
+         cd ~/colcon_ws/src/px4_msgs && git fetch origin
+         git archive --format=tar.gz --prefix=px4_msgs/ \
+             -o px4_msgs_release_1.16.tar.gz origin/release/1.16
+       (git archive 는 워킹트리를 건드리지 않는다)
+
+   ── (b) 젯슨: 현재 상태 확인 + 백업 ──────────────────────────
+
+ssh <젯슨유저>@<젯슨IP>
+
+source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+ros2 interface show px4_msgs/msg/VehicleAttitudeSetpoint | awk 'NR<=6'
+      roll_body 로 시작        → 1.15 계열 (바꿔야 함)
+      yaw_sp_move_rate 로 시작 → 이미 1.16+ 계열
+      ⚠ package.xml 의 version 은 1.15/1.16 둘 다 2.0.1 이라 판별에 쓸 수 없다.
+        위 `ros2 interface show` 가 유일한 판별법이다.
+
+   ★ 롤백용 백업 — 폴더 이름 바꾸기 + **COLCON_IGNORE** (git 불필요)
+
+mv ~/ros2_ws/src/px4_msgs      ~/ros2_ws/src/px4_msgs.bak_1154
+touch ~/ros2_ws/src/px4_msgs.bak_1154/COLCON_IGNORE
+cp -a ~/ros2_ws/install/px4_msgs ~/ros2_ws/install/px4_msgs.bak_1154
+
+   ⚠⚠ COLCON_IGNORE 를 빼먹으면 빌드가 **에러로 멈춘다** (2026-08-06 실제 발생):
+         ERROR:colcon: Duplicate package names not supported:
+         - px4_msgs:  src/px4_msgs  /  src/px4_msgs.bak_1154
+       폴더 이름만 바꿔도 안쪽 package.xml 의 패키지 이름은 그대로 px4_msgs 라
+       colcon 이 src/ 를 훑어 같은 이름 2개를 본다. 빈 파일 하나면 제외된다.
+       (롤백할 때는 이 COLCON_IGNORE 를 지우면 다시 빌드 대상이 된다)
+
+   확인:
+ls -d ~/ros2_ws/src/px4_msgs.bak_1154 ~/ros2_ws/install/px4_msgs.bak_1154
+       (cp 는 성공하면 아무 말도 안 하므로 눈으로 확인할 것)
+
+   ── (c) 젯슨: 새 소스 넣고 빌드 ──────────────────────────────
+
+md5sum ~/px4_field/usb_payload/px4_msgs_release_1.16.tar.gz
+      → 6fa988fa3b6b4653ee60ffbfacede034 인지 먼저 확인
+
+   ⚠ tar 는 **반드시 ~/ros2_ws/src 안에서** 푼다. 홈에서 풀면 ~/px4_msgs 라는
+     엉뚱한 사본이 생긴다(2026-08-06 실제 발생). 생겼으면 rm -rf ~/px4_msgs.
+
+cd ~/ros2_ws/src && tar -xzf ~/px4_field/usb_payload/px4_msgs_release_1.16.tar.gz
+
+ls ~/ros2_ws/src
+      → px4_msgs / px4_msgs.bak_1154 / px4_ros_com  셋이 보여야 한다
+
+   소스가 1.16 이 맞는지 (install/ 이 아니라 **소스 파일**을 직접 본다):
+
+head -6 ~/ros2_ws/src/px4_msgs/msg/VehicleAttitudeSetpoint.msg
+
+      기대:
+        uint32 MESSAGE_VERSION = 0
+        uint64 timestamp
+        float32 yaw_sp_move_rate          ← 이게 보이면 1.16
+      roll_body 가 보이면 옛 소스다. tar 를 다시 풀 것.
+
+cd ~/ros2_ws && colcon build --packages-select px4_msgs --allow-overriding px4_msgs
+
+   ※ --allow-overriding 이유: ~/.bashrc 가 ~/ros2_ws/install/setup.bash 를 미리
+     source 하므로 colcon 이 "자기 자신을 덮어쓴다"고 경고한다. 의도한 상황이다.
+   ※ 젯슨에서 메시지 226개 빌드는 10~20분. 메모리 부족으로 죽으면
+     `--executor sequential` 을 붙인다.
+
+   ── (c-2) px4_ros_com — **선택. 건너뛰어도 된다** ────────────
+   src/ 에 px4_ros_com 이 있다. px4_msgs 에 의존해 컴파일된 패키지라
+   px4_msgs 만 바꾸면 옛 메시지 구조로 컴파일된 채 남는다.
+   ★ 우리 필드 스크립트(f1_hover / f2_doublet / f3_drag / offboard_common /
+     watch_ekf / watch_offboard / autotune_go)는 **전부 px4_msgs 만 import** 한다.
+     px4_ros_com 은 쓰지 않으므로 지금 안 해도 (3-4) 부터 전부 정상 동작한다.
+   나중에 px4_ros_com 노드를 쓸 일이 생기면 그때 돌린다(젯슨에서 10분+):
+
+colcon build --packages-select px4_ros_com --allow-overriding px4_ros_com
+
+   ── (d) 확인 ─────────────────────────────────────────────────
+   ★ **새 터미널(또는 새 SSH 세션)** 에서 할 것. 빌드 전에 source 한 셸에서는
+     옛 버전이 그대로 보인다(2026-08-06 실제로 헷갈렸음).
+
+source /opt/ros/humble/setup.bash && source ~/ros2_ws/install/setup.bash
+ros2 interface show px4_msgs/msg/VehicleAttitudeSetpoint | awk 'NR<=6'
+      → yaw_sp_move_rate 로 시작하면 성공
+
+   ┄┄┄┄ 참조용: 젯슨 롤백 방법 ┄┄┄ ※ 실행 순서 아님. 문제 생겼을 때만 ┄┄┄
+     (d) 가 통과했으면 여기는 **건너뛰고 (3-2) 로 간다.**
+
+rm -rf ~/ros2_ws/src/px4_msgs        ~/ros2_ws/install/px4_msgs
+mv     ~/ros2_ws/src/px4_msgs.bak_1154     ~/ros2_ws/src/px4_msgs
+rm -f  ~/ros2_ws/src/px4_msgs/COLCON_IGNORE
+mv     ~/ros2_ws/install/px4_msgs.bak_1154 ~/ros2_ws/install/px4_msgs
+   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+
+ ── (3-2) 도메인 — **0 을 유지한다** (2026-08-06 재판단) ───────────
+
+   ★ 결론: 지금은 바꾸지 않는다. UXRCE_DDS_DOM_ID = 0, ROS_DOMAIN_ID = 0 그대로.
+
+   ★ 젯슨에서 매번 export 하지 않도록 .bashrc 에 한 줄 (중복 방지 가드 포함):
+
+grep -q 'ROS_DOMAIN_ID' ~/.bashrc || echo 'export ROS_DOMAIN_ID=0' >> ~/.bashrc
+source ~/.bashrc
+echo $ROS_DOMAIN_ID        # 0 이 나오면 성공
+
+   ⚠ .bashrc 가 ~/ros2_ws/install/setup.bash 를 이미 source 하고 있다.
+     그래서 px4_msgs 를 재빌드할 때 colcon 이 "자기 자신을 덮어쓴다"고 경고한다.
+     정상이며 --allow-overriding px4_msgs 로 넘긴다 ([3-1](c) 참조).
+
+   처음엔 16 으로 분리하자고 했으나 뒤집었다. 이유:
+     · ROS2 를 쓰는 기계가 젯슨 하나뿐이고, 그 젯슨은 내 드론 전용이다.
+       충돌은 "1.15 드론 + 그 드론의 ROS2 노드"가 동시에 살아 있을 때만 난다.
+     · 반면 도메인은 **FC 파라미터와 젯슨 환경변수 양쪽을 동시에** 바꿔야 한다.
+       한쪽만 바뀌면 토픽이 통째로 안 보이고, 현장에서 원인을 엉뚱한 데서 찾는다.
+       (기존 RUN.txt·GROUND_CHECK.txt 는 전부 domain 0 전제로 쓰여 있다)
+     · 즉 실익보다 "반만 적용될 위험"이 크다.
+
+   ⚠ 두 드론을 **동시에** 켜서 ROS2 로 다룰 일이 생기면 그때 분리한다.
+     그때 위험한 토픽 (이름 같고 정의 다름, v1.16.2 vs v1.15.4):
+         vehicle_attitude_setpoint, vehicle_local_position
+     (vehicle_gps_position 은 1.15.4 와 정의가 완전 동일해서 안전하다)
+     분리 방법: FC `UXRCE_DDS_DOM_ID=16` (재부팅) + 젯슨 `export ROS_DOMAIN_ID=16`
+     — **반드시 양쪽 같이.**
+
+ ── (3-3) 노트북 — 안 해도 된다 ────────────────────────────────────
+
+   RUN.txt:87 이 이미 답을 준다:
+     "노트북에 ROS2+px4_msgs 없으면 → 젯슨에 SSH 창 하나 더 열어 같은 명령"
+
+   ┌────────────────────────────────────────────────────────────────┐
+   │ 감시창을 젯슨 SSH 창에서 돌리면 노트북은 손댈 게 전혀 없다.     │
+   │ 공용 노트북 / .bashrc / 다른 드론 1.15 충돌 걱정이 전부 사라진다.│
+   │ → 기본은 이쪽을 권장한다.                                       │
+   └────────────────────────────────────────────────────────────────┘
+
+   그래도 노트북에서 직접 토픽을 받고 싶다면 — **git 없이 USB 로만**.
+   기존 환경(~/test_ws, 1.15 계열)은 건드리지 않고 별도 워크스페이스를 만든다.
+   (~/.bashrc 의 기존 자동 source 줄도 그대로 둔다. 나중에 source 한 쪽이 이긴다)
+
+mkdir -p ~/px4_ws_116/src && cd ~/px4_ws_116/src
+tar -xzf /media/$USER/<USB>/px4_field/usb_payload/px4_msgs_release_1.16.tar.gz
+cd ~/px4_ws_116 && colcon build --symlink-install
+
+   .bashrc 맨 아래에 별칭 2줄:
+
+alias px4_116='source ~/px4_ws_116/install/setup.bash && export ROS_DOMAIN_ID=16 && echo "[px4_msgs 1.16 / ROS_DOMAIN_ID=16]"'
+alias px4_show="ros2 interface show px4_msgs/msg/VehicleAttitudeSetpoint | awk 'NR<=6'"
+
+   내 드론 다룰 때만 새 터미널에서 `px4_116`. 터미널 닫으면 원상복구.
+
+ ── (3-4) ★ 지상 확인 — 여기가 이번 업그레이드의 목적 ──────────────
+   기체 전원 ON + 젯슨↔FC 링크(uXRCE agent) 살아 있는 상태에서, 젯슨에서:
+
+ros2 topic list | grep /fmu/out
+
+   기대:
+     vehicle_status_v1          ← _v1 붙는 건 이것 하나뿐
+     vehicle_local_position / vehicle_attitude / vehicle_odometry
+     vehicle_gps_position / sensor_combined
+     vehicle_thrust_setpoint / vehicle_torque_setpoint   ← ★ 이 둘이 보여야 한다
+
+ros2 topic hz /fmu/out/vehicle_gps_position
+
+   기대: ~10 Hz.
+
+ros2 topic echo /fmu/out/vehicle_gps_position --once
+
+   satellites_used 20~32, fix_type 3~4, eph 0.2~0.6 이면 정상.
+   말도 안 되는 값이면 px4_msgs 버전이 안 맞은 것 → `px4_show` 재확인.
+
+ ── (3-5) 10Hz 가 안 나올 때 ───────────────────────────────────────
+   ulog 를 받아 유실 여부부터 본다:
+
+~/isaacsim/python.sh px4_field/check_ulog.py <log>.ulg
+
+     · utc dt 가 100ms 로 균일   → 성공
+     · 100ms 와 200ms 가 섞임    → 에폭 유실.
+       ① SER_GPS1_BAUD 를 230400 으로 올려 재측정
+       ② 그래도 안 되면 수신기 한계 → 8Hz 로 두고 [4-5] 에서 sim 을 8Hz 로 맞춘다
+
+ ✅ 판정: thrust/torque 토픽이 보이고 GPS 값이 정상이면 통과.
+
+ ══ [1]~[3] 완료 기록 (2026-08-06) ══════════════════════════════════
+    ver all           1.16.2
+    gps status        10 Hz          ← 8Hz → 10Hz. 이번 업그레이드의 목적 달성
+    파라미터          무손실 ("There are no differences") — 복원 불필요했음
+    젯슨 px4_msgs     release/1.16 (yaw_sp_move_rate 확인)
+    토픽              vehicle_gps_position / vehicle_thrust_setpoint /
+                      vehicle_torque_setpoint 전부 확인
+    → run_sim.py:665 의 `>= 0.1`(10Hz) 은 **그대로 둔다**. [4-5] 작업 없음.
+
+
+════════════════════════════════════════════════════════════════════════
+[4]  GPU 서버 — sim 재빌드 (세트로 움직인다)              [▣GPU서버]
+════════════════════════════════════════════════════════════════════════
+
+ ★ PX4 트리와 px4_msgs 는 항상 같이 옮긴다. 하나만 바꾸면 지금 멀쩡한 sim 이 깨진다.
+
+ ── (4-1) 진행 중인 것 정리 ────────────────────────────────────────
+
+pkill -9 -f 'bin/px4'; pkill -9 -f run_sim
+
+ ── (4-2) PX4 트리 ─────────────────────────────────────────────────
+
+cd ~/PX4-Autopilot && git checkout v1.16.2 && git submodule update --init --recursive
+
+ ── (4-3) px4_msgs ─────────────────────────────────────────────────
+   ★ GPU 서버에는 px4_msgs 사본이 3개 있다(내용은 12개 메시지 기준 동일).
+     sim 이 실제로 보는 것은 **~/colcon_ws** 다:
+       ~/.bashrc:120-121,141  및 프로젝트의 모든 run_*.sh 가
+       `source ~/colcon_ws/install/setup.bash` 를 한다.
+     나머지 ~/ros2_ws/src/px4_msgs, ~/px4_msgs 는 sim 경로가 아니다.
+     (헷갈림 방지를 위해 셋 다 같이 옮겨두는 것을 권장)
+
+cd ~/colcon_ws/src/px4_msgs && git checkout release/1.16
+cd ~/colcon_ws && colcon build --packages-select px4_msgs
+
+   전환 전 상태(롤백용, 2026-08-06 실측):
+       ~/colcon_ws/src/px4_msgs   main @ 18405d6
+       ~/ros2_ws/src/px4_msgs     main @ ca9895d
+       ~/px4_msgs                 main @ ca9895d
+
+ ── (4-4) SITL 빌드 ────────────────────────────────────────────────
+
+cd ~/PX4-Autopilot && make px4_sitl_default
+
+ ── (4-5) run_sim.py GPS 레이트 정합 ───────────────────────────────
+
+   · [3-4] 에서 10Hz 확정   → run_sim.py:665 의 `>= 0.1` 그대로 둔다. 끝.
+   · [3-5] 에서 8Hz 로 남음 → `>= 0.125` 로 바꾸고, RL 결정 주기를
+     online_rl_main.py:811 의 gps_updated 게이트에서 떼어내 고정 10Hz 로 돌린다.
+     (관측 정의 변경 = 재정합 로드맵 [2] 항목. 학습 전에 확정할 것)
+
+ ✅ 판정: 빌드 성공. 실제 동작 검증은 [5] 에서 한다.
+
+
+════════════════════════════════════════════════════════════════════════
+[5]  ★ Isaac Sim 수동조종 검증 — 게이트        [▣GPU서버 + 조종기]
+════════════════════════════════════════════════════════════════════════
+
+ 여기를 통과하지 못하면 실외에 나가지 않는다.
+ 조종기 설정은 px4_field/MANUAL_FLIGHT_SETUP.md 참조 (QGC Joystick + Offboard 버튼).
+
+ ── (5-1) ★★ 잔재 정리 — 여기가 이번에 가장 크게 물린 곳 ★★ ────────
+
+   ⚠⚠ PX4 버전을 바꿨으면 **MicroXRCEAgent 를 반드시 죽였다 다시 띄운다.**
+     안 그러면 옛 버전의 토픽 이름이 **살아 있는 DDS 발행자로 남아** 있고,
+     offboard_common.py 의 R() 리졸버가 "발행자가 있는 것 중 높은 버전 우선"
+     규칙에 따라 그 유령을 고른다.
+
+     2026-08-06 실제 발생:
+       MicroXRCEAgent PID 1587094, 기동 2026-08-04 12:22 — 한 번도 안 죽였음
+         /fmu/out/vehicle_status_v1   pub 1   ← 새 SITL(1.16.2). 정답
+         /fmu/out/vehicle_status_v4   pub 1   ← ★ v1.18 세션의 유령
+         /fmu/out/vtol_vehicle_status pub 2   ← 세션 두 개가 겹친 증거
+       → 스크립트가 _v4 를 잡아 "5초간 한 번도 못 받았다"로 멈췄다.
+       (vehicle_local_position 은 1.16.2 에서 MESSAGE_VERSION=0 이라 유령 이름과
+        안 겹쳐서 정상 수신됐다 — 그래서 "SITL 은 맞게 도는데 상태만 안 온다"는
+        헷갈리는 그림이 됐다)
+
+pkill -f launch_isaac_manual
+pkill -f '[r]un_sim.py'
+pkill -9 -f '[b]in/px4'
+pkill -x MicroXRCEAgent
+sleep 3
+
+   ⚠ `pkill -f run_sim.py` 를 대괄호 없이 쓰면 그 문자열이 든 **자기 셸**을
+     먼저 죽인다(실제로 당함, exit 144). 반드시 `[r]un_sim.py` 형태로 쓸 것.
+
+   ⚠ 프로세스를 다 죽였는데도 `ros2 topic list` 에 이름이 남는다 →
+     ros2 CLI **데몬 캐시**다. 실체가 아니다. 이걸로 지운다:
+
+ros2 daemon stop
+
+   확인 (둘 다 비어야 한다):
+
+pgrep -af 'MicroXRCEAgent|[b]in/px4|[r]un_sim.py'
+ros2 topic list | grep -E 'vehicle_status|/gt/odometry'
+
+   ※ 재실행하면 launch_isaac_manual.sh:61-63 이 에이전트를 새로 띄운다.
+   ※ 실기 쪽도 같다 — 젯슨에서 1.15.4 시절 에이전트가 계속 떠 있었다면
+     같은 유령이 생긴다. 펌웨어 플래시 후에는 젯슨 에이전트도 재시작할 것.
+
+ ── (5-2) f1 (호버) 부터 ───────────────────────────────────────────
+
+cd ~/projects/Issacsim-rhukf
+bash px4_field/launch_isaac_manual.sh f1
+
+   확인할 것:
+     ① 조종기로 이륙되는가
+     ② 오프보드 스위치 ON → 스크립트가 시퀀스를 가져가는가
+     ③ 스위치 OFF → 조종기로 인계되는가
+     ④ 토픽 이름 해석: R() 리졸버가 vehicle_status_v1 을 제대로 잡는가
+        (SITL 이 main(_v4) → 1.16.2(_v1) 로 바뀌었다. 코드 수정은 불필요하지만
+         리졸버가 실제로 붙는지 로그로 확인할 것)
+
+ ── (5-3) f2 / f3 도 ───────────────────────────────────────────────
+
+bash px4_field/launch_isaac_manual.sh f2 1.0
+bash px4_field/launch_isaac_manual.sh f3 1.0
+
+ ── (5-4) 스윕 1 셀 ────────────────────────────────────────────────
+   학습 파이프라인이 깨지지 않았는지도 본다. 짧게 1 셀만.
+
+ ✅ 판정: f1/f2/f3 세 시퀀스가 오프보드 인수인계까지 정상이고
+          스윕 1 셀이 예전과 같은 형태로 끝나면 통과. → 실외로 나간다.
+
+
+════════════════════════════════════════════════════════════════════════
+[6]  실기체 비행 — 파라미터 → 오토튠 → 캘리브레이션   [현장]
+════════════════════════════════════════════════════════════════════════
+
+ ── (6-1) 파라미터 재확인 ──────────────────────────────────────────
+   ★ 복원 자체는 [2-7] 에서 이미 했다. 여기서는 비행 직전 재확인만 한다.
+
+   현재 파라미터를 QGC 로 저장한 뒤 차이를 본다:
+
+python3 px4_field/diff_params.py PX4_1154_before_upgrade_20260806.params <새로_저장한_1.16.params>
+
+   반드시 재확인:
+     UXRCE_DDS_DOM_ID = 0  (유지 — [3-2] 참조)
+     SER_GPS1_BAUD     (Auto 또는 [3-5] 결과에 따라 230400)
+     EKF2_GPS_DELAY    (1.15.4 에서 110ms. 10Hz 가 되면 재확인)
+     COM_ARM_WO_GPS, EKF2_GPS_CTRL
+
+ ── (6-2) ★ 오토튠 재수행 ──────────────────────────────────────────
+   MC 제어기/제어할당이 77 files (+805/−2100) 바뀌었다.
+   1.15.4 에서 뽑은 게인은 그대로 믿지 않는다.
+
+python3 px4_field/autotune_go.py
+python3 px4_field/fit_autotune.py <결과>
+
+ ── (6-3) 캘리브레이션 비행 F1/F2/F3 ───────────────────────────────
+   기존 GO_FIELD.txt / RUN.txt 절차 그대로. 얻는 것:
+     F1 호버   → C_thrust, u_hover, 자이로 σ
+     F2 더블렛 → C_torque (G = C_torque/I 로 관성 검증)
+     F3 드래그 → drag 계수
+
+   ⚠ AUW = **1.342 kg** (2026-08-06 저울 실측, 젯슨↔FC USB-C 케이블 포함).
+     --mass 인자에 1.342 를 쓴다. 케이블 없이 재면 1.326 이다.
+     ★ 네 팩 전부 케이블을 단 채로 날린다 — 형상을 통일해야
+       '오토튠 G vs F2 G' 차이를 폐루프 편향으로 읽을 수 있다.
+
+ ✅ 판정: 호버가 1.15.4 때와 같은 안정감. 흔들리면 오토튠 재실행.
+
+
+════════════════════════════════════════════════════════════════════════
+[7]  측정 재개                                            [▣GPU서버]
+════════════════════════════════════════════════════════════════════════
+
+ [1]~[6] 이 전부 끝난 뒤에만 측정한다.
+ CLAUDE.md 재정합 로드맵 [1] 플랜트 확정부터 순서대로.
+ 평시 NIS 기준선을 f1_field.ulg(1.15.4) 와 비교할 때는 제어기가 바뀌었음을 명시.
+
+
+════════════════════════════════════════════════════════════════════════
+[8]  롤백
+════════════════════════════════════════════════════════════════════════
+
+ 기체      QGC 로 px4_fmu-v6c_v1.15.4_dds.px4 재플래시 + 백업 params 로드
+           UXRCE_DDS_DOM_ID 를 0 으로
+ 젯슨      git 불필요 — [3-1](b) 에서 만든 백업 폴더를 되돌린다
+           rm -rf ~/ros2_ws/src/px4_msgs ~/ros2_ws/install/px4_msgs
+           mv ~/ros2_ws/src/px4_msgs.bak_1154     ~/ros2_ws/src/px4_msgs
+           mv ~/ros2_ws/install/px4_msgs.bak_1154 ~/ros2_ws/install/px4_msgs
+           ROS_DOMAIN_ID 도 원복
+ 노트북    [3-3] 을 안 했으면 아무것도 할 게 없다.
+           했다면: `px4_116` 을 안 치면 끝. 완전 제거는
+           rm -rf ~/px4_ws_116 + .bashrc 별칭 2줄 삭제
+ GPU서버   cd ~/PX4-Autopilot && git checkout 4b015fbdeb   (이전 main 커밋)
+           cd ~/colcon_ws/src/px4_msgs && git checkout 18405d6
+           cd ~/colcon_ws && colcon build --packages-select px4_msgs
+           cd ~/PX4-Autopilot && make px4_sitl_default
+           (같이 옮겼다면 ~/ros2_ws/src/px4_msgs, ~/px4_msgs 도 ca9895d 로)
+ worktree  git -C ~/PX4-Autopilot worktree remove --force ~/PX4-v1162
+           git -C ~/PX4-Autopilot worktree prune
+
+
+════════════════════════════════════════════════════════════════════════
+  체크리스트
+════════════════════════════════════════════════════════════════════════
+  [ ] [1] 백업 3종
+  [ ] [2] 빌드 + 플래시 + ver all 1.16.2 + gps rate 10Hz + [2-7] 파라미터 복원
+  [ ] [3] 젯슨 px4_msgs release/1.16 + 토픽8종 + GPS 10Hz
+  [ ] [4] PX4 v1.16.2 + px4_msgs release/1.16 + SITL 빌드 (세트)
+  [ ] [5] Isaac f1/f2/f3 오프보드 인수인계 + 스윕 1셀   ← 게이트
+  [ ] [6] params + 오토튠 + F1/F2/F3 캘리브 비행
+  [ ] [7] 측정 재개
+
+
+════════════════════════════════════════════════════════════════════════
+  [부록 A]  왜 1.17.0 이 아니라 1.16.2 인가  (2026-08-06 실물 대조)
+════════════════════════════════════════════════════════════════════════
+
+  GPS 10Hz — 둘 다 동일하게 달성된다
+    v1.15.4 : rate_meas = (F9P) ? 100 : 125           → M10 은 무조건 8Hz
+    v1.16.2 : rate_meas = 100 기본, 예외는 F9P L1L2(200)/F9P L1L5(143) 뿐
+              → M10 은 case 가 없어 100ms = 10Hz
+    실측 근거(log_25) : utc dt 히스토그램 125ms×2318 / 250ms×389
+                        = 정확히 8Hz + 14.4% 에폭 유실
+
+  FLASH ★ 결정적
+    현재 v1.15.4+2줄 = 98.85% (1943500 B / 1920 KB), 여유 1%
+    DDS 토픽 수   v1.15.4 : 51    v1.16.2 : 51    v1.17.0 : 65
+    → 1.16.2 는 지금과 같은 조건. 1.17.0 은 +14 로 넘칠 위험이 크다.
+
+  패치 성숙도
+    v1.16.0  2025-08-05
+    v1.16.1  2025-09-08
+    v1.17.0  2026-01-16   ← .0, 이후 패치 릴리스 없음
+    v1.16.2  2026-04-22   ← 1.17.0 이 나온 뒤에도 1.16 라인을 계속 고쳤다
+    실기체에 올리는 펌웨어라면 1.16 이 맞다.
+
+  변화량 (1.15.4 기준)
+    MC제어기/제어할당   → v1.16.2  77 files +805/−2100
+                        → v1.17.0  83 files +1295/−2309
+    파라미터 정의       → v1.16.2  76 files
+                        → v1.17.0 103 files
+
+  토픽 이름 변경 (우리가 쓰는 12개 중)
+    v1.16.2 : vehicle_status → vehicle_status_v1     (1개)
+    v1.17.0 : vehicle_status / vehicle_local_position / vehicle_attitude_setpoint (3개)
+
+  포기하는 것
+    1.16.2 에는 DRV_GPS_DEVTYPE_UBX_10 매핑이 없어 QGC 가 GPS 를 제네릭
+    u-blox 로 표시한다. → `gps status` 의 MOD=/FWVER= 로 확인하면 되므로 실익 없음.
+
+  px4_msgs 정합 (우리가 쓰는 12개 메시지, 필드 단위 대조)
+    v1.15.4 ↔ release/1.15  →  12/12 일치
+    v1.16.2 ↔ release/1.16  →  12/12 일치
+    v1.17.0 ↔ release/1.17  →  12/12 일치
+    현재(px4_msgs main ↔ 기체 1.15.4) → SensorGps / VehicleStatus /
+      VehicleLocalPosition / VehicleAttitudeSetpoint 4개 불일치.
+      특히 VehicleAttitudeSetpoint 는 필드 #1 부터 어긋나며
+      offboard_common.py:216 이 실기로 publish 한다 = 이미 깨진 경로였다.
+
+  Pegasus 호환 (검증 완료)
+    · 지금 SITL 이 v1.18.0-alpha1 로 정상 동작 중 → 구 버전인 1.16.2 는 안전
+    · simulator_mavlink 모듈 : v1.15.4 / v1.16.2 / v1.18-alpha 전부 존재
+    · 10016_none_iris, 10015_gazebo-classic_iris : v1.16.2 에 존재, main 과 동일
+    · rcS diff (v1.16.2 ↔ main) : param reset 로직뿐, Pegasus 접점 무관
+    · 프로젝트가 PX4_PARAM_* / PX4_SIM_MODEL 을 직접 쓰는 곳 없음
+    · sim 쪽 소소한 이점: rcS 의 `param set-default MAV_PROTO_VER 2`
+      (SITL 재시작 직후 첫 패킷 드롭 방지) 가 1.16.2 엔 있고 1.17.0 엔 없다.
+      스윕이 에피소드마다 bin/px4 를 죽였다 살리므로 무관하지 않다.
+
+  ARM 툴체인
+    v1.16.2 는 배포판 gcc-arm-none-eabi 를 그대로 쓴다.
+    설치본 10.3.1 (2021.07) 로 충분. 별도 설치 불필요.
+
+
+════════════════════════════════════════════════════════════════════════
+  [부록 B]  FLASH 가 넘칠 때 — 예비책
+════════════════════════════════════════════════════════════════════════
+
+  쿼드로터가 안 쓰는 DDS 토픽을 dds_topics.yaml 에서 주석(#) 처리한다.
+
+    publications 에서
+      airspeed_validated / vtol_vehicle_status / transponder_report
+      collision_constraints / gimbal_device_attitude_status
+    subscriptions 에서
+      actuator_servos / landing_gear / obstacle_distance
+      onboard_computer_status / sensor_optical_flow / distance_sensor
+
+  ⚠ 절대 지우지 말 것 (우리가 쓴다):
+      sensor_combined, vehicle_gps_position, vehicle_attitude, vehicle_odometry,
+      vehicle_local_position, vehicle_status, vehicle_thrust/torque_setpoint,
+      offboard_control_mode, trajectory_setpoint, vehicle_attitude_setpoint,
+      vehicle_command, vehicle_command_ack, timesync_status,
+      register_ext_component_* / arming_check_* / mode_completed /
+      message_format_request/response   (px4_ros2 핸드셰이크용)
+
+  그래도 안 되면 boards/px4/fmu-v6c/default.px4board 에서 안 쓰는 모듈
+  (rover_*, fw_*, vtol_*, uuv_*, airship_*) 을 n 으로 끈다.

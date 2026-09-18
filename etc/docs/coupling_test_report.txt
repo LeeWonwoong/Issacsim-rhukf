@@ -1,0 +1,39 @@
+########## COUPLING TEST START 20:46:27 ##########
+
+==== [A 커플ON·1x] 20:46:27 ====
+  [done] results_coupling_on 21:31:48
+
+==== [B 커플OFF·1x] 21:31:48 ====
+  [done] results_coupling_off 22:22:22
+
+==== [C 커플OFF·1.5x] 22:22:22 ====
+  [done] results_coupling_off15 23:12:29
+
+==== [비교] ====
+
+================================================================================================
+ 커플링ON(results_coupling_on) vs OFF(results_coupling_off) — res_g / NIS_g (p50)
+================================================================================================
+  [평시(bias0) gyro 바닥 — OFF서 오르나 / aggressive가 hover보다 오르나]
+          패턴              외란       구간 |   res_g ON→OFF |     NIS_g ON→OFF
+  aggressive            none    clean |  0.225→ 0.877 |    0.07→   1.10
+  aggressive            none     wind |  0.235→ 0.903 |    0.08→   1.16
+  aggressive wind_turbulence    clean |  0.238→ 0.895 |    0.08→   1.14
+  aggressive wind_turbulence     wind |  0.420→ 1.189 |    0.25→   2.01
+       hover            none    clean |  0.246→ 0.901 |    0.09→   1.16
+       hover            none     wind |  0.243→ 0.903 |    0.08→   1.16
+       hover wind_turbulence    clean |  0.232→ 0.898 |    0.08→   1.15
+       hover wind_turbulence     wind |  0.377→ 1.083 |    0.20→   1.67
+
+  [공격 겹침구간(160~200) — 약공격 δ0.4 / 강공격 δ0.7, gyro NIS]
+          패턴    δ |     NIS_g ON→OFF |       평시대비 배수(OFF)
+  aggressive 0.40 |   263.1→  241.7 |      120배
+  aggressive 0.70 |   823.5→  785.4 |      391배
+       hover 0.40 |   262.1→  239.8 |      143배
+       hover 0.70 |   815.0→  785.2 |      470배
+
+─ 읽는 법 ─
+  · OFF서 평시 gyro NIS 바닥↑ = 커플링 제거로 표준모델 한계 드러남(CLAUDE 예측 ~2.87).
+  · aggressive 평시가 hover보다 크게↑ = 급기동이 gyro 잔차 만듦(=gyro aliasing 원천).
+  · 약공격 δ0.4 배수가 작아지면(평시대비) = threshold 애매해짐(RL 필요근거).
+########## COUPLING TEST DONE 23:12:30 ##########

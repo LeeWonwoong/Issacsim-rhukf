@@ -1,0 +1,12 @@
+[worker 1] ['v51_P0.005', 'v51_P0.02', 'v51_P0.1', 'v51_adam3e4', 'v51_adam1e3']  env5, obs_noise=0, ep_steps=300
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  v51_P0.005   F1=0.927 R=0.912 fpr=0.153 pFP=0.089 wR=0.93 conv=73 | IsaacF1=0.921 (605s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  v51_P0.02    F1=0.932 R=0.918 fpr=0.148 pFP=0.045 wR=0.90 conv=73 | IsaacF1=0.922 (604s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  v51_P0.1     F1=0.923 R=0.906 fpr=0.160 pFP=0.058 wR=0.94 conv=73 | IsaacF1=0.919 (604s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: off | PER: off | n-step: 3
+  v51_adam3e4  F1=0.904 R=0.897 fpr=0.241 pFP=0.134 wR=0.92 conv=76 | IsaacF1=0.927 (68s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  v51_adam1e3  F1=0.931 R=0.924 fpr=0.164 pFP=0.118 wR=0.95 conv=74 | IsaacF1=0.924 (68s)
+[worker 1] done

@@ -1,0 +1,8 @@
+════ RHUKF 튜닝 배치 시작 08-25 03:08:25 (탐지강조 reward) ════
+[03:08:25] adam agent=adam tau=0.005 ui=5 R=1.0 START
+[06:28:31] adam DONE rc=0 ep=283
+[06:28:31] rhukf_t005u1 agent=rhukf tau=0.005 ui=1 R=1.0 START
+[09:48:37] rhukf_t005u1 DONE rc=0 ep=288
+[09:48:37] rhukf_t02u4 agent=rhukf tau=0.02 ui=4 R=1.0 START
+[13:08:43] rhukf_t02u4 DONE rc=0 ep=148
+[13:08:43] rhukf_t02u4R15 agent=rhukf tau=0.02 ui=4 R=1.5 START

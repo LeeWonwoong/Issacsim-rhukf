@@ -1,0 +1,7 @@
+[wait] noise_ab 완료 대기...
+[worker 1] ['nohub_P0.1_s0.0', 'nohub_P0.1_s0.15', 'nohub_P0.1_s0.3']
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  nohub_P0.1_s0.0    F1=0.974 conv=33 stab=0.010 pFP=0.018 wR=0.97 sR=0.98 rwd=287.4 (831s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  nohub_P0.1_s0.15   F1=0.963 conv=39 stab=0.014 pFP=0.023 wR=0.94 sR=0.98 rwd=277.5 (840s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3

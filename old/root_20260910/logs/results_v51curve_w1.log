@@ -1,0 +1,8 @@
+[worker 1] ['SWIRL_P0.01_R1.5', 'SWIRL_P0.03_R1', 'Adam_mse_3e-4']
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  SWIRL_P0.01_R1.5     F1=0.927 rwd=154.5 conv=52 ep=160 (574s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  SWIRL_P0.03_R1       F1=0.935 rwd=153.4 conv=72 ep=160 (573s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: off | PER: off | n-step: 3
+  Adam_mse_3e-4        F1=0.904 rwd=129.8 conv=76 ep=160 (151s)
+[worker 1] done

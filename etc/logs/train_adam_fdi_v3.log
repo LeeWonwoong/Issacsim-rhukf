@@ -1,0 +1,36 @@
+==========================================================
+ [08-19 16:35:09] ADAM FDI v3 학습 START → results_adam_fdi_v3 (300ep, seed0, FN그래디언트복원·c1)
+==========================================================
+==========================================================
+ [08-19 18:51:56] ADAM FDI 학습 DONE (rc=0)
+==========================================================
+[INFO] [1787133108.345132098] [online_rl_controller]:   [240] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.396 g=0.838 (raw v=0.93 g=175.17) | R=+0.5 (Σ=112.2) | GT=9.12m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133108.524779295] [online_rl_controller]:   [245] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.307 g=0.838 (raw v=0.56 g=176.74) | R=+0.5 (Σ=114.7) | GT=9.12m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133108.724926179] [online_rl_controller]:   [250] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.117 g=0.838 (raw v=0.14 g=175.85) | R=+0.5 (Σ=117.2) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133108.904695333] [online_rl_controller]:   [255] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.366 g=0.838 (raw v=0.78 g=175.07) | R=+0.5 (Σ=119.7) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133109.104925255] [online_rl_controller]:   [260] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.348 g=0.838 (raw v=0.71 g=175.35) | R=+0.5 (Σ=122.2) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133109.284867815] [online_rl_controller]:   [265] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.280 g=0.838 (raw v=0.48 g=175.07) | R=+0.5 (Σ=124.7) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133109.484936458] [online_rl_controller]:   [270] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.423 g=0.838 (raw v=1.08 g=175.16) | R=+0.5 (Σ=127.2) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133109.664931659] [online_rl_controller]:   [275] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.360 g=0.838 (raw v=0.75 g=175.55) | R=+0.5 (Σ=129.7) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133109.844704689] [online_rl_controller]:   [280] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.305 g=0.838 (raw v=0.55 g=175.17) | R=+0.5 (Σ=132.2) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133110.024525532] [online_rl_controller]:   [285] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.196 g=0.838 (raw v=0.28 g=175.82) | R=+0.5 (Σ=134.7) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133110.204501293] [online_rl_controller]:   [290] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.240 g=0.838 (raw v=0.37 g=175.60) | R=+0.5 (Σ=137.2) | GT=9.11m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133110.384889968] [online_rl_controller]:   [295] EVAL 🔴ATK(τ1.40 T2.1) HOVER | ε=0.000 | NIS v=0.291 g=0.838 (raw v=0.51 g=175.36) | R=+0.5 (Σ=139.7) | GT=9.12m alt=6.1m | buf=20000 loss=0.0000 Zvar=3.507 dt=6ms | Kg=0.000 Pmax=0.00 Qmax=0.0 innov=0.000 flip=0.000 NIS=0.00
+[INFO] [1787133110.564336887] [online_rl_controller]:   ║ Eval 4: ✅ timeout | R=142.2 | Steps=300 | DetDelay=1 | FA=0.00
+[INFO] [1787133110.564639251] [online_rl_controller]:   ╠═ Survival: 100% | RewardRate: 0.475 | DetDelay: 1.0 | FA: 0.000
+  ╚═══════════════════════════════════════════╝
+[INFO] [1787133114.021832829] [online_rl_controller]: 
+############################################################
+  Training Complete | 8202s (136.7min)
+  Episodes: 300 | Hard Resets: 1
+############################################################
+  [Save] results_adam_fdi_v3/final_model.pt (Adam DDQN baseline)
+[load] results_adam_fdi_v3/metrics_adam.csv  agent=adam  episodes=289
+[saved] results_adam_fdi_v3/metrics_adam.png
+
+=== 최종 구간(마지막 20%) 평균 ===
+   agent |   reward    loss     F1  FPrate  delay  crash  exkurt
+    adam |     67.3   0.466  0.466   0.218    2.7   0.00    4.83
+[INFO] [1787133115.094105280] [online_rl_controller]: [PLOT] 자동 생성 → results_adam_fdi_v3/metrics_adam.png
+  [SimManager] Instantly killed PID=1466966 without waiting.
+[INFO] [1787133115.096465773] [online_rl_controller]: Shutdown: Training complete

@@ -1,0 +1,110 @@
+########## WIND POMDP START 2026-08-17_00:12:47 ##########
+
+==== [A 상수+바람] 00:12:47 burst='상수' turbulence 0~8 ====
+     [done] results_wind_const rows=300 01:45:49
+
+==== [B 펄스+바람] 01:45:49 burst='rand:2,6,6,14' turbulence 0~8 ====
+     [done] results_wind_pulse rows=300 03:17:30
+
+==== [분석] 03:17:30 ====
+창(스텝): 바람 80~220, 공격 140~260 | clean<80 바람만80~140 겹침140~220 공격만220~260 복귀260+
+
+=== 상수(const) [gyro NIS] 구간 p50(p95) + 탐지 d′(겹침 vs 바람만) ===
+          패턴              외란   ws |      clean        바람만         겹침        복귀 |   단일d′   윈도d′     Δ
+  aggressive            none  0.0 |     0.1(0)     0.1(0) 832.0(837)  0.1(133) |   6.41   6.41 -0.01
+  aggressive       wind_gust  5.0 |     0.1(0)     0.1(0) 833.1(842)  0.1(152) |   6.27   6.26 -0.00
+  aggressive wind_turbulence  1.0 |     0.1(0)     0.1(0) 832.2(839)  0.1(122) |   6.51   6.51 -0.01
+  aggressive wind_turbulence  2.0 |     0.1(0)     0.1(0) 830.3(837)  0.1(140) |   6.46   6.45 -0.01
+  aggressive wind_turbulence  3.0 |     0.1(0)     0.1(0) 830.1(837)  0.1(123) |   6.40   6.39 -0.01
+  aggressive wind_turbulence  4.0 |     0.1(0)     0.1(0) 831.4(836)  0.1(125) |   6.42   6.42 -0.01
+  aggressive wind_turbulence  5.0 |     0.1(0)     0.1(0) 833.7(843)    0.1(0) |   4.30   4.29 -0.01
+  aggressive wind_turbulence  6.0 |     0.1(0)     0.1(0) 831.9(839)    0.1(0) |   5.26   5.25 -0.01
+  aggressive wind_turbulence  7.0 |     0.1(0)     0.1(0) 834.5(843)    0.1(0) |   4.06   4.05 -0.00
+  aggressive wind_turbulence  8.0 |     0.1(0)     0.1(0) 837.9(846)    0.1(0) |   3.98   3.97 -0.01
+       hover            none  0.0 |     0.1(0)     0.1(0) 814.0(834)  0.1(144) |   6.34   6.33 -0.01
+       hover       wind_gust  5.0 |     0.1(0)     0.1(0) 812.1(835)  0.1(151) |   6.40   6.39 -0.01
+       hover wind_turbulence  1.0 |     0.1(0)     0.1(0) 812.4(835)  0.1(131) |   6.40   6.39 -0.01
+       hover wind_turbulence  2.0 |     0.1(0)     0.1(0) 812.9(834)  0.1(131) |   6.58   6.57 -0.01
+       hover wind_turbulence  3.0 |     0.1(0)     0.1(0) 813.7(834)   0.1(61) |   6.28   6.27 -0.01
+       hover wind_turbulence  4.0 |     0.1(0)     0.1(0) 818.0(836)    0.1(1) |   5.34   5.33 -0.01
+       hover wind_turbulence  5.0 |     0.1(0)     0.1(0) 820.8(836)    0.1(0) |   5.07   5.07 -0.01
+       hover wind_turbulence  6.0 |     0.1(0)     0.1(0) 819.0(834)    0.1(1) |   5.00   4.99 -0.01
+       hover wind_turbulence  7.0 |     0.1(0)     0.1(0) 817.3(833)    0.1(0) |   5.16   5.15 -0.01
+       hover wind_turbulence  8.0 |     0.1(0)     0.1(0) 821.7(831)    0.1(0) |   4.92   4.91 -0.01
+
+=== 상수(const) [vel NIS] 구간 p50(p95) + 탐지 d′(겹침 vs 바람만) ===
+          패턴              외란   ws |      clean        바람만         겹침        복귀 |   단일d′   윈도d′     Δ
+  aggressive            none  0.0 |     0.1(0)     0.1(0)    7.0(11)   0.3(21) |   2.54   2.70  0.16
+  aggressive       wind_gust  5.0 |     0.1(0)     0.1(0)    6.9(11)   0.4(20) |   2.52   2.71  0.19
+  aggressive wind_turbulence  1.0 |     0.1(0)     0.1(0)    7.2(11)   0.3(17) |   2.51   2.62  0.11
+  aggressive wind_turbulence  2.0 |     0.1(0)     0.1(0)    7.0(11)   0.3(12) |   2.48   2.65  0.17
+  aggressive wind_turbulence  3.0 |     0.1(0)     0.1(0)    6.4(10)   0.3(13) |   2.35   2.47  0.12
+  aggressive wind_turbulence  4.0 |     0.1(0)     0.1(0)    7.1(11)   0.3(10) |   2.48   2.61  0.12
+  aggressive wind_turbulence  5.0 |     0.1(0)     0.1(0)    3.2(11)    0.1(0) |   1.53   1.75  0.23
+  aggressive wind_turbulence  6.0 |     0.1(0)     0.2(1)    4.7(12)    0.1(5) |   1.69   1.73  0.04
+  aggressive wind_turbulence  7.0 |     0.1(0)     0.2(1)     2.9(9)    0.1(0) |   1.49   1.71  0.22
+  aggressive wind_turbulence  8.0 |     0.1(0)     0.4(2)    2.1(11)    0.1(0) |   1.14   1.21  0.07
+       hover            none  0.0 |     0.1(0)     0.1(0)     6.1(9)   0.3(10) |   2.79   3.03  0.24
+       hover       wind_gust  5.0 |     0.1(0)     0.1(0)     6.5(9)   0.3(12) |   2.88   3.09  0.22
+       hover wind_turbulence  1.0 |     0.1(0)     0.1(0)     6.7(9)   0.3(15) |   2.83   2.99  0.17
+       hover wind_turbulence  2.0 |     0.1(0)     0.1(0)    6.8(10)   0.3(15) |   2.85   3.07  0.22
+       hover wind_turbulence  3.0 |     0.1(0)     0.1(0)     6.4(9)   0.1(14) |   2.61   2.79  0.18
+       hover wind_turbulence  4.0 |     0.1(0)     0.1(0)     5.5(9)   0.1(10) |   2.31   2.58  0.27
+       hover wind_turbulence  5.0 |     0.1(0)     0.1(0)     4.6(9)    0.1(0) |   2.09   2.26  0.18
+       hover wind_turbulence  6.0 |     0.1(0)     0.1(1)    5.3(10)   0.1(10) |   2.03   2.22  0.19
+       hover wind_turbulence  7.0 |     0.1(0)     0.2(1)    5.2(10)    0.1(7) |   2.02   2.18  0.16
+       hover wind_turbulence  8.0 |     0.1(0)     0.3(2)    4.5(11)    0.1(0) |   1.73   1.92  0.20
+
+=== 펄스(pulse) [gyro NIS] 구간 p50(p95) + 탐지 d′(겹침 vs 바람만) ===
+          패턴              외란   ws |      clean        바람만         겹침        복귀 |   단일d′   윈도d′     Δ
+  aggressive            none  0.0 |     0.1(0)     0.1(0)  45.0(351)   0.1(23) |   1.12   1.57  0.45
+  aggressive       wind_gust  5.0 |     0.1(0)     0.1(0)  37.5(335)    0.1(4) |   1.10   1.56  0.47
+  aggressive wind_turbulence  1.0 |     0.1(0)     0.1(0)  51.9(341)    0.1(3) |   1.16   1.62  0.46
+  aggressive wind_turbulence  2.0 |     0.1(0)     0.1(0)  53.7(403)    0.1(1) |   1.16   1.61  0.45
+  aggressive wind_turbulence  3.0 |     0.1(0)     0.1(0)  54.3(418)    0.1(3) |   1.15   1.60  0.46
+  aggressive wind_turbulence  4.0 |     0.1(0)     0.1(0)  43.4(344)   0.1(13) |   1.10   1.54  0.44
+  aggressive wind_turbulence  5.0 |     0.1(0)     0.1(0)  49.5(343)    0.1(4) |   1.17   1.64  0.47
+  aggressive wind_turbulence  6.0 |     0.1(0)     0.1(0)  38.4(330)   0.1(15) |   1.11   1.56  0.45
+  aggressive wind_turbulence  7.0 |     0.1(0)     0.1(0)  36.9(349)   0.1(10) |   1.09   1.53  0.44
+  aggressive wind_turbulence  8.0 |     0.1(0)     0.1(1)  47.2(403)    0.1(7) |   1.14   1.60  0.47
+       hover            none  0.0 |     0.1(0)     0.1(0)  50.4(382)    0.1(0) |   1.16   1.61  0.45
+       hover       wind_gust  5.0 |     0.1(0)     0.1(0)  57.2(348)    0.1(2) |   1.21   1.70  0.49
+       hover wind_turbulence  1.0 |     0.1(0)     0.1(0)  42.4(375)    0.1(1) |   1.09   1.52  0.42
+       hover wind_turbulence  2.0 |     0.1(0)     0.1(0)  56.0(419)    0.1(1) |   1.16   1.58  0.42
+       hover wind_turbulence  3.0 |     0.1(0)     0.1(0)  59.4(412)   0.1(11) |   1.19   1.65  0.46
+       hover wind_turbulence  4.0 |     0.1(0)     0.1(0)  60.2(391)   0.1(15) |   1.21   1.67  0.47
+       hover wind_turbulence  5.0 |     0.1(0)     0.1(0)  56.6(374)   0.1(15) |   1.21   1.73  0.52
+       hover wind_turbulence  6.0 |     0.1(0)     0.1(0)  47.4(396)   0.1(14) |   1.15   1.60  0.46
+       hover wind_turbulence  7.0 |     0.1(0)     0.1(0)  47.7(382)   0.1(15) |   1.12   1.57  0.45
+       hover wind_turbulence  8.0 |     0.1(0)     0.1(0)  53.7(380)   0.1(15) |   1.18   1.64  0.45
+
+=== 펄스(pulse) [vel NIS] 구간 p50(p95) + 탐지 d′(겹침 vs 바람만) ===
+          패턴              외란   ws |      clean        바람만         겹침        복귀 |   단일d′   윈도d′     Δ
+  aggressive            none  0.0 |     0.1(0)     0.1(0)    2.1(12)    0.2(7) |   1.08   1.25  0.17
+  aggressive       wind_gust  5.0 |     0.1(0)     0.1(0)     1.0(6)    0.2(3) |   1.24   1.69  0.45
+  aggressive wind_turbulence  1.0 |     0.1(0)     0.1(0)     1.2(6)    0.1(5) |   1.09   1.45  0.36
+  aggressive wind_turbulence  2.0 |     0.1(0)     0.1(0)    1.7(10)    0.2(5) |   1.10   1.29  0.19
+  aggressive wind_turbulence  3.0 |     0.1(0)     0.1(0)    2.5(14)    0.1(4) |   1.29   1.53  0.24
+  aggressive wind_turbulence  4.0 |     0.1(0)     0.1(0)    1.3(12)    0.1(6) |   0.91   1.11  0.20
+  aggressive wind_turbulence  5.0 |     0.1(0)     0.1(1)     2.2(8)    0.2(6) |   1.33   1.63  0.30
+  aggressive wind_turbulence  6.0 |     0.1(0)     0.2(1)     1.1(9)    0.2(8) |   0.78   0.96  0.18
+  aggressive wind_turbulence  7.0 |     0.1(0)     0.3(1)    1.8(10)    0.2(6) |   1.03   1.25  0.22
+  aggressive wind_turbulence  8.0 |     0.1(0)     0.3(2)    2.9(17)    0.2(5) |   1.07   1.24  0.17
+       hover            none  0.0 |     0.1(0)     0.1(0)     1.5(8)    0.1(6) |   0.92   1.13  0.21
+       hover       wind_gust  5.0 |     0.1(0)     0.1(0)     1.2(8)    0.1(3) |   1.12   1.51  0.39
+       hover wind_turbulence  1.0 |     0.1(0)     0.1(0)     1.0(7)    0.1(6) |   1.04   1.29  0.25
+       hover wind_turbulence  2.0 |     0.1(0)     0.1(0)     1.7(9)    0.1(5) |   1.32   1.76  0.44
+       hover wind_turbulence  3.0 |     0.1(0)     0.1(0)     1.7(8)    0.1(4) |   1.17   1.46  0.29
+       hover wind_turbulence  4.0 |     0.1(0)     0.1(0)    2.6(13)    0.1(8) |   1.31   1.60  0.29
+       hover wind_turbulence  5.0 |     0.1(0)     0.1(0)    1.9(10)    0.2(5) |   1.26   1.55  0.29
+       hover wind_turbulence  6.0 |     0.1(0)     0.1(1)    1.8(13)    0.1(6) |   1.03   1.24  0.21
+       hover wind_turbulence  7.0 |     0.1(0)     0.2(1)     1.4(8)    0.1(1) |   1.00   1.31  0.31
+       hover wind_turbulence  8.0 |     0.1(0)     0.3(2)    1.9(11)    0.2(4) |   1.00   1.30  0.30
+
+─ 읽는 법 ──────────────────────────────────────────────
+  · 바람만 NIS > clean 이면 = 바람이 그 채널 NIS 튀김(aliasing 원천). turbulence 는 주로 vel.
+  · aggressive clean NIS > hover clean = 기동 자체가 aliasing(주 원천, 프로젝트 문서).
+  · 겹침 vs 바람만 d′: 바람 위 공격 탐지력. 윈도우d′>단일(Δ>0), 강풍서 Δ↑ = 윈도우가 aliasing 해소.
+  · const vs pulse: 바람서 d′ 더 버티거나 윈도우 이득 큰 쪽 채택.
+
+########## WIND POMDP DONE 2026-08-17_03:17:30 ##########

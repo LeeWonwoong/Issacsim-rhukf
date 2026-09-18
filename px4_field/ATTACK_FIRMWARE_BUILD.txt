@@ -1,0 +1,235 @@
+════════════════════════════════════════════════════════════════════════
+  공격 주입 펌웨어 — 빌드 & 플래시 절차                    (2026-08-08)
+  제어입력(torque/thrust)에 additive 공격 δ 를 넣는 ControlAllocator 패치
+════════════════════════════════════════════════════════════════════════
+
+  이 문서는 **실기체 FC(px4_fmu-v6c)** 에 공격 패치를 올리는 절차다.
+  GPU 서버(SITL)는 이미 빌드·검증됐다(2026-08-08). 설계는 ../ATTACK_INJECTION.md.
+
+  ⚠ 대전제: 공격은 **allocator 의 정규화 wrench c[0] 에 가산**한다. UKF 가 읽는
+    vehicle_torque_setpoint(상류)는 안 바뀌므로 깨끗 → innovation(NIS) 성립.
+    δ 는 정규화값 = 제어권한 대비 비율(N·m 아님).
+
+
+────────────────────────────────────────────────────────────────────────
+[0]  무엇이 바뀌었나 (git diff 로 확인할 파일)
+────────────────────────────────────────────────────────────────────────
+  ~/PX4-Autopilot 에서:
+    msg/ActuatorAttack.msg                              신규 (DDS 공격 메시지)
+    msg/CMakeLists.txt                                  ActuatorAttack.msg 등록
+    src/modules/uxrce_dds_client/dds_topics.yaml        /fmu/in/actuator_attack 구독 추가
+    src/modules/control_allocator/ControlAllocator.hpp  구독 2개 + apply_attack* 선언
+    src/modules/control_allocator/ControlAllocator.cpp  apply_attack / _rc / _dds 구현
+    src/modules/control_allocator/module.yaml           ATK_* 파라미터 7개
+
+  ★ ATK_EN=0(기본)이면 apply_attack() 이 첫 줄에서 return → **stock 과 바이트 동일**.
+    켜지 않는 한 정상 비행에 영향 0.
+
+  확인:  cd ~/PX4-Autopilot && git status && git diff --stat
+
+
+────────────────────────────────────────────────────────────────────────
+[1]  ★ 먼저 SITL 에서 검증한다 (실기 올리기 전, 필수)
+────────────────────────────────────────────────────────────────────────
+  이미 GPU 서버에 빌드돼 있다:  build/px4_sitl_default/bin/px4
+  아직이면:
+        cd ~/PX4-Autopilot
+        make px4_sitl_default          # 약 5~10분
+
+  검증 항목 (Isaac 리허설 f9 또는 순수 SITL):
+    □ param show ATK_EN 이 뜬다 (파라미터가 올라감)
+    □ ATK_EN=0 → 정상 비행 (변화 없음)
+    □ ATK_EN=1 + RC/DDS → 공격 시 기체가 기울고 NIS 상승, off 시 복귀
+    □ ★ thrust 부호: 노브 올릴 때 고도가 **처지는지**(loe_thrust) 확인.
+       반대면 module.yaml 그대로 두고, 운용에서 부호만 반대로 해석하거나
+       ControlAllocator.cpp 의 c(5) += 를 c(5) -= 로 (재빌드)
+  ── SITL 리허설 상세: ../px4_field/ISAAC_F1_F8.txt §7-2 ──
+
+
+────────────────────────────────────────────────────────────────────────
+[2]  실기 펌웨어 빌드 (px4_fmu-v6c)   ★ 이미 빌드돼 있음 (2026-08-10)
+────────────────────────────────────────────────────────────────────────
+  ★★ 빌드 완료. 다시 빌드할 필요 없다. 아래 파일을 [3]에서 굽기만 하면 된다:
+
+        firmware/px4_fmu-v6c_v1.16.2_dds_attack.px4
+        md5  2b22ea7bd0a9c0306e08b3ddd2fc32e6       크기 1823124 B
+
+     = v1.16.2 + dds 2줄 + ControlAllocator 공격 패치(ATK_* 7개 + actuator_attack).
+       GPU 서버(~/PX4-Autopilot, v1.16.2 트리)에서 빌드해 확인 완료:
+       파라미터 7개·uORB 헤더 포함. airframe·게인·토픽은 기존 dds 빌드와 동일.
+
+  ── 직접 다시 빌드하려면 (선택) ──────────────────────────
+     ⚠ 반드시 같은 트리·버전(v1.16.2). git describe --tags 로 확인.
+        cd ~/PX4-Autopilot && make px4_fmu-v6c_default        # 약 5~10분
+     산출물: build/px4_fmu-v6c_default/px4_fmu-v6c_default.px4
+
+  ⚠ 빌드 시 걸렸던 것 (2026-08-10, 참고): ControlAllocator.cpp 에서
+     math::constrain(int32_t, int, int) 타입 불일치 → ARM 빌드 실패.
+     (x86 SITL 은 int32_t==int 라 통과, ARM 은 long 이라 실패)
+     → (int) 캐스팅으로 수정 완료. 현재 트리엔 반영돼 있음.
+
+
+────────────────────────────────────────────────────────────────────────
+[3]  플래시 (QGC, USB)
+────────────────────────────────────────────────────────────────────────
+  ⚠ 젯슨이 FC USB 를 점유 중이면 뺀다 (USB 포트 1개). QGC 를 USB 로 붙인다.
+
+  ★ 굽기 전 md5 대조 (USB 로 옮긴 뒤):
+        md5sum <USB경로>/px4_fmu-v6c_v1.16.2_dds_attack.px4
+        = 2b22ea7bd0a9c0306e08b3ddd2fc32e6       (다르면 복사 실패)
+
+  QGC → Vehicle Setup → Firmware
+    → USB 연결 → "Advanced settings" → **Custom firmware file** 선택
+    → firmware/px4_fmu-v6c_v1.16.2_dds_attack.px4 지정 → Flash
+
+  ⚠ 플래시는 파라미터를 건드릴 수 있다. 플래시 후:
+    □ ★ param show ATK_EN 이 뜨나 (안 뜨면 공격 펌웨어가 안 올라간 것)
+    □ airframe 이 유지됐나 (SYS_AUTOSTART)
+    □ 기존 튜닝 게인 유지됐나 (MC_ROLLRATE_P 등 — F1~F8 비교 전제)
+      ※ v1.16.2 → v1.16.2(공격패치만 추가)라 파라미터는 유지될 것
+    □ 안 맞으면 백업 파라미터 로드 (지상에서)
+
+
+────────────────────────────────────────────────────────────────────────
+[4]  파라미터 + VRA 게이트 (지상, QGC)   ★확정 방식 (2026-08-10)
+────────────────────────────────────────────────────────────────────────
+  ★ 결정: **VRA 를 공격 on/off 게이트로. 크기는 ATK_TQ_MAX 파라미터(고정).**
+    · VRA 올리면(aux>0.5) 정확히 ATK_TQ_MAX 크기 공격, 내리면 0. VRA 위치 무관(게이트만).
+    · 최종 실험의 확정 밴드값을 ATK_TQ_MAX 에 넣는다(ulog 에 기록돼 재현성 좋음).
+    · ⚠ **"노브 없을 때 게이트 on=고정 크기" FC 수정본(2026-08-10)** 이 필요.
+      firmware/px4_fmu-v6c_v1.16.2_dds_attack.px4 (md5 아래)가 그 포함본.
+
+  ── ★ 왜 SWC 가 아니라 VRA 인가 ──────────────────────────
+    SWC 는 **비행모드 스위치**라, 건드리면 모드가 바뀐다. 그러면:
+      · **offboard 도중 SWC 내리면 → 모드 변경 → offboard 이탈**(패턴 중단). ✗
+      · F9 는 "offboard 중 공격" 시나리오라 이게 치명적.
+    VRA(aux)는 모드를 안 건드린다 → offboard 유지된 채 공격 on/off. ✓  SWC 는 모드로 그대로 둔다.
+
+  ── 지상 파라미터 (QGC) ──────────────────────────────────
+        ATK_EN      = 1        ★ 켜야 동작
+        ATK_AUX_SW  = 1        VRA 의 aux (게이트). VRA 오른쪽 끝 = 공격 on
+                              ※ 내 기체: VRA=CH9=aux1, VRB=CH10=aux2 (AUX Passthrough 기설정)
+        ATK_AUX_TQ  = 0        ★ 0 = 노브 없음 → 게이트 on = 고정 크기
+        ATK_AUX_TH  = 0
+        ATK_TQ_AXIS = 0        0=roll (F9-1) / 1=pitch / 2=yaw
+        ATK_TQ_MAX  = 0.05     ★ 토크 공격 크기 = 권한의 5% (여기에 확정 밴드값)
+        ATK_TH_MAX  = 0        ★ 토크만 할 땐 0. 추력 공격은 ATK_TH_MAX=값, ATK_TQ_MAX=0
+        ATK_SW_THR  = 0.9      ★ 게이트 임계. VRA(노브)라 0.9 → 끝까지 올려야 on (기본 0.5)
+
+  ── VRA → aux 매핑 (내 기체는 이미 돼 있음) ──────────────
+    ★ VRA/VRB 가 이미 채널에 실려 있으면 EdgeTX Mixes 불필요.
+      내 기체 확인(2026-08-10): QGC Radio → VRA=CH9, VRB=CH10.
+      Additional Radio Setup → AUX Passthrough → AUX1=CH9, AUX2=CH10.
+      = RC_MAP_AUX1=9, RC_MAP_AUX2=10 이미 설정 → **VRA=aux1, VRB=aux2.**
+      → RC_MAP_AUX 안 건드려도 됨.  ATK_AUX_SW=1 로 VRA(aux1) 를 게이트로.
+    ★ 검증: MAVLink Console  listener manual_control_setpoint
+         VRA 돌릴 때 aux1 이 바뀌나 (내 기체: 왼쪽끝 −0.952 ~ 오른쪽끝 +1.0).
+         오른쪽 끝(>0.5)에서 게이트 열림. 비행 전 왼쪽 끝(off)에 두고 시작.
+    ⚠ 다른 기체면 aux 번호가 다를 수 있으니 listener 로 확인 후 ATK_AUX_SW 맞출 것.
+    ※ VRA 는 노브라 "완전히 올림 = on". 게이트(>0.5)만 넘으면 크기는 ATK_TQ_MAX 고정.
+
+  ── ★ 두 모드 — ATK_AUX_TQ 하나로 전환 (같은 펌웨어, 재빌드 없음) ──
+    · 탐색/테스트:  ATK_AUX_TQ = 2  → VRB 가 토크 크기 노브 (라이브 조절)
+                    VRA 끝=게이트 on, VRB 돌려 크기 0~ATK_TQ_MAX. param 안 고치고 탐색.
+                    (이땐 ATK_TQ_MAX 를 0.3 쯤 크게 잡아 VRB 범위를 넓게)
+    · 확정 실험:    ATK_AUX_TQ = 0  → 고정 크기 ATK_TQ_MAX (확정 밴드값). VRB 무관, 재현.
+    · 추력을 VRB 로: ATK_AUX_TH = 2 (그러면 ATK_AUX_TQ=0 등으로 토크는 고정/off).
+    ★ VRB(aux2, CH10)는 이미 매핑됨. param 만 바꾸면 켜진다.
+
+  ── (참고) 학습 데이터 DDS 주입은 별개 ──────────────────
+    Isaac 밴드 재스윕·학습은 online_rl 이 DDS 로 actuator_attack 을 쏜다(RC 무관, GPU
+    px4_msgs 이미 됨). 실기에서도 companion 으로 값을 바꿔가며 쏘고 싶으면 [7]+
+    rc_attack_trigger 를 쓰면 되지만, **확정값 실험은 위 param 방식이 더 단순·재현적.**
+
+
+────────────────────────────────────────────────────────────────────────
+[4.5]  ★ 프로펠러 빼고 벤치 테스트 (실기 FC, 날기 전 필수)
+────────────────────────────────────────────────────────────────────────
+  목적: 플래시한 펌웨어에서 **공격이 실제 모터 명령을 바꾸는가**를 날지 않고 확인.
+        SITL 검증([1])의 실기판. δ→c[0]→actuator_motors 경로가 이 기체에서 사는지 본다.
+
+  ⚠⚠ 반드시 **프로펠러 4개 전부 제거**. 모터는 돌지만 추력이 없어 안전하다.
+      기체를 바이스/무거운 받침에 고정하거나 손으로 누를 것.
+
+  [1] 준비
+        · 프로펠러 제거 확인 (4개)
+        · 배터리 연결 (USB 만으론 모터 안 돌 수 있음)
+        · QGC → Analyze → MAVLink Console 열기 (모터 명령을 여기서 본다)
+        · param show ATK_EN  → 1 인지. RC_MAP_AUX 매핑됐는지(QGC Radio)
+
+  [2] 모터 명령 관찰 준비
+        MAVLink Console 에서:
+              listener actuator_motors
+        → control[0..3] 4채널. 시동 전엔 0/NaN, 시동 후 idle 값.
+
+  [3] 시동 (프로펠러 없음!)
+        · 조종기로 arm (또는 QGC).  ⚠ 모터가 idle 로 돈다 — 프로펠러 없음 재확인
+        · Manual/Stabilized 모드면 스틱 중립에서 4채널이 비슷한 idle 값
+
+  [4] 공격 주입 (VRA 게이트) — 모터가 갈리는지 본다
+        확정 방식: 노브 없음. VRA 올리면 **고정 크기 ATK_TQ_MAX** 로 공격.
+        먼저 크게 보려고 ATK_TQ_MAX 를 0.3 쯤으로 올려두면 대각쌍 갈림이 확연하다.
+        · VRA 올림(aux>0.5)
+        판정(roll, ATK_TQ_AXIS=0):  listener actuator_motors 에서 **대각 모터쌍이 갈린다**
+               (한쪽 2개 ↑, 반대쪽 2개 ↓). VRA 내리면 다시 균일.
+        · 추력 보려면 ATK_TH_MAX=0.3, ATK_TQ_MAX=0 로 두고 VRA 올림
+        판정:  **4채널이 다 같이** 내려간다(+δ=lift 감소).
+        ★ 확인 끝나면 ATK_TQ_MAX/ATK_TH_MAX 를 실험용 약한 값(0.03~0.08)으로 되돌린다.
+
+  [5] 게이트 확인 (안전)
+        · ATK_EN=0 으로 바꾸면(param set) VRA 아무리 올려도 모터 안 갈림
+        · VRA 내림 / disarm 하면 즉시 0
+        → 게이트(ATK_EN ∧ armed ∧ VRA)가 다 살아있음 확인
+
+  ✓ 합격:  roll δ→대각쌍 분리 / thrust δ→4채널 동반 하강 / ATK_EN=0·VRA down→무영향
+  ✗ 불합격: 아무 변화 없음 → param(ATK_EN, ATK_AUX_SW, RC_MAP_AUX) 또는 펌웨어 확인
+
+
+────────────────────────────────────────────────────────────────────────
+[5]  비행 & 회수 — F9
+────────────────────────────────────────────────────────────────────────
+  절차:  ../px4_field/RUN.txt  [팩8] F9
+  요약:  Position 호버 3m+ → 스위치 up → 노브 천천히 → NIS 뜨는 최소점 확인
+         스위치 down = 즉시 δ=0.  로그: fetch_ulog.py --name f9_attack
+
+
+────────────────────────────────────────────────────────────────────────
+[6]  롤백 (공격 없는 stock 으로)
+────────────────────────────────────────────────────────────────────────
+  방법 A (권장):  ATK_EN=0 으로 두면 공격 코드가 실행되지 않는다. 재플래시 불필요.
+  방법 B (완전 제거):  기존 운용 펌웨어(공격 패치 없는 것)를 다시 플래시.
+        firmware/ 의 px4_fmu-v6c_v1.16.2_dds.px4 (공격 미포함본) 로 Flash.
+  git 롤백:  cd ~/PX4-Autopilot && git stash  (또는 브랜치 전환) 후 재빌드.
+
+
+────────────────────────────────────────────────────────────────────────
+[7]  젯슨 px4_msgs 재빌드 — 옵션 A(companion) / 학습 DDS 에 필요
+────────────────────────────────────────────────────────────────────────
+  ⚠ 필요 여부는 [4]에서 고른 경로에 달렸다:
+     · 옵션 B (순수 RC)    → **불필요.** FC 가 VRA 를 직접 읽는다. [4][4.5][5]만.
+     · 옵션 A (DDS companion, argparse) → **필요.** 젯슨에서 rc_attack_trigger 가
+       ActuatorAttack 을 발행하려면 젯슨 px4_msgs 에 그 메시지가 있어야 한다.
+     · 학습 데이터 DDS 주입 → 필요.
+
+  (DDS 경로 쓸 때) 젯슨이 ActuatorAttack 을 발행/구독하려면 젯슨 px4_msgs 에도 이 메시지가 필요.
+  GPU 서버는 이미 했다. 젯슨에서:
+        cp <이 저장소>/px4_field/ActuatorAttack.msg  ~/colcon_ws/src/px4_msgs/msg/
+        cd ~/colcon_ws
+        rm -rf build/px4_msgs install/px4_msgs        # GLOB 재설정 강제 (중요)
+        colcon build --packages-select px4_msgs
+        source install/setup.bash
+  검증:  python3 -c "from px4_msgs.msg import ActuatorAttack; print('OK')"
+  ⚠ rm 없이 그냥 colcon build 하면 file(GLOB) 이 새 msg 를 안 잡는다(1초만에 끝남=실패).
+
+
+════════════════════════════════════════════════════════════════════════
+  체크리스트 요약
+════════════════════════════════════════════════════════════════════════
+  ✅ [1] SITL 검증 (2026-08-09 헤드리스 + 08-10 수동 F9: roll 10→50%=+3.5→17°, thrust 확인)
+  ✅ [2] 펌웨어 빌드 (firmware/px4_fmu-v6c_v1.16.2_dds_attack.px4, md5 a34ed8…)
+  □ [3] QGC custom firmware 플래시 → param show ATK_EN / 게인 유지 확인
+  □ [4] F9 경로 선택(A companion / B 순수RC) + RC_MAP_AUX (VRA→aux)
+  □ [4.5] ★ 프로펠러 빼고 벤치 (roll δ→대각쌍 / thrust δ→4채널 하강 / 게이트)
+  □ [5] F9 비행 (약하게 → 식별 가능 최소점)
+  ── [7] 젯슨 px4_msgs 재빌드 = 옵션 A(companion)·학습에 필요, 옵션 B 엔 불필요 ──
+════════════════════════════════════════════════════════════════════════

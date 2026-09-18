@@ -1,0 +1,73 @@
+========================================================================
+ RUN.txt — 실기 비행 명령어만 (F1~F12)       상세·배경 → RUN_DETAIL.txt
+========================================================================
+ 전제(QGC): EKF2_RNG_CTRL=2 · MPC_XY_VEL_MAX=2.0
+            F12용: ATK_EN=1 · ATK_AUX_SW=1 · ATK_TQ_AXIS=0 · ATK_SW_THR=0.9 · ATK_TQ_MAX=<밴드>
+ 이륙: 잔디에서 전원 → 수렴 30~60s → 지상 EKF≈0 확인 → arm   (책상/높은 데 금지)
+ 질량 1.340 kg.   [젯슨]  cd ~/px4_field
+
+
+── 권한 / ttyACM0 오류 ────────────────────────────────────
+   항구: sudo usermod -aG dialout quad     (재로그인)
+   임시: sudo chmod 666 /dev/ttyACM0
+   comp=0 / 읽기실패: sudo lsof /dev/ttyACM0  → 딴 프로세스(QGC 등) 죽이기
+   ⚠ autotune_go 와 fetch_ulog 를 동시에 돌리지 말 것
+
+
+── EKF2 / 추종 감시 (SSH 창 B, 각 비행마다) ───────────────
+   python3 watch_ekf.py --hz 10 --csv fN_ekf.csv          # ★★ 뜨면 시각 기록
+   python3 watch_offboard.py --hz 10 --csv fN_watch.csv   # 명령 vs 실제 추종
+
+
+── ⓪ ulog 자동회수 확인 (첫날, 프롭 뺀 채 1회) ────────────
+   arm → python3 f2_doublet.py --thrust 0.33 --amp 8 --n 8 → disarm → Ctrl+C
+   → ls -lt ~/px4_field/ulog_$(date +%Y%m%d)/       (f2_doublet_run1_*.ulg 있으면 OK)
+   ※ disarm 먼저 → Ctrl+C 하면 즉시 받음. 한 번 더 = run2 (덮어쓰기 없음).
+
+
+════════════════════ F1 ~ F12 실행 ════════════════════
+ 각 비행: 잔디서 arm → offboard 스위치(SWB) → 시퀀스 자동 → 끝나면 착륙·disarm
+          → Ctrl+C 로 종료하면 ulog 자동회수 → ulog_YYYYMMDD/{이름}_runN_*.ulg
+
+ F1  수직가속(수동) Position 모드로 조종사가 위아래 가속 (오프보드 스크립트 X, 수동조종)
+                  → 얻는 것: 추력곡선 T(u)·모터 τ.  착륙 후: python3 fetch_ulog.py --name f1_vsweep
+                  ※ 호버 baseline(C_thrust≈0.33·gyroσ·NIS)은 F11 이 담당
+ F2  오토튠       python3 autotune_go.py --check
+                  python3 autotune_go.py               (roll/pitch 기본)
+                  python3 autotune_go.py --yaw         (★요 미수렴시: amp1.3·2회반복 자동)
+                  (자동회수 X — 착륙 후:  python3 fetch_ulog.py --name f2_autotune)
+ F3  doublet      python3 f2_doublet.py --thrust 0.33 --amp 8 --n 8
+ F4  drag등속     python3 f3_drag.py --v 2 --leg 4 --reps 2       (클램프시 --v 1.75)
+ F5  drag가속     python3 f5_pattern.py --pattern accel_line --acc-v 1.75 --laps 2
+                  ★ F4(등속)+F5(가속) 둘 다 drag → fit_from_ulog 이 [3]등속·[3b]가속 대조
+ F6  yaw_spin     python3 f5_pattern.py --pattern yaw_spin --laps 2
+ F7  waypoint     python3 f5_pattern.py --pattern waypoint --R 3.5 --omega 0.5  --laps 2
+ F8  circle       python3 f5_pattern.py --pattern circle   --R 3.5 --omega 0.5  --laps 2
+ F9  figure8      python3 f5_pattern.py --pattern figure8  --R 4.0 --omega 0.42 --laps 2
+ F10 aggressive   python3 f5_pattern.py --pattern aggressive --agg-R 3.0 --laps 3
+ F11 호버baseline python3 f1_hover.py --dur 20      ← VRA 내린 채 (공격 off, I=0)
+                  = C_thrust확인·gyroσ·평시 NIS baseline + F12 무공격 대조 (호버 역할 여기로)
+ F12 공격         python3 f1_hover.py --dur 30      ← 안정 후 VRA 올림(on,I=1)→관찰→내림(off)
+                  F12-a = roll  : ATK_TQ_MAX 로 크기 스윕
+                  F12-b = 추력  : ATK_TH_MAX 값, ATK_TQ_MAX=0  (고도 여유 있을 때만)
+
+
+── 판독 (착륙 후 자동판정 뜸. 수동은 아래) ────────────────
+   python3 fetch_ulog.py --list                     # FC 로그 목록
+   python3 fetch_ulog.py --name X                   # 손으로 받기
+   python3 check_ulog.py ulog_날짜/<log>.ulg --type hover|doublet|drag|pattern --mass 1.340
+   [워크스테이션]
+   ~/isaacsim/python.sh px4_field/fit_autotune.py  <F2>.ulg   (반복시 축별 best 자동선택)
+   ~/isaacsim/python.sh px4_field/fit_from_ulog.py <F1·F3·F4·F5>.ulg --mass 1.340
+       └ F4=등속 drag[3] · F5=가속 drag[3b] · F3=doublet G[2] · F1=호버 C_thrust[1]
+
+
+── 배터리 배정 (최소 8팩, 팩당 2소티 이하) ────────────────
+   1:F1   2:F2   3:F3   4:F4(+F5)   5:F7+F8   6:F9+F6   7:F10   8:F11→F12
+
+
+════════════════════════════════════════════════════════════════════════
+ ▸ 배경·이유·판정기준·밴드이력·sim비교·Isaac 리허설·튜닝 상세 → RUN_DETAIL.txt
+ ▸ 시나리오별 목적/절차/뽑는값 → F_SCENARIOS.txt
+ ▸ ulog 회수 절차 상세 → FETCH_ULOG.txt
+========================================================================

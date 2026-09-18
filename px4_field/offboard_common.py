@@ -34,12 +34,21 @@ px4_msgs 필드 (설치본에서 확인, 2026-08-03)
 import csv
 import math
 import os
+import sys
 import threading
 import time
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+
+try:
+    # Humble: rclpy.init() 이 심는 SIGINT 핸들러가 컨텍스트를 먼저 내리면
+    # spin() 은 KeyboardInterrupt 가 아니라 이걸 던진다. 안 잡으면 postflight 가 통째로 날아간다.
+    from rclpy.executors import ExternalShutdownException
+except ImportError:                                   # 구버전 대비
+    class ExternalShutdownException(Exception):
+        pass
 
 from px4_msgs.msg import (
     OffboardControlMode, TrajectorySetpoint, VehicleAttitudeSetpoint,
@@ -93,7 +102,7 @@ class OffboardSequenceNode(Node):
     """시퀀스 스크립트가 상속해서 on_engaged()/step() 만 구현하면 된다."""
 
     SEQ_NAME = 'base'
-    NEED_ALT = 3.0             # 진입 최소 고도 [m] (bench 모드면 무시)
+    NEED_ALT = 1.0             # 진입 최소 고도 [m] (2026-08-10: 1m 저고도 운용. bench 무시)
     MAX_RADIUS = 25.0          # origin 기준 수평 이탈 한계 [m]
     MAX_ALT_DEV = 15.0         # origin 기준 고도 이탈 한계 [m]
 
@@ -415,6 +424,26 @@ class OffboardSequenceNode(Node):
         """
         self._ocm(**{self._ocm_kind: True})
 
+    def _slew_yaw(self, yaw):
+        """★ 2026-08-13 요 슬루레이트 제한 (env YAW_SLEW_RATE, rad/s; 0=끔).
+        sim online_rl_main._send_setpoint 와 동일 로직 — waypoint 코너의 yaw 순간회전이
+        만드는 |ω| 스파이크를 없앤다. sim·실기 대칭이라야 궤적·NIS 비교가 성립한다."""
+        yr = getattr(self, '_yaw_slew_rate', None)
+        if yr is None:
+            self._yaw_slew_rate = float(os.environ.get('YAW_SLEW_RATE', '1.57') or 0.0)
+            yr = self._yaw_slew_rate
+            self._yaw_cmd_prev = None
+        yaw = wrap_pi(yaw)
+        if yr <= 0.0:
+            return yaw
+        dt = 1.0 / PUB_HZ
+        if getattr(self, '_yaw_cmd_prev', None) is None:
+            self._yaw_cmd_prev = float(yaw)
+        err = wrap_pi(float(yaw) - self._yaw_cmd_prev)
+        step = max(-yr*dt, min(yr*dt, err))
+        self._yaw_cmd_prev = self._yaw_cmd_prev + step
+        return wrap_pi(self._yaw_cmd_prev)
+
     def send_position(self, x, y, z, yaw):
         if not self._may_stream():
             return
@@ -423,7 +452,50 @@ class OffboardSequenceNode(Node):
         m.position = [float(x), float(y), float(z)]
         m.velocity = [NAN, NAN, NAN]
         m.acceleration = [NAN, NAN, NAN]
-        m.yaw = float(wrap_pi(yaw))
+        m.yaw = float(self._slew_yaw(yaw))
+        m.yawspeed = NAN
+        m.timestamp = 0
+        self.pub_traj.publish(m)
+
+    def send_position_velocity(self, x, y, z, yaw, vx, vy, vz):
+        """위치 + 속도 피드포워드를 함께 보낸다 (sim 의 _send_setpoint 와 동일 형식).
+
+        ★ 왜 별도 메서드인가
+          sim(online_rl_main._send_setpoint)은 TrajectorySetpoint 에 position 과
+          velocity 를 **같이** 채우고 OffboardControlMode.position=True 로 보낸다.
+          기존 send_position 은 velocity=NaN, send_velocity 는 position=NaN 이라
+          어느 쪽도 sim 과 같은 명령이 아니다. 기동 패턴(F5~F7)을 sim 과 비교하려면
+          명령 자체가 같아야 하므로 이 메서드를 쓴다.
+        """
+        if self.bench:
+            self.send_attitude(0.0, 0.0, yaw, self.bench_thrust)
+            return
+        if not self._may_stream():
+            return
+        self._ocm(position=True)
+        m = TrajectorySetpoint()
+        m.position = [float(x), float(y), float(z)]
+        m.velocity = [float(vx), float(vy), float(vz)]
+        # ★2026-09-10 가속도 피드포워드 — sim(online_rl_main._send_setpoint, ACCEL_FF=1)과 동일.
+        #   속도 FF 의 유한차분(PUB_HZ). 없으면 PX4 위치루프가 구심가속을 위치오차로만 만든다:
+        #   e = a_c/(P_v·P_xy) = 0.49/(1.8·0.95) ≈ 0.29 m 바깥 (sim circle 실측 +0.32 m). 수평 노름 3.0·수직 ±2.0 클립.
+        acc = [NAN, NAN, NAN]
+        v = (float(vx), float(vy), float(vz))
+        if getattr(self, 'accel_ff', True) and all(math.isfinite(c) for c in v):
+            vp = getattr(self, '_vel_cmd_prev', None)
+            if vp is not None:
+                dt = 1.0 / PUB_HZ
+                ax, ay, az = [(v[i] - vp[i]) / dt for i in range(3)]
+                n = math.hypot(ax, ay)
+                if n > 3.0:
+                    ax, ay = ax * 3.0 / n, ay * 3.0 / n
+                az = max(-2.0, min(2.0, az))
+                acc = [ax, ay, az]
+            self._vel_cmd_prev = v
+        else:
+            self._vel_cmd_prev = None
+        m.acceleration = [float(a) for a in acc]
+        m.yaw = float(self._slew_yaw(yaw))
         m.yawspeed = NAN
         m.timestamp = 0
         self.pub_traj.publish(m)
@@ -439,7 +511,7 @@ class OffboardSequenceNode(Node):
         m.position = [NAN, NAN, NAN]
         m.velocity = [float(vx), float(vy), float(vz)]
         m.acceleration = [NAN, NAN, NAN]
-        m.yaw = float(wrap_pi(yaw))
+        m.yaw = float(self._slew_yaw(yaw))
         m.yawspeed = NAN
         m.timestamp = 0
         self.pub_traj.publish(m)
@@ -556,13 +628,12 @@ class OffboardSequenceNode(Node):
         if self.bench:
             self.warn_once('bench', '  [BENCH] 고도·유효성 사전조건을 건너뜁니다')
             return True
-        alt = -self.lp.z
         if not self.lp.valid:
             self.warn_once('valid', f'  ✗ 위치 추정 무효 (소스={self.lp.src}) — 시퀀스 시작 거부')
             return False
-        if alt < self.NEED_ALT:
-            self.warn_once('alt', f'  ✗ 고도 부족 ({alt:.1f}m < {self.NEED_ALT}m) — 더 올린 뒤 다시 켜세요')
-            return False
+        # ★ 고도 게이트 제거(2026-08-11): RNG_CTRL=2 로 저고도 EKF 를 신뢰할 수 있으므로
+        #   어떤 고도든(지상 포함) 오프보드 진입 허용. (구: alt<NEED_ALT 면 "고도 부족" 거부)
+        #   위치 추정 유효성(위)만 남긴다 — 이건 안전상 유지.
         return True
 
     def _bounds_ok(self):
@@ -600,13 +671,163 @@ class OffboardSequenceNode(Node):
         super().destroy_node()
 
 
-def run(node_cls, bench=False, outdir='field_logs'):
+def add_postflight_args(ap):
+    """비행 스크립트 4개가 공통으로 갖는 사후처리 인자. argparse 에 붙여 쓴다."""
+    ap.add_argument('--no-fetch', dest='fetch', action='store_false',
+                    help='비행 후 ulog 자동 회수·자동 판정을 하지 않는다')
+    ap.add_argument('--fetch-conn', dest='fetch_conn', default=None,
+                    help='ulog 회수용 MAVLink 연결. 생략하면 /dev/ttyACM0 → SITL 자동')
+    import datetime as _dt
+    ap.add_argument('--ulog-dir', dest='ulog_dir',
+                    default='ulog_' + _dt.date.today().strftime('%Y%m%d'),
+                    help='받은 ulog 를 둘 폴더 (기본 ./ulog_YYYYMMDD — 날짜별 자동분리)')
+    ap.add_argument('--wait-disarm', dest='wait_disarm', type=float, default=600.0,
+                    help='착륙·disarm 을 최대 몇 초 기다릴지 (로그는 disarm 때 닫힌다)')
+    ap.add_argument('--mass', type=float, default=1.340, help='AUW [kg] — 판정에 쓴다')
+
+
+def postflight(seq_name, check_type, args):
+    """비행이 끝나면 ulog 를 **자동으로 받아 자동으로 판정**한다.
+
+    왜 이 자리인가
+      · 로그는 disarm 때 닫힌다(SDLOG_MODE=0). 그래서 fetch_ulog 가 disarm 을
+        기다렸다가 받는다 — 시퀀스 종료 시점에는 아직 날고 있다.
+      · 파일명에 **시퀀스 이름이 박힌다**(f5_circle_log47_...). "log_NN 이 뭐였는지"
+        헷갈리던 문제가 사라진다 (2026-08-06 에 실제로 헷갈렸다).
+      · check_ulog 가 종료코드로 PASS/FAIL 을 말한다. **사람이 판정하지 않는다.**
+        FAIL 이면 짐 싸기 전에 다시 뜨면 된다.
+
+    실패해도 비행 스크립트를 죽이지 않는다 — 로그는 SD 에 그대로 남아 있고,
+    나중에 손으로 `fetch_ulog.py` 를 돌리면 된다.
+    """
+    import subprocess, glob, re, signal
+    here = os.path.dirname(os.path.abspath(__file__))
+    # ★ 비행 종료용 Ctrl-C 를 연타하면 그 두 번째가 회수 준비 구간을 죽인다.
+    #   준비가 끝나고 실제 대기에 들어갈 때까지만 SIGINT 를 막는다(그 뒤엔 정상 동작).
+    try:
+        _prev_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError):                            # 메인스레드가 아니면 못 건다
+        _prev_sigint = None
+    # 같은 시퀀스를 여러 번 날려도 안 덮어쓰게 run 번호를 붙인다.
+    #  ulog_dir 의 {seq_name}_runN 중 최대 N+1 (예전 세션 것도 세므로 절대 안 겹친다).
+    _rn = 0
+    for _p in glob.glob(os.path.join(os.path.expanduser(args.ulog_dir), f'{seq_name}_run*')):
+        _m = re.search(re.escape(seq_name) + r'_run(\d+)', os.path.basename(_p))
+        if _m:
+            _rn = max(_rn, int(_m.group(1)))
+    name = f'{seq_name}_run{_rn + 1}'
+    manual = f"python3 {here}/fetch_ulog.py --name {name} --out {args.ulog_dir}"
+    print("\n" + "=" * 68)
+    print(f"  사후처리 — ulog 자동 회수 + 자동 판정   ({name})")
+    print("=" * 68)
+    print(f"  저장이름: {name}_log<id>_<시각>.ulg   ← 시퀀스+run 번호가 박힌다(덮어쓰기 없음)")
+    print("  ★ 지금 착륙 → disarm 하면 자동으로 받는다.  로그는 disarm 때 닫히므로")
+    print("     arm 중엔 못 받는다. 착륙·disarm 만 하면 아래에 '대기→수신'이 실시간으로 뜬다.")
+    print("     (정말 건너뛰려면 여기서 Ctrl-C — 그럼 위 이름으로 나중에 손수 받는다)")
+
+    cmd = [sys.executable, os.path.join(here, 'fetch_ulog.py'),
+           '--name', name, '--out', args.ulog_dir,
+           '--wait-disarm', str(args.wait_disarm)]     # 스트리밍(진행 실시간) — quiet-list 뺌
+    if args.fetch_conn:
+        cmd += ['--conn', args.fetch_conn]
+    sys.stdout.flush()
+    # 자식을 별도 세션에 둔다 → 터미널 Ctrl-C 가 자식에게 **직접** 가지 않는다.
+    #  (같은 프로세스그룹이면 SIGINT 가 부모·자식에 동시에 꽂혀 다운로드가 중간에 끊기고
+    #   깨진 파일이 남는다.) 중단은 부모가 받아서 명시적으로 정리한다.
+    proc = None
+    try:
+        proc = subprocess.Popen(cmd, start_new_session=True)
+        if _prev_sigint is not None:                         # 여기서부터 Ctrl-C 정상 동작
+            signal.signal(signal.SIGINT, _prev_sigint)
+        proc.wait()
+    except KeyboardInterrupt:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        print(f"\n  ⚠ 회수 중단(Ctrl-C). disarm 후 이 명령으로 받으세요:\n     {manual}")
+        return
+    except Exception as e:                                   # noqa: BLE001
+        print(f"  ⚠ 회수 실패: {e}\n     손으로:  {manual}")
+        return
+    finally:
+        if _prev_sigint is not None:                         # 어느 경로로 나가든 원복
+            try:
+                signal.signal(signal.SIGINT, _prev_sigint)
+            except (ValueError, OSError):
+                pass
+
+    # 스트리밍이라 stdout 파싱 대신 이름으로 찾는다 (run 번호가 유일성 보장)
+    hits = sorted(glob.glob(os.path.join(os.path.expanduser(args.ulog_dir), f'{name}_*.ulg')),
+                  key=os.path.getmtime)
+    if not hits:
+        print(f"  ⚠ 받은 파일이 없습니다(disarm 했는지 확인). 손으로:\n     {manual}")
+        return
+    if not check_type:
+        print(f"  파일 받음: {hits[-1]}")
+        return
+
+    path = hits[-1]
+    print("\n" + "=" * 68)
+    print(f"  자동 판정 — check_ulog --type {check_type}")
+    print("=" * 68)
+    cmd2 = [sys.executable, os.path.join(here, 'check_ulog.py'), path,
+            '--type', check_type, '--mass', str(args.mass)]
+    sys.stdout.flush()
+    try:
+        rc = subprocess.run(cmd2).returncode
+    except Exception as e:                                   # noqa: BLE001
+        print(f"  ⚠ 판정 실패(pyulog/numpy 없음?): {e}")
+        print(f"     파일은 받았습니다: {path}")
+        return
+
+    print()
+    if rc == 0:
+        print(f"  ★ 이 소티는 **쓸 수 있다**.  {path}")
+    elif rc == 1:
+        print(f"  ★ 이 소티는 **다시 떠야 한다.** 위 FAIL 항목을 볼 것.  {path}")
+    else:
+        print(f"  ⚠ 판정을 못 했다(로그 열기 실패). 파일은 받았다: {path}")
+
+
+def run(node_cls, bench=False, outdir='field_logs', args=None, check_type=None):
     rclpy.init()
     node = node_cls(bench=bench, outdir=outdir)
+    seq_name = getattr(node, 'SEQ_NAME', 'seq')
+    check_type = check_type or getattr(node, 'CHECK_TYPE', None)
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # ★ 2026-08-12: ExternalShutdownException 을 안 잡아서 자동회수가 안 됐다.
+        #   Humble 은 Ctrl-C 때 rclpy 의 SIGINT 핸들러가 컨텍스트를 먼저 내리고,
+        #   그러면 spin 은 KeyboardInterrupt 가 아니라 이걸 던진다.
         print('\n중단 (Ctrl-C)')
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # ★★ 여기서 예외가 새어 나가면 아래 postflight 가 **호출조차 안 된다** —
+        #   자동회수가 매번 실패하고 손으로 받게 되던 진짜 원인이었다.
+        #   구 코드의 rclpy.shutdown() 은 이미 내려간 컨텍스트에 대해
+        #   RuntimeError('Context must be initialized before it can be shutdown') 를 던진다.
+        try:
+            node.destroy_node()
+        except Exception as _e:                              # noqa: BLE001
+            print(f'  (노드 정리 중 무시된 예외: {_e})')
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as _e:                              # noqa: BLE001
+            print(f'  (rclpy 종료 중 무시된 예외: {_e})')
+
+    # 벤치(프로펠러 제거)는 비행이 아니므로 회수할 로그가 없다
+    if bench:
+        return
+    if args is None or not hasattr(args, 'fetch'):
+        # 스크립트가 add_postflight_args 를 안 붙인 경우 — 조용히 넘어가지 말고 알려준다.
+        print('\n  ⚠ 자동회수 인자가 없습니다(add_postflight_args 미적용).'
+              '\n     손으로:  python3 fetch_ulog.py --name ' + seq_name)
+        return
+    if not args.fetch:
+        print('\n  (--no-fetch 지정 — 자동회수 건너뜀)')
+        return
+    postflight(seq_name, check_type, args)

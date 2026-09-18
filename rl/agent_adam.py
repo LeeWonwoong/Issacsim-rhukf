@@ -14,6 +14,7 @@ learn()은 (loss, dt_ms, z_var) 3-튜플 반환 → online_rl_main 언팩과 일
 인터페이스: act / push / learn / end_episode / save / load /
             get_epsilon / get_q_values / warmup_compile / _compute_adaptive_p / buffer
 """
+import os
 import time as pytime
 import copy
 from collections import deque
@@ -59,9 +60,24 @@ class OnlineAdamAgent:
 
         self.net = _DDQNNet(cfg.dimS, cfg.num_actions, cfg.shared_layers,
                             cfg.q_layers, cfg.activation_fn).float().to(cfg.device)
+        if os.environ.get('ADAM_INIT', '').lower() == 'he':   # ★09-14 초기화 동일화(필터 에이전트의 He-normal·bias0 과 같게)
+            with torch.no_grad():
+                for _m in self.net.modules():
+                    if isinstance(_m, nn.Linear):
+                        _m.weight.normal_(0.0, (2.0 / _m.in_features) ** 0.5); _m.bias.zero_()
         self.target_net = copy.deepcopy(self.net)
-        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=cfg.adam_lr,
-                                           amsgrad=getattr(cfg, 'adam_amsgrad', True))
+        # env override: ADAM_LR (학습률), ADAM_AMSGRAD (0|1) — Adam baseline sweep용
+        _lr = float(os.environ.get('ADAM_LR', cfg.adam_lr))
+        _ams_env = os.environ.get('ADAM_AMSGRAD', '')
+        self._amsgrad = (_ams_env == '1') if _ams_env != '' else getattr(cfg, 'adam_amsgrad', True)
+        # env OPT=sgd → 순수 SGD(momentum 0) 베이스라인 (2026-09-02 3-옵티마이저 비교)
+        self._opt_type = os.environ.get('OPT', 'adam').lower()
+        if self._opt_type == 'sgd':
+            self.optimizer = torch.optim.SGD(self.net.parameters(), lr=_lr, momentum=0.0)
+        else:
+            self._opt_type = 'adam'
+            self.optimizer = torch.optim.Adam(self.net.parameters(), lr=_lr, amsgrad=self._amsgrad)
+        self._eff_lr = _lr
         self.buffer = TensorReplayBuffer(cfg.buffer_size, cfg.dimS, cfg.device, cfg)
 
         self.steps_done = 0
@@ -74,9 +90,10 @@ class OnlineAdamAgent:
 
         n = sum(p.numel() for p in self.net.parameters())
         gpu = torch.cuda.get_device_name(0) if (cfg.device == 'cuda' and torch.cuda.is_available()) else 'N/A'
-        print(f"  Agent: Adam DDQN + Huber (baseline) | Params: {n} | "
-              f"Device: {cfg.device} ({gpu}) | lr={cfg.adam_lr} | "
-              f"AMSGrad: {'ON' if getattr(cfg, 'adam_amsgrad', True) else 'off'} | "
+        _loss_nm = 'MSE' if os.environ.get('ADAM_LOSS','').lower()=='mse' else 'Huber'
+        print(f"  Agent: {self._opt_type.upper()} DDQN + {_loss_nm} (baseline) | Params: {n} | "
+              f"Device: {cfg.device} ({gpu}) | lr={self._eff_lr} | "
+              f"AMSGrad: {'ON' if self._amsgrad else 'off'} | "
               f"PER: {'ON' if cfg.use_per else 'off'} | n-step: {cfg.n_step_size if cfg.use_n_step else 1}")
 
     # ─────────────────────────────────────────────────────────
@@ -168,8 +185,13 @@ class OnlineAdamAgent:
                 self._td_hist.extend(td.detach().abs().cpu().numpy().ravel().tolist())
             except Exception:
                 pass
-        # Huber(smooth_l1) per-sample + (PER off면 is_w=1)
-        loss = (is_w * F.smooth_l1_loss(q_a, q_target, reduction='none')).mean()
+        # Huber(smooth_l1) 기본 / env ADAM_LOSS=mse → 순수 MSE (2026-09-02 순수 베이스라인)
+        if getattr(self, '_loss_mse', None) is None:
+            self._loss_mse = (os.environ.get('ADAM_LOSS', '').lower() == 'mse')
+        if self._loss_mse:
+            loss = (is_w * F.mse_loss(q_a, q_target, reduction='none')).mean()
+        else:
+            loss = (is_w * F.smooth_l1_loss(q_a, q_target, reduction='none', beta=float(os.environ.get('ADAM_HUBER_BETA', '1.0') or 1.0))).mean()
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
@@ -228,9 +250,10 @@ class OnlineAdamAgent:
         print(f"  [Save] {path} (Adam DDQN baseline)")
 
     def load(self, path):
-        ckpt = torch.load(path, map_location=self.device)
-        self.net.load_state_dict(ckpt['net'])
-        self.target_net.load_state_dict(ckpt['target_net'])
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)  # 우리 체크포인트(config 객체 포함) — torch>=2.6 기본 weights_only=True 회피
+        _strip = lambda sd: {(k[len('_orig_mod.'):] if k.startswith('_orig_mod.') else k): v for k, v in sd.items()}   # ★09-15 torch.compile 된 net 의 저장 키('_orig_mod.' 접두) 호환
+        self.net.load_state_dict(_strip(ckpt['net']))
+        self.target_net.load_state_dict(_strip(ckpt['target_net']))
         self.steps_done = ckpt['steps_done']
         self.episode_count = ckpt['episode_count']
         self.episode_rewards = ckpt['episode_rewards']

@@ -1,0 +1,8 @@
+════ Q_gyro fine 시작 08-23 03:44:44 ════
+[03:44:44] G4_qg3e-3 Qg=3e-3 START
+[03:54:44] G4_qg3e-3 DONE rc=0 rows=10585
+[03:54:44] G5_qg7e-3 Qg=7e-3 START
+[04:04:43] G5_qg7e-3 DONE rc=0 rows=10585
+[04:04:43] G6_qg1e-2 Qg=1e-2 START
+[04:14:44] G6_qg1e-2 DONE rc=0 rows=10585
+════ fine 완료 04:14:49 ════

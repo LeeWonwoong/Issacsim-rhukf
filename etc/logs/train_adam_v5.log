@@ -1,0 +1,2 @@
+[08-20 00:44:34] ADAM v5 START → results_adam_v5
+run_adam_v5.sh: 줄 7: 1728919 죽었음               python3 -u online_rl_main.py --headless --agent adam --speed 10 --seed 0 --outdir "$OUT" > "$OUT/run.log" 2>&1

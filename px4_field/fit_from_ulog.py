@@ -2,8 +2,8 @@
 """fit_from_ulog.py — 실기 ulog 에서 UKF 모델 계수 추출 (2026-07-31)
 
 사용:
-    python3 fit_from_ulog.py <log>.ulg --mass 1.372
-    python3 fit_from_ulog.py <log>.ulg --mass 1.372 --fc 5.0
+    python3 fit_from_ulog.py <log>.ulg --mass 1.342
+    python3 fit_from_ulog.py <log>.ulg --mass 1.342 --fc 5.0
 
 추출 항목
     C_thrust        호버 평형   C = m·g / u_hover
@@ -126,6 +126,26 @@ def lstsq_report(X, y):
     ss = ((y - y.mean())**2).sum()
     r2 = 1 - (resid**2).sum()/ss if ss > 0 else float('nan')
     return b, r2
+
+
+def drag_fit2(v, F):
+    """항력 적합 2종 — 원점통과 vs 절편포함. 바람 강건성 진단용.
+
+    상수 바람 w 가 있으면 실제 항력은 대기속도에 비례한다:  F = c·(v − w)
+      · 원점통과 적합은 ±레그가 **균형(Σv≈0)** 이면 w 가 상쇄돼 c 를 준다.
+        균형이 깨지면(한쪽 클램프·표본 불균등) w 가 기울기로 샌다.
+      · 절편포함 적합은 균형과 무관하게 c 를 주고, 절편에서 바람을 읽을 수 있다:
+            b0 = −c·w   →   w ≈ −b0 / c
+    둘이 갈리면 그날 바람이 있었다는 뜻 = 원점통과 값을 믿지 말 것.
+
+    반환: (c_원점, R²_원점, c_절편, 절편, R²_절편, 레그균형, 추정바람)
+    """
+    b0, r2_0 = lstsq_report(v[:, None], F)
+    b1, r2_1 = lstsq_report(np.column_stack([v, np.ones_like(v)]), F)
+    denom = np.abs(v).sum()
+    bal = v.sum() / denom if denom > 0 else float('nan')   # 0 = ± 완전 균형
+    w = -b1[1] / b1[0] if abs(b1[0]) > 1e-6 else float('nan')
+    return b0[0], r2_0, b1[0], b1[1], r2_1, bal, w
 
 
 # ──────────────────────────────────────────────────────────────
@@ -293,11 +313,74 @@ def main():
                 if sel.sum() < 30:
                     print(f"  {nm:>8s} {'—':>9s} {'—':>8s} {'표본부족':>14s} {sel.sum():7d}")
                     continue
-                b, r2 = lstsq_report(v_b[sel, j:j+1], -F_drag_b[sel, j])
-                print(f"  {nm:>8s} {b[0]:9.3f} {r2:8.3f} "
+                c0, r0, c1, b0, r1, bal, w = drag_fit2(v_b[sel, j], -F_drag_b[sel, j])
+                print(f"  {nm:>8s} {c0:9.3f} {r0:8.3f} "
                       f"{np.median(np.abs(v_b[sel,j])):14.2f} {sel.sum():7d}")
+                flag = '  ⚠ 갈림' if abs(c1 - c0) > 0.15 * max(abs(c0), 1e-6) else ''
+                print(f"  {'└ 절편포함':>8s} {c1:9.3f} {r1:8.3f}   "
+                      f"절편 {b0:+.2f} N → 바람 ≈ {w:+.2f} m/s · 레그균형 {bal:+.2f}{flag}")
             print(f"\n  ※ sim Pegasus 설정값 = [0.50, 0.30, 0.00]")
             print(f"     전후·좌우 양쪽 구간이 있어야 x/y 분리가 된다.")
+            print(f"     ★ 원점통과 vs 절편포함이 15% 넘게 갈리면 바람이 샌 것 = 절편포함을 쓸 것.")
+            print(f"       레그균형 |bal|>0.15 면 ± 왕복이 비대칭 → 원점통과 값 신뢰 불가.")
+
+    # ── 3b) 가속 기반 drag (F5 accel_line) ────────────────
+    #  등속[3]은 a=0 가정이라 F5(속도스윕)를 넣으면 가속을 drag로 오인한다.
+    #  동적 힘균형:  m·a_ned = R·F_thrust_body + F_drag_ned + m·g_ned
+    #    → F_drag_ned = m·a_ned − R·[0,0,−T] − m·[0,0,g]
+    #  a≠0 전 구간(가속·감속 포함)을 쓰므로 F4(등속)보다 표본↑·속도선형성 검증 가능.
+    print("\n" + "-" * 78)
+    print("[3b] 가속 구간 — drag (동적 m·a 균형, F5 accel_line용)")
+    print("-" * 78)
+    if C_thrust is None or d_att is None:
+        print("  C_thrust 또는 attitude 없음 → 가속 drag 산출 불가")
+    else:
+        t_a = t_of(d_att)
+        q4 = np.column_stack([col(d_att, f'q[{i}]') for i in range(4)])
+        # 가속: local_position 의 ax/ay/az 있으면 사용, 없으면 속도 미분
+        ax, ay, az = col(d_lp, 'ax'), col(d_lp, 'ay'), col(d_lp, 'az')
+        if ax is None or ay is None:
+            dtl = np.median(np.diff(t_lp))
+            ax = np.gradient(lowpass(vx, dtl, args.fc), dtl)
+            ay = np.gradient(lowpass(vy, dtl, args.fc), dtl)
+            az = np.gradient(lowpass(vz, dtl, args.fc), dtl)
+            print("  (local_position 가속 필드 없음 → 속도 미분 사용)")
+        # 움직이는 전 구간 (등속·가속 무관, 저속만 제외)
+        move = vh > 0.5
+        segs3 = runs(move, t_lp, 1.0)
+        if not segs3:
+            print(f"  운동 구간 없음 (|vh|>0.5 m/s, 1초 이상). |vh|max={vh.max():.2f}")
+        else:
+            idx = np.concatenate([np.arange(a, b) for a, b in segs3])
+            tt = t_lp[idx]
+            R = quat_to_R(resample(t_a, q4, tt))
+            T = C_thrust * resample(t_thr, np.abs(thr[:, 2]), tt)
+            a_ned = np.column_stack([ax[idx], ay[idx], az[idx]])
+            v_ned = np.column_stack([vx[idx], vy[idx], vz[idx]])
+            F_thr_ned = np.einsum('nij,nj->ni', R, np.column_stack([
+                np.zeros_like(T), np.zeros_like(T), -T]))
+            g_ned = np.column_stack([np.zeros_like(T), np.zeros_like(T),
+                                     np.full_like(T, m*G0)])
+            F_drag_ned = m*a_ned - F_thr_ned - g_ned      # 동적 잔차 = drag
+            F_drag_b = np.einsum('nji,nj->ni', R, F_drag_ned)
+            v_b = np.einsum('nji,nj->ni', R, v_ned)
+            print(f"  운동 구간 {len(segs3)}개, 표본 {len(idx)}  "
+                  f"(가속 포함 → 등속[3]보다 표본↑)")
+            print(f"\n  {'축':>8s} {'drag':>9s} {'R²':>8s} {'|v_body|중앙':>13s} {'n':>7s}")
+            for j, nm in enumerate(('x(전후)', 'y(좌우)', 'z(상하)')):
+                sel = np.abs(v_b[:, j]) > 0.5
+                if sel.sum() < 30:
+                    print(f"  {nm:>8s} {'—':>9s} {'—':>8s} {'표본부족':>13s} {sel.sum():7d}")
+                    continue
+                c0, r0, c1, b0, r1, bal, w = drag_fit2(v_b[sel, j], -F_drag_b[sel, j])
+                print(f"  {nm:>8s} {c0:9.3f} {r0:8.3f} "
+                      f"{np.median(np.abs(v_b[sel,j])):13.2f} {sel.sum():7d}")
+                flag = '  ⚠ 갈림' if abs(c1 - c0) > 0.15 * max(abs(c0), 1e-6) else ''
+                print(f"  {'└ 절편포함':>8s} {c1:9.3f} {r1:8.3f}  "
+                      f"절편 {b0:+.2f} N → 바람 ≈ {w:+.2f} m/s · 레그균형 {bal:+.2f}{flag}")
+            print(f"\n  ※ [3](등속)와 [3b](가속)가 15% 내 일치하면 drag 확정."
+                  f" 갈리면 정상상태/타이밍 편향 의심.")
+            print(f"     sim Pegasus 설정값 = [0.50, 0.30, 0.00]")
 
     # ── 4) 요약 ───────────────────────────────────────────
     print("\n" + "=" * 78)

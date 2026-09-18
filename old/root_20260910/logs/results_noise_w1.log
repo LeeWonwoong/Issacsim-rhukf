@@ -1,0 +1,10 @@
+[worker 1] ['adam_1e3_s0.15', 'adam_1e3_s0.3', 'adam_3e4_s0.15', 'adam_3e4_s0.3']
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  adam_1e3_s0.15     F1=0.969 conv=33 stab=0.012 pFP=0.013 wR=0.95 sR=0.96 rwd=283.1 (220s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  adam_1e3_s0.3      F1=0.963 conv=33 stab=0.015 pFP=0.018 wR=0.93 sR=0.96 rwd=274.5 (197s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: off | PER: off | n-step: 3
+  adam_3e4_s0.15     F1=0.968 conv=33 stab=0.013 pFP=0.013 wR=0.95 sR=0.96 rwd=281.5 (219s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: off | PER: off | n-step: 3
+  adam_3e4_s0.3      F1=0.963 conv=33 stab=0.015 pFP=0.017 wR=0.94 sR=0.96 rwd=272.8 (205s)
+[worker 1] done

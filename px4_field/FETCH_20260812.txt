@@ -1,0 +1,105 @@
+========================================================================
+ 2026-08-12 출동 — 로그 회수 (USB 경로)                  강풍일 단축 출동
+========================================================================
+
+ 오늘 날린 것
+ ------------------------------------------------------------------------
+   ① 발산 체크   Position 모드 수동 (3m 호버 → 6~7m → 3m → 왕복)
+                 → 스크립트를 안 탔으므로 자동회수 **없음**
+   ② yaw 오토튠  autotune_go.py --yaw  (amp1.3 · 2회 반복)
+                 → autotune_go 는 원래 자동회수 **없음** (같은 시리얼 포트)
+
+   ⇒ 둘 다 FC SD카드에만 있다. 아래 절차로 직접 받는다.
+
+   ⚠ 전원 분리 전에 받을 것. (파일은 disarm 때 닫힌다 — 착륙·disarm 했으면 OK)
+
+
+========================================================================
+ [1] 젯슨에서 FC → 젯슨으로 회수
+========================================================================
+   ssh quad@<orin-ip>
+   cd ~/px4_field
+
+   # 1-1. FC 에 뭐가 있나 (원본 = 진실). 시각으로 오늘 것 매칭
+   python3 fetch_ulog.py --list
+
+   # 1-2. 오늘 것 한꺼번에 (넉넉히 4개. 이미 있는 건 건너뛴다)
+   python3 fetch_ulog.py --last 4
+
+   # 1-3. 이름을 붙이고 싶으면 id 지정해서 따로
+   python3 fetch_ulog.py --id <번호> --name ekf_check_0812
+   python3 fetch_ulog.py --id <번호> --name f2_yaw_0812
+
+   저장 위치: ~/px4_field/ulog/<이름>_log<id>_<시각>.ulg
+
+   ⚠ comp=0 이 뜨면 다른 MAVLink 프로세스가 포트를 잡은 것:
+        sudo lsof /dev/ttyACM0        → autotune_go / QGC 죽이기
+   ⚠ Permission denied 면:
+        sudo usermod -aG dialout quad     (로그아웃/로그인, 항구적)
+        sudo chmod 666 /dev/ttyACM0       (임시)
+
+   # 1-4. 받았는지 확인
+   ls -lt ~/px4_field/ulog/ | head
+
+
+========================================================================
+ [2] 젯슨 → USB 메모리
+========================================================================
+   # 2-1. USB 꽂고 장치 확인 (보통 sda1 / sdb1)
+   lsblk -o NAME,SIZE,LABEL,MOUNTPOINT
+
+   # 2-2-A. 자동마운트 됐으면 (/media/quad/<라벨> 에 보임)
+   cp ~/px4_field/ulog/*.ulg /media/quad/<라벨>/
+   sync
+
+   # 2-2-B. 자동마운트 안 됐으면 손으로
+   sudo mkdir -p /media/usb
+   sudo mount /dev/sda1 /media/usb          # ← lsblk 에서 본 이름으로
+   sudo cp ~/px4_field/ulog/*.ulg /media/usb/
+   sync
+
+   # 2-3. ★ 반드시 언마운트하고 뽑을 것 (안 하면 파일이 깨진다)
+   sudo umount /media/usb                   # 또는 /media/quad/<라벨>
+
+
+========================================================================
+ [3] USB → 워크스테이션
+========================================================================
+   lsblk -o NAME,SIZE,LABEL,MOUNTPOINT      # 보통 /media/acsl/<라벨> 로 자동마운트
+
+   cp /media/acsl/<라벨>/*.ulg \
+      /home/acsl/projects/Issacsim-rhukf/px4_field/ulog/
+
+   ls -lt /home/acsl/projects/Issacsim-rhukf/px4_field/ulog/ | head
+   sudo umount /media/acsl/<라벨>
+
+   (네트워크가 되면 USB 대신 scp 가 빠르다)
+   scp quad@<orin-ip>:'~/px4_field/ulog/*.ulg' \
+       /home/acsl/projects/Issacsim-rhukf/px4_field/ulog/
+
+
+========================================================================
+ [4] 판독 (워크스테이션. 시스템 python3 아님 — isaacsim 파이썬)
+========================================================================
+   cd /home/acsl/projects/Issacsim-rhukf
+
+   # 4-1. ★ yaw 오토튠 — 오늘의 본 목적. G_yaw 추출
+   ~/isaacsim/python.sh px4_field/fit_autotune.py px4_field/ulog/<f2_yaw>.ulg
+       · state 가 roll→pitch→yaw 다 지나고 COMPLETE 여야 완주
+       · yaw maxVar > 50  → 미수렴 (다음엔 --amp 1.5)
+       · 반복 2회분이 한 로그에 있으면 축별 best 를 자동 선택한다
+
+   # 4-2. 발산 체크 — 고도/수평 안정, EKF 리셋
+   ~/isaacsim/python.sh px4_field/check_ulog.py px4_field/ulog/<ekf_check>.ulg \
+       --type hover --mass 1.340
+       · 5m 경계를 넘겼는지, 넘긴 뒤 고도가 튀지 않았는지가 핵심
+       · EKF 리셋 카운터 증가 없어야 통과
+
+========================================================================
+ 한 줄 요약
+========================================================================
+   젯슨:  python3 fetch_ulog.py --list  →  --last 4
+          cp ~/px4_field/ulog/*.ulg /media/usb/ && sync && sudo umount /media/usb
+   PC  :  cp /media/acsl/<라벨>/*.ulg px4_field/ulog/
+          ~/isaacsim/python.sh px4_field/fit_autotune.py px4_field/ulog/<f2_yaw>.ulg
+========================================================================

@@ -1,3 +1,4 @@
+import os
 """
 memory.py — Tensor Replay Buffer (FP32, N-step + PER)
 ======================================================
@@ -103,9 +104,26 @@ class TensorReplayBuffer:
     def fill_ratio(self):
         return self.current_size / self.capacity
 
+    def _sample_indices(self, batch_size: int):
+        """★09-14 리플레이 모드(env REPLAY_MODE): uniform(기본) | cer(최신 전이 1개 포함, Zhang&Sutton 2017) | recency(나이 반감기 REPLAY_HALFLIFE 가중)"""
+        sz = self.current_size
+        mode = os.environ.get('REPLAY_MODE', 'uniform').lower()
+        if mode == 'cer' and sz > 1:
+            idx = torch.randint(0, sz, (batch_size - 1,), device=self.device)
+            newest = torch.tensor([(self.count - 1) % self.capacity], dtype=torch.long, device=self.device)
+            return torch.cat([idx, newest])
+        if mode == 'recency' and sz > 1:
+            hl = float(os.environ.get('REPLAY_HALFLIFE', '3000') or 3000)
+            pos = torch.arange(sz, device=self.device)
+            if self.count <= self.capacity: age = (self.count - 1 - pos).to(DTYPE)
+            else: age = (((self.count % self.capacity) - 1 - pos) % self.capacity).to(DTYPE)
+            w = torch.pow(0.5, age / hl) + 1e-9
+            return torch.multinomial(w, batch_size, replacement=True)
+        return torch.randint(0, sz, (batch_size,), device=self.device)
+
     def sample_batch(self, batch_size: int) -> Dict:
         if not self.use_per:
-            indices = torch.randint(0, self.current_size, (batch_size,), device=self.device)
+            indices = self._sample_indices(batch_size)
             return {
                 's': self.S[indices].t(),
                 'a': self.A[indices],

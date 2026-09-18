@@ -1,0 +1,8 @@
+[worker 0] ['T_P0.01abs', 'T_P0.1abs', 'T_P0.2err']  (CAL σ=(1.04, 0.86) atk_p=0.54)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  T_P0.01abs   surrF1=0.925 P=0.932 R=0.921 fpr=0.202 conv=59 pFP=0.015 wR=0.67 | IsaacF1=0.925  (802s)
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  T_P0.1abs    surrF1=0.920 P=0.940 R=0.906 fpr=0.179 conv=59 pFP=0.019 wR=0.64 | IsaacF1=0.919  (814s)
+  Agent: RHUKF-FV (error) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 3
+  T_P0.2err    surrF1=0.919 P=0.929 R=0.913 fpr=0.208 conv=59 pFP=0.006 wR=0.47 | IsaacF1=0.907  (623s)
+[worker 0] done

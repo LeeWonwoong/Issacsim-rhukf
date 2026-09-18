@@ -1,0 +1,5 @@
+  Agent: RHUKF-FV (absolute) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | act: silu | PER: off | n-step: 1
+  SWIRL        후반100 보상   32.32 · 오경보 0.210 · 미탐 0.000 · 지연  2.13 · 길이  86.8 · 전이 17,648 · 1569s
+  Agent: ADAM DDQN + Huber (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 1
+  Adam1e-3     후반100 보상   32.65 · 오경보 0.210 · 미탐 0.000 · 지연  2.32 · 길이  88.1 · 전이 17,743 · 283s
+저장 results/claudecodefortest/p0stage3/p0.10_s44.json

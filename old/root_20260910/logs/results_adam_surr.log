@@ -1,0 +1,5 @@
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.0003 | AMSGrad: off | PER: off | n-step: 3
+  adam_mse_3e4   F1=0.969 conv=33 stab=0.012 pFP=0.011 wR=0.96 sR=0.96 rwd=282.3 loss=0.646 (104s)
+  Agent: ADAM DDQN + MSE (baseline) | Params: 514 | Device: cuda (NVIDIA RTX 6000 Ada Generation) | lr=0.001 | AMSGrad: off | PER: off | n-step: 3
+  adam_mse_1e3   F1=0.969 conv=33 stab=0.012 pFP=0.007 wR=0.96 sR=0.96 rwd=283.1 loss=0.620 (103s)
+done
