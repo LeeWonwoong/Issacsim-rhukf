@@ -1,0 +1,11 @@
+# 밤샘 9단계 · act=target 에서 R↓ 가 더 좋음(R0.01 τ0.02: 0.774±0.014 · cost/c −0.22 · ρL −0.99) → R {0.01, 0.003} × τ {0.02, 0.05}, 3시드
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night9
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sRT:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.R: [0.01, 0.003], agent.tau: [0.02, 0.05]}
