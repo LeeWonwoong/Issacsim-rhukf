@@ -1,0 +1,29 @@
+# 밤샘 4단계 · 좋은 축 조합 (3시드) — 03:55 판독:
+#  SWIRL q1e-4 0.681(FPR 0.0088) · buf1e4 0.682(Δ짝 +0.150, Adam buf1e4 0.532) · εdec1e4 0.665(FPR 0.0090) · Adam B256 0.665
+#  유한기억(FIR) 서사: 버퍼↓ 에서 SWIRL 유지·Adam 붕괴 → buf 5000 까지 밀어본다
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night4
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sQb:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.q: 1.0e-4}
+    axes: {agent.buffer: [10000, 5000]}
+  sQe:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.q: 1.0e-4}
+    axes: {agent.eps.decay: [10000]}
+  sQbe:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.q: 1.0e-4, agent.eps.decay: 10000}
+    axes: {agent.buffer: [10000]}
+  aB:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes: {agent.buffer: [5000]}
+  aBe:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.eps.decay: 10000}
+    axes: {agent.buffer: [10000]}
