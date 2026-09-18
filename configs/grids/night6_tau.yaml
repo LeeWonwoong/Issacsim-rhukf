@@ -1,0 +1,12 @@
+# 밤샘 6단계 · act=target 이면 행동 정책 = θ_T (τ 로 움직임) → τ 가 정책 반응속도를 정한다. τ {0.01, 0.05} (ui4), 3시드
+#  기준 = night2 sActB256 (act=target · B256 · R0.03 · q1e-3 · τ0.02 · ui4 · spas): F1 0.766±0.032
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night6
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sTau:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.tau: [0.01, 0.05]}
