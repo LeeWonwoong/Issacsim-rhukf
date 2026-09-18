@@ -1,0 +1,18 @@
+# newenv_Rregime_3seed.yaml 의 대기열 런을 먼저 돌리는 분할본 (같은 outdir·런 이름 → 본 격자 작업자가 hist.json 보고 건너뜀)
+base:
+- configs/newenv.yaml
+- configs/overlays/surrogate_knn.yaml
+outdir: results/claudecodefortest/newenv_Rregime
+seeds:
+- 44
+stages:
+  a: {}
+learners:
+  sR:
+    device: gpu
+    set:
+      agent.type: swirl
+      run.device: cuda
+    axes:
+      agent.swirl.R:
+      - 0.01
