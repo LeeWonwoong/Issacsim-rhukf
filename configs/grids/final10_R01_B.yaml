@@ -1,0 +1,11 @@
+# 최종 10시드 · R0.01 · τ0.05 (night9 3시드: 0.780±0.030 · cost/c −0.11) — 무대 B (buffer 50000), 시드 42–44 = night9/a_sRT_R0.01_tau0.05
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/final10_R01
+seeds: [45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sB:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.01, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.buffer: [50000]}
