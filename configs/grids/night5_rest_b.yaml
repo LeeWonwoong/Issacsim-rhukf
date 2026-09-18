@@ -1,0 +1,11 @@
+# night5_target_factorial.yaml 셋째 묶음 선행 분할본 (같은 outdir·이름 → 본 격자 작업자는 hist.json 보고 건너뜀)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night5
+seeds: [43, 44]
+stages:
+  a: {}
+learners:
+  sT:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.q: [1.0e-3], agent.buffer: [10000], agent.eps.decay: [10000]}
