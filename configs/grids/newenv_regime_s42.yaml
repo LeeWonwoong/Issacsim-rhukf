@@ -1,0 +1,28 @@
+# 새 무대 · 보상 배율 c · γ · R 빠른 확정 (surrogate k-NN v1, 시드 42, SWIRL=gpu)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/newenv_regime
+seeds: [42]
+stages:
+  a: {}
+learners:
+  swirl:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda}
+    axes:
+      reward.scale: [0.3, 0.6, 1.0]
+      agent.swirl.R: [0.5, 1.0, 2.0]
+  swirlg:
+    device: gpu
+    set: {agent.type: swirl, reward.scale: 0.6, agent.swirl.R: 1.0, run.device: cuda}
+    axes:
+      agent.gamma: [0.95, 0.99]
+  adam:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes:
+      reward.scale: [0.3, 0.6, 1.0]
+  adamg:
+    device: cpu
+    set: {agent.type: adam, reward.scale: 0.6, run.device: cpu}
+    axes:
+      agent.gamma: [0.95, 0.99]

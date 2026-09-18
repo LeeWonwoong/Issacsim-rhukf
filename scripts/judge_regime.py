@@ -50,7 +50,8 @@ def load_runs(d):
         meta = dict(stage=name.split('_')[0], agent=('adam' if ag.get('type') == 'adam' else ag.get('type', 'swirl')),
                     tu=('ll' if int(ag.get('update_interval', 1)) == 4 else 'cp'), c=float(c['reward'].get('scale', 1.0)),
                     R=float(ag['swirl'].get('R', np.nan)) if ag.get('type') != 'adam' else np.nan,
-                    r_tn=float(c['reward'].get('r_tn', 0.5)), gamma=float(ag.get('gamma', 0.97)))
+                    r_tn=(float(c['reward'].get('alive', 0.5)) if c['reward'].get('mode') == 'cost' else float(c['reward'].get('r_tn', 0.5))),
+                    gamma=float(ag.get('gamma', 0.97)))
         out.append((name, meta, json.load(open(hp))['hist']))
     for jp in sorted(glob.glob(os.path.join(d, '*_*.json'))):   # 구 cp_regime_scan 형식
         if jp.endswith('gates.json'):
@@ -65,14 +66,15 @@ def load_runs(d):
 
 def gate(name, m, h, gamma=None):
     g0 = gamma if gamma is not None else m['gamma']
-    ep = np.arange(len(h)); L = np.array([r['loss'] for r in h], float); Rw = np.array([r['reward'] for r in h], float)
+    rk = 'reward_cost' if 'reward_cost' in h[0] else 'reward'      # cost 모드: 생존 보상 뺀 부분으로 판정
+    ep = np.arange(len(h)); L = np.array([r['loss'] for r in h], float); Rw = np.array([r[rk] for r in h], float)
     L_l = seg(h, 'loss', 150, 200)
     Ls = np.convolve(np.nan_to_num(L), np.ones(5) / 5, mode='same'); pk = int(np.argmax(Ls[:60])); L_pk = float(Ls[pk])
     V = m['c'] * m['r_tn'] / (1 - g0)
     g = dict(name=name, **m, n_ep=len(h), L_peak=L_pk, L_peak_ep=pk, L_late=L_l, L_ratio=(L_pk / L_l if L_l > 0 else np.nan),
              L_ratio_e=(seg(h, 'loss', 2, 12) / L_l if L_l > 0 else np.nan),
              L_rho=spear(ep[pk:], L[pk:]), L_tail=seg(h, 'loss', 175, 200) / seg(h, 'loss', 125, 150),
-             R_early=seg(h, 'reward', 0, 10), R_late=seg(h, 'reward', 150, 200), R_rho=spear(ep, Rw),
+             R_early=seg(h, rk, 0, 10), R_late=seg(h, rk, 150, 200), R_rho=spear(ep, Rw),
              F1_late=seg(h, 'f1', 150, 200, True), FPR_late=seg(h, 'fpr', 150, 200), crash=int(sum(r.get('crashed', 0) for r in h)),
              qmax_late=seg(h, 'qmax', 150, 200), V_exp=V, kgain_late=seg(h, 'kgain', 150, 200),
              nisf_early=seg(h, 'nisf', 2, 12), nisf_late=seg(h, 'nisf', 150, 200), adapt_late=seg(h, 'adapt', 150, 200),
