@@ -33,7 +33,7 @@ from sim.surrogate import SurrogateConfig
 # ── 스키마: 섹션 → 허용 키 (dataclass 섹션은 필드에서 자동) ─────────────────────────────
 _AGENT_KEYS = {'type', 'gamma', 'n_step', 'batch', 'buffer', 'hidden', 'tau', 'update_interval', 'per',
                'hover_dwell', 'eps', 'replay', 'swirl', 'adam'}
-_EPS_KEYS = {'start', 'end', 'decay', 'hover_p'}
+_EPS_KEYS = {'start', 'end', 'decay', 'hover_p', 'z_mu', 'z_cap'}
 _REPLAY_KEYS = {'mode', 'halflife'}
 _SWIRL_KEYS = {'form', 'p_delta', 'p_init', 'huber_c', 'N', 'R', 'q', 'alpha', 'anchor', 'argmax', 'h0', 'spas'}
 _ADAM_KEYS = {'lr', 'amsgrad', 'init', 'optimizer', 'loss', 'huber_beta', 'grad_clip'}
@@ -185,6 +185,8 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     if 'end' in eps: cfg.eps_end = float(eps['end'])
     if 'decay' in eps: cfg.eps_decay_steps = int(eps['decay'])
     if 'hover_p' in eps: cfg.eps_action_probs = [1.0 - float(eps['hover_p']), float(eps['hover_p'])]
+    if 'z_mu' in eps: cfg.eps_z_mu = float(eps['z_mu'])
+    if 'z_cap' in eps: cfg.eps_z_cap = int(eps['z_cap'])
     if 'mode' in rp: cfg.replay_mode = rp['mode']
     if 'halflife' in rp: cfg.replay_halflife = float(rp['halflife'])
     SW = {'form': 'state_form', 'p_delta': 'p_delta_init', 'p_init': 'p_init', 'huber_c': 'huber_c', 'N': 'N_horizon',

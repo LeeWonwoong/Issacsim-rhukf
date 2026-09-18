@@ -63,6 +63,7 @@ class OnlineRHUKFAgent:
 
         # ── 학습 추적 ──
         self.steps_done = 0
+        self._z_left, self._z_a = 0, 0                    # εz-greedy 지속 상태
         self.episode_count = 0
         self.episode_rewards = []
         self.episode_lengths = []
@@ -133,8 +134,15 @@ class OnlineRHUKFAgent:
     # ═════════════════════════════════════════════════════════
     def act(self, state: np.ndarray, eps: float) -> int:
         self.steps_done += 1
+        if eps > 0 and self._z_left > 0:                 # εz-greedy: 탐험 행동 지속 중 (eps=0 평가는 영향 없음)
+            self._z_left -= 1
+            return self._z_a
         if np.random.rand() < eps:
-            return int(np.random.choice([0, 1], p=self.cfg.eps_action_probs))
+            a = int(np.random.choice([0, 1], p=self.cfg.eps_action_probs))
+            if self.cfg.eps_z_mu > 1.0:                    # 지속 n ~ zeta(μ), 상한 z_cap — 이번 스텝 포함 n 스텝
+                self._z_a = a
+                self._z_left = min(int(np.random.zipf(self.cfg.eps_z_mu)), int(self.cfg.eps_z_cap)) - 1
+            return a
         with torch.no_grad():
             s_t = torch.as_tensor(state, dtype=DTYPE, device=self.device)
             if self.normalizer:
@@ -305,6 +313,7 @@ class OnlineRHUKFAgent:
     # ═════════════════════════════════════════════════════════
     def end_episode(self, total_reward: float, episode_length: int):
         self.episode_count += 1
+        self._z_left = 0                                   # εz 지속은 에피소드를 넘기지 않는다
         self.episode_rewards.append(total_reward)
         self.episode_lengths.append(episode_length)
         # 에피소드 경계에서 N-step deque 비우기 (다음 에피소드로 누수 방지)

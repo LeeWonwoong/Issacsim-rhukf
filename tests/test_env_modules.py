@@ -95,6 +95,23 @@ def test_window_policy_per_event():
     assert a[102:113].all() and not a[113:162].any() and a[162:173].all() and not a[173:].any()
 
 
+def test_eps_z_greedy():
+    """εz-greedy: 한 번의 탐험 결정이 n~zeta(2)(상한 30) 스텝 유지, eps=0 평가는 무시, 에피소드 경계에서 초기화."""
+    import sys; sys.path.insert(0, '.')
+    from cfgload import load_experiment
+    import train
+    exp = load_experiment(['configs/newenv.yaml', 'configs/overlays/surrogate_knn.yaml'],
+                          ['agent.type=adam', 'run.device=cpu', 'agent.eps.z_mu=2', 'agent.eps.z_cap=30'])
+    ag = train.make_agent(exp); s = np.zeros(12, np.float32)
+    starts = 0
+    for _ in range(20000):
+        starts += ag._z_left == 0; ag.act(s, 1.0)
+    assert 2.8 < 20000 / starts < 3.25                 # 이론 평균 3.03
+    ag._z_left, ag._z_a = 5, 1
+    ag.act(s, 0.0); assert ag._z_left == 5              # eps=0 → 지속 소비 안 함
+    ag.end_episode(0.0, 1); assert ag._z_left == 0
+
+
 if __name__ == '__main__':
     for k, f in list(globals().items()):
         if k.startswith('test_'): f(); print('ok', k)

@@ -269,6 +269,8 @@ class Config:
     # ── 탐험 ──
     eps_start: float = 0.99
     eps_end: float = 0.01
+    eps_z_mu: float = 0.0      # ★09-19 εz-greedy(Dabney·Ostrovski·Barreto ICLR2021): >1 이면 탐험 행동을 n~zeta(μ) 스텝 유지. 0 = 끔(기존과 비트 동일)
+    eps_z_cap: int = 30        # εz 지속 상한(스텝)
     eps_decay_steps: int = 10000  # 2026-09-09 env화. 기본 10000(탐험~100ep). CartPole은 2000이었음 — 빠른 decay가 초반 정책차 가시화
 
     # ══════════════════════════════════════════════════════════
