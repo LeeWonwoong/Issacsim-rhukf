@@ -1,0 +1,14 @@
+# configs/capture_pool.yaml — Step 2: 새 surrogate 풀 원자료 수집 (학습 없음)
+#   실행: python3 train.py --config configs/capture_pool.yaml --config configs/overlays/isaac.yaml
+#   온라인 RL 과 같은 시나리오 샘플러(newenv: 6 공격 그룹 · 5 패턴 · 바람 U(0,6)) + 스크립트 정책 혼합으로
+#   행동 상태(track · hover 진입/유지 · hover→track 복귀 · 평시 오탐 hover)를 덮는다. 원시 NIS 로 저장(format=raw).
+#   400 에피소드 × 300 스텝, 속도 2.5 → 에피소드당 ≈ 12 s 비행 + 리셋 ≈ 2.5–3 시간.
+extends: newenv.yaml
+run: {name: capture_pool, outdir: results/claudecodefortest/capture_pool, seed: 42, ep_steps: 300}
+scenario:
+  attack: {p_attack: 0.7}        # 풀은 공격 표본이 모자라기 쉬워 학습(0.5)보다 높게
+capture:
+  enabled: true
+  mode: pool
+  episodes: 400
+  policies: {track: 0.25, 'hold:2': 0.15, 'hold:5': 0.15, 'window:3:8': 0.20, 'dither:0.03': 0.25}

@@ -48,7 +48,7 @@ from env.ukf_filter import DynamicsUKF, compute_nis_scaled, load_calibration, to
 from env.reward import RewardTracker
 from env.observation import ObsBuilder, ObsSpec
 from env.scenario import ScenarioConfig, sample_isaac_scenario
-from env.capture import build_capture_list, capture_action
+from env.capture import build_capture_list, capture_action, draw_policy
 from rl.agent import OnlineRHUKFAgent
 
 
@@ -250,10 +250,14 @@ class OnlineRLNode(Node):
         # ★09-18 캡처 모드(학습 없음·스크립트 정책·스텝 기록): burst/persistent 분기 검증과 새 풀 수집용
         self.capture = exp.capture if (exp is not None and exp.capture.enabled) else None
         self._cap_list = []; self._cap_rows = []
-        if self.capture is not None:
+        self._cap_policy = None
+        if self.capture is not None and self.capture.mode == 'pairs':
             self._cap_list = build_capture_list(self.capture, self.scen_cfg.attack, cfg.attack_tq_authority_nm)
             cfg.max_episodes = len(self._cap_list)
             cfg.episode_max_steps = self.capture.onset + self.capture.post
+        elif self.capture is not None:                       # pool: 온라인 RL 과 같은 샘플러, 길이 = run.ep_steps
+            cfg.max_episodes = int(self.capture.episodes)
+        if self.capture is not None:
             cfg.eval_interval = 10 ** 9                    # 평가 라운드 끔
             os.makedirs(os.path.join(cfg.outdir, 'capture'), exist_ok=True)
 
@@ -1038,7 +1042,15 @@ class OnlineRLNode(Node):
             self.episode += 1
             if self.episode > self.cfg.max_episodes:
                 self._finish_training(); return
-            self.scenario = self._capture_scenario(self.episode) if self.capture is not None else self._sample_scenario(self.episode)
+            if self.capture is not None and self.capture.mode == 'pairs':
+                self.scenario = self._capture_scenario(self.episode)
+            else:
+                self.scenario = self._sample_scenario(self.episode)
+                if self.capture is not None:                 # pool: 에피소드 정책 추첨 (시나리오와 같은 (seed, ep) 계열, 별도 스트림)
+                    self._cap_policy = draw_policy(self.capture, np.random.default_rng([int(self.cfg.seed) & 0xFFFFFFFF, int(self.episode), 1]))
+                    self.scenario['capture_meta'] = dict(pair='', grade=str(self.scenario.get('attack_class', 'none')).split('_')[0],
+                                                         kind=str(self.scenario.get('attack_class', 'none')), d0=float(self.scenario.get('bias_scale', 0.0)),
+                                                         grow=1.0, policy=self._cap_policy.name)
             label = f'TRAIN Ep {self.episode}/{self.cfg.max_episodes}'
 
         atk = self.scenario
@@ -1116,7 +1128,9 @@ class OnlineRLNode(Node):
                  cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', ''), kind=m.get('kind', ''),
                  d0=m.get('d0', 0.0), grow=m.get('grow', 1.0), pattern=self.scenario.get('pattern', ''),
                  wind_speed=float(self.scenario.get('wind_speed', 0.0)), direction=float(self.scenario.get('attack_direction') or 0.0),
-                 onset=self.capture.onset, reason=str(reason), delta_plan=self.scenario['plan'].delta, format='raw')
+                 onset=(self.capture.onset if self.capture.mode == 'pairs' else int(self.scenario.get('attack_start_step', -1))),
+                 policy=m.get('policy', self.capture.policy), mode=self.capture.mode,
+                 reason=str(reason), delta_plan=self.scenario['plan'].delta, format='raw')
         self._cap_rows = []
 
     def _plan_bias(self, step):
@@ -1697,7 +1711,9 @@ class OnlineRLNode(Node):
                 action = self.agent.act(state, eps=0.0)
             eps = 0.0
         elif self.capture is not None:
-            eps = 0.0; action = capture_action(self.capture, self.step_count)
+            eps = 0.0
+            action = (self._cap_policy.act(self.step_count, self.scenario['plan']) if self._cap_policy is not None
+                      else capture_action(self.capture, self.step_count))
         else:
             eps = self.agent.get_epsilon()
             with self._learn_lock:
