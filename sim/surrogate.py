@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -53,6 +54,9 @@ class SurrogateConfig:
     rho_v_cln: float = 0.47
     entry_dwell: int = 1
     reseed_per_episode: bool = True    # 구 SURR_EP_RNG=1: (시드, 에피소드)로 시나리오 난수 재생성 = 짝 무결성
+    # ── k-NN 재생(풀 format=knn_v1, Isaac 실측 원시 NIS): 조건 = δ 이력·공격 종료 후 경과·직전 행동과 유지·풍속 ──
+    knn_k: int = 32
+    knn_rho_atk: float = 0.7           # 공격 중 조건부 잔차의 시간 상관(추세는 조건 특징이 설명) — 검증으로 보정
     crash: CrashConfig = field(default_factory=CrashConfig)
 
     def __post_init__(self):
@@ -71,6 +75,11 @@ def load_pool(cfg: SurrogateConfig) -> dict:
     if key in _POOL_CACHE:
         return _POOL_CACHE[key]
     d = np.load(cfg.pool)
+    if 'format' in d.files and str(d['format']) == 'knn_v2':      # Isaac 실측 k-NN 풀
+        X = np.asarray(d['X'], float); rho = json.loads(str(d['rho']))
+        Q = dict(_knn=True, X=X, rho=rho, _tiers=[], _has_s=False, _format='knn_v2')
+        _POOL_CACHE[key] = Q
+        return Q
     fmt = cfg.pool_format
     if fmt == 'auto':
         fmt = str(d['format']) if 'format' in d.files else 'compressed'   # 새 풀은 'format'='raw' 를 기록한다
@@ -145,6 +154,20 @@ class SurrogateEnv:
         self.reseed = cfg.reseed_per_episode if reseed_per_episode is None else reseed_per_episode
         self.Q = load_pool(cfg)
         self.ep_idx = -1
+        self.knn = bool(self.Q.get('_knn'))
+        if self.knn:
+            X = self.Q['X']                                # [d0,d1,d3,d6,since_end,act,dwell,ws,dlast,nis_v,nis_g]
+            self._F = self._feat(X[:, 0], X[:, 1], X[:, 2], X[:, 3], X[:, 4], X[:, 5], X[:, 6], X[:, 7], X[:, 8])
+            self._V, self._G = X[:, 9], X[:, 10]
+            self._nn_cache = {}
+
+    @staticmethod
+    def _feat(d0, d1, d3, d6, since, act, dwell, ws, dlast):
+        """k-NN 거리 척도: δ 0.05 = 1, 공격 종료 후 1 스텝 = 1(15 에서 포화), 행동 불일치 = 100(사실상 정확 일치),
+        유지 1 스텝 = 1(5 에서 포화), 풍속 2 m/s = 1, 직전 사건 최대 세기 0.05 = 1(공격 종료 후 15 스텝 동안만 의미)."""
+        since = np.asarray(since, float); dl = np.where(since <= 15, np.asarray(dlast, float), 0.0)
+        return np.c_[np.asarray(d0) / 0.05, np.asarray(d1) / 0.05, np.asarray(d3) / 0.05, np.asarray(d6) / 0.05,
+                     np.minimum(since, 15), np.asarray(act) * 100.0, np.minimum(dwell, 5), np.asarray(ws) / 2.0, dl / 0.05]
 
     # ── 에피소드 ─────────────────────────────────────────────────────────────
     def reset(self, plan: Optional[AttackPlan] = None, ws: Optional[float] = None):
@@ -159,6 +182,8 @@ class SurrogateEnv:
         wi = int(w)
         if wi > 0 and av: wi = min(av, key=lambda x: abs(x - wi))
         self.ws = wi; self.sfx = f'_ws{wi}' if wi > 0 else ''
+        if self.knn:
+            self.ws = float(w); self._act_prev = None; self._act_dwell = 0; self._last_atk = None; self._dlast = 0.0
         self.sg = rng.normal(); self.sv = rng.normal()
         self.plan = sample_attack(rng, self.acfg, n) if plan is None else plan
         dm = self.plan.dmax
@@ -191,10 +216,49 @@ class SurrogateEnv:
         return kk if kk in self.Q else k
 
     def attack_delay(self) -> int:
+        if self.knn:                                       # Isaac 규약: 스텝 t 라벨 = active[t−1]
+            return self.plan.delay(self.t - 1) if self.t >= 1 else 0
         return self.plan.delay(self.t)
+
+    def _nis_knn(self, prev_action: int):
+        """Isaac 실측 k-NN 재생. 스텝 t 의 NIS·공격 라벨은 δ[t−1]·active[t−1] (주입이 스텝 끝 발행되는 Isaac 규약)."""
+        t, rng, P, c = self.t, self.rng, self.plan, self.cfg
+        tt = t - 1
+        dl = lambda k: float(P.delta[tt - k]) if tt - k >= 0 else 0.0
+        a = bool(tt >= 0 and P.active[tt])
+        if a:
+            self._dlast = float(P.delta[tt]) if (tt == 0 or not P.active[tt - 1]) else max(self._dlast, float(P.delta[tt]))
+            self._last_atk = tt
+        since = 0 if a else (tt - self._last_atk if self._last_atk is not None else 99)
+        self._act_dwell = self._act_dwell + 1 if prev_action == self._act_prev else 0
+        self._act_prev = prev_action
+        hov = prev_action == 1
+        if self.lethal:                                    # 절벽(구 모델, 시점만 Isaac 규약)
+            if a and not hov:
+                self._expose += 1
+                if self._expose >= self._dead and not self._absorb and self._doom is None:
+                    self._doom = int(P.bstart[tt]) + self._lag
+            if self._doom is not None and t >= self._doom:
+                self.crashed = True
+        q = self._feat(dl(0), dl(1), dl(3), dl(6), since, prev_action, self._act_dwell, self.ws, self._dlast)[0]
+        key = tuple(np.round(q, 1))
+        nn = self._nn_cache.get(key)
+        if nn is None:
+            dist = ((self._F - q) ** 2).sum(1)
+            idx = np.argpartition(dist, c.knn_k)[:c.knn_k]
+            nn = (np.sort(self._V[idx]), np.sort(self._G[idx]))
+            if len(self._nn_cache) < 200000: self._nn_cache[key] = nn
+        rho = self.Q['rho']
+        rg = c.knn_rho_atk if a else rho.get('rho_g_cln', 0.5)
+        rv = c.knn_rho_atk if a else max(rho.get('rho_v_cln', 0.0), 0.0)
+        self.sg = rg * self.sg + math.sqrt(1 - rg * rg) * rng.normal()
+        self.sv = rv * self.sv + math.sqrt(1 - rv * rv) * rng.normal()
+        return _iq(nn[0], _phi(self.sv)), _iq(nn[1], _phi(self.sg)), a
 
     def nis(self, prev_action: int):
         """이번 스텝의 (원시 NIS vel, 원시 NIS gyro, 공격 여부). prev_action = 지금까지 실행 중인 행동."""
+        if self.knn:
+            return self._nis_knn(prev_action)
         t, rng, P = self.t, self.rng, self.plan
         hov = prev_action == 1
         a = bool(t < self.ep_steps and P.active[t])
