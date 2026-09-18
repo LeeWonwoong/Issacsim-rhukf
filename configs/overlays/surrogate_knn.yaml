@@ -13,7 +13,7 @@ env:
       plateau_curve: false
       dead_mode: uniform
       dead_uniform: [24, 26]     # 누적 track 노출이 이만큼 쌓여야 추락 확정, 시점 = 온셋 + lag(26–31)
-      ploc_tiers: {}             # 구 풍속 티어 곡선(ws7·10) 비움: k-NN 풍속은 연속값, Isaac 풀은 ws≤6 뿐 (축 B 는 고풍속 캡처 필요)
+      ploc_tiers: {}             # 구 풍속 티어 곡선(ws7·10) 비움: k-NN 풍속은 연속값, 추락 보정은 풀 A(ws≤6)·B(ws 6–10) 통합 실측
       dead_tiers: {}
 scenario:
   wind: {mode: uniform, range: [0.0, 6.0]}     # k-NN 은 풍속 연속값을 그대로 조건으로 쓴다
