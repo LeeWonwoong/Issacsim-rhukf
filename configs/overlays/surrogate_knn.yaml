@@ -1,6 +1,17 @@
 # surrogate k-NN(Isaac 실측) 덮어쓰기 — 실험 설정 뒤에 --config 로 붙인다
 env:
   kind: surrogate
-  surrogate: {pool: results/claudecodefortest/pools/pool_knn_v1.npz}   # v1: 분기·Adam 학습·풀 A·B (167k 행)
+  surrogate:
+    pool: results/claudecodefortest/pools/pool_knn_v1.npz     # v1: 분기·Adam 학습·풀 A·B (167k 행)
+    # 추락: Isaac 실측 보정 (09-18). δ≥0.7 공격을 20스텝+ track 으로 버틴 사건 52건 중 추락 2건
+    # (δ 0.82 노출 27 스텝 · δ 0.84 노출 32 스텝, 둘 다 crash_drift), δ<0.80 은 0/12.
+    # 구 곡선(δ0.78 에서 p≈0.95)은 Isaac 보다 훨씬 치명적이었다.
+    crash:
+      lethal_delta: 0.80
+      ploc_delta: [0.80, 0.82, 0.84]
+      ploc_prob: [0.0, 0.05, 0.5]
+      plateau_curve: false
+      dead_mode: uniform
+      dead_uniform: [24, 26]     # 누적 track 노출이 이만큼 쌓여야 추락 확정, 시점 = 온셋 + lag(26–31)
 scenario:
   wind: {mode: uniform, range: [0.0, 6.0]}     # k-NN 은 풍속 연속값을 그대로 조건으로 쓴다
