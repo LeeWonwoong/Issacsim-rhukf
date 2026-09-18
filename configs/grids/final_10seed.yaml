@@ -1,0 +1,17 @@
+# 최종 10시드 확인 (시드 42–44 는 기존 런, 여기선 45–51 추가) — SWIRL 설정 = act=target · R0.03 · τ0.02 · ui4 · spas · pΔ0.01 · q1e-3
+#  무대 A (Adam 최선 공유 노브): batch 256 · buffer 1e4 · eps decay 4000   (3시드: SWIRL 0.761 vs Adam 0.717)
+#  무대 B (SWIRL 최선 공유 노브): batch 256 · buffer 5e4 · eps decay 4000  (3시드: SWIRL 0.766 vs Adam 0.665)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/final10
+seeds: [45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sA:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.buffer: [10000, 50000]}
+  aA:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256}
+    axes: {agent.buffer: [10000, 50000]}
