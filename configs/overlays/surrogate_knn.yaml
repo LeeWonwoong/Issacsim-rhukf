@@ -1,6 +1,6 @@
 # surrogate k-NN(Isaac 실측) 덮어쓰기 — 실험 설정 뒤에 --config 로 붙인다
 env:
   kind: surrogate
-  surrogate: {pool: results/claudecodefortest/pools/pool_knn_v0.npz}
+  surrogate: {pool: results/claudecodefortest/pools/pool_knn_v1.npz}   # v1: 분기·Adam 학습·풀 A·B (167k 행)
 scenario:
   wind: {mode: uniform, range: [0.0, 6.0]}     # k-NN 은 풍속 연속값을 그대로 조건으로 쓴다
