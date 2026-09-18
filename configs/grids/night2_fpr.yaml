@@ -1,0 +1,24 @@
+# 밤샘 2단계 · SWIRL 평시 오탐(FPR 2배) 잡기 — 레짐 c0.6·R0.03·고-K 결합 위에서, 3시드
+#  act=target: 누적 θ_T 로 행동(호출마다 흔들리는 보정 없음) · batch 256: LL 아티팩트 값(공유 노브 → Adam 도)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night2
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sAct:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03}
+    axes: {agent.swirl.act: [target]}
+  sB256:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03}
+    axes: {agent.batch: [256]}
+  sActB256:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target}
+    axes: {agent.batch: [256]}
+  aB256:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes: {agent.batch: [256]}
