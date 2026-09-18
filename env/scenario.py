@@ -41,7 +41,8 @@ class WindConfig:
         cur = WindConfig(mode=self.mode, tiers=dict(self.tiers), range=tuple(self.range), kind=self.kind)
         for seg in self.schedule:
             if int(episode) >= int(seg['from_ep']):
-                cur = WindConfig(mode=seg.get('mode', cur.mode), tiers=seg.get('tiers', cur.tiers),
+                mode = seg.get('mode') or ('tiers' if 'tiers' in seg else 'uniform' if 'range' in seg else cur.mode)   # ★09-18 검토: 적힌 키로 모드 추론
+                cur = WindConfig(mode=mode, tiers=seg.get('tiers', cur.tiers),
                                  range=tuple(seg.get('range', cur.range)), kind=cur.kind)
         return cur
 

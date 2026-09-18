@@ -1068,6 +1068,12 @@ class OnlineRLNode(Node):
         else:
             self._send_scenario_cmd()
         self._reset_episode_state(); self.home_lat = None; self.init_counter = 0
+        if self.capture is not None and _COM_BIAS_STD > 0:
+            # ★09-18 검토: 캡처 COM 바이어스를 (seed, 짝|에피소드) 로 고정 → 짝 두 에피소드가 같은 값을 쓰고 재현 가능
+            import zlib
+            _m = self.scenario.get('capture_meta', {}); _key = _m.get('pair') or f'ep{self.episode}'
+            _r = np.random.default_rng([int(self.cfg.seed) & 0xFFFFFFFF, zlib.crc32(_key.encode())])
+            self._com_bias = _r.uniform(-_COM_BIAS_STD, _COM_BIAS_STD, size=2)
 
         # ── 공격 버스트 일정 확정 (burst 우선, 없으면 단일 구간) ──
         self.attack_bursts = self.scenario.get('attack_bursts')
@@ -1112,8 +1118,11 @@ class OnlineRLNode(Node):
                     capture_meta=dict(pair=c['pair'], grade=c['grade'], kind=c['kind'], d0=c['d0'], grow=c['grow']))
 
     def _capture_log(self, state, nis_v_raw, nis_g_raw, done, term_reason):
+        """스텝 행. 주입 명령은 스텝 끝에 발행되어 다음 스텝부터 효과 → 이 스텝 NIS 가 반영하는 세기는 delta_eff = δ[t−1]."""
         plan = self.scenario.get('plan'); k = min(self.step_count, plan.n - 1) if plan is not None else 0
-        self._cap_rows.append([self.step_count, float(plan.delta[k]) if plan is not None else 0.0, int(self.attack_active_flag),
+        k1 = max(k - 1, 0) if self.step_count > 0 else -1
+        self._cap_rows.append([self.step_count, float(plan.delta[k]) if plan is not None else 0.0,
+                               float(plan.delta[k1]) if (plan is not None and k1 >= 0) else 0.0, int(self.attack_active_flag),
                                int(self.prev_action if self.prev_action is not None else 0), float(nis_v_raw), float(nis_g_raw),
                                *self.obs.last_scaled, float(-self.cur_pos[2]), float(self.cur_euler[0]), float(self.cur_euler[1]),
                                int(done), *[float(x) for x in state]])
@@ -1122,7 +1131,7 @@ class OnlineRLNode(Node):
         if self.capture is None or not self._cap_rows:
             self._cap_rows = []; return
         m = self.scenario.get('capture_meta', {})
-        cols = ['step', 'delta', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done'] + \
+        cols = ['step', 'delta', 'delta_eff', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done'] + \
                [f's{i}' for i in range(self.obs_spec.dim)]
         np.savez(os.path.join(self.cfg.outdir, 'capture', f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
                  cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', ''), kind=m.get('kind', ''),
@@ -1196,6 +1205,10 @@ class OnlineRLNode(Node):
 
     def _trigger_hard_reset(self):
         self._send_attack_cmd(False)
+        if getattr(self, 'capture', None) is not None and self._cap_rows:
+            # ★09-18 검토: 에피소드 도중 리셋(heartbeat 등) → 이 에피소드 행을 버리고 같은 번호를 다시 돌린다(짝 보존)
+            self.get_logger().warn(f'  [CAPTURE] 에피소드 {self.episode} 도중 HARD 리셋 — 행 {len(self._cap_rows)} 폐기, 다시 실행')
+            self._cap_rows = []; self.episode -= 1
         self._reset_episode_state()
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
         self.home_lat = None; self.init_counter = 0; self.flight_state = 'HARD_RESET'

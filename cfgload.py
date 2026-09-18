@@ -44,10 +44,28 @@ _ISAAC_KEYS = {'headless', 'speed', 'sim_env', 'launcher', 'compile', 'knobs', '
 _TOP = {'extends', 'run', 'env', 'scenario', 'obs', 'reward', 'agent', 'log', 'capture'}
 
 
+# 병합하지 않고 통째로 교체하는 키 — 확률분포·목록형 dict (하위 설정이 상위 항목을 지울 수 있어야 한다, 09-18 검토)
+_REPLACE = {'tiers', 'policies', 'grades', 'grow', 'ploc_tiers', 'dead_tiers'}
+_NUM = __import__('re').compile(r'^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)$')
+
+
+def _coerce(x):
+    """YAML 1.1 은 '1e-3' 을 문자열로 읽는다 → 지수 표기 숫자 문자열을 float 로."""
+    if isinstance(x, dict):
+        return {k: _coerce(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_coerce(v) for v in x]
+    if isinstance(x, str) and _NUM.match(x.strip()):
+        return float(x)
+    return x
+
+
 def _deep_merge(a: dict, b: dict) -> dict:
     out = copy.deepcopy(a)
     for k, v in (b or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
+        if k in _REPLACE:
+            out[k] = copy.deepcopy(v)
+        elif isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k] = _deep_merge(out[k], v)
         else:
             out[k] = copy.deepcopy(v)
@@ -101,6 +119,7 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
         d = _deep_merge(d, _read(p))
     for s in sets or []:
         _set(d, s)
+    d = _coerce(d)
     _check(d, _TOP - {'extends'}, '최상위')
 
     run = dict(seed=42, episodes=200, ep_steps=300, outdir='results/claudecodefortest/untitled', device='auto', name='untitled')

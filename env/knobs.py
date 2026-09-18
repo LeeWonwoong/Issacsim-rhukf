@@ -9,7 +9,7 @@ _K: dict = {}
 
 def _s(v) -> str:
     if isinstance(v, bool):
-        return '1' if v else '0'
+        return '1' if v else ''        # ★09-18 검토: '0' 은 참거짓 판정(bool(knob(...)))에서 켜짐으로 읽힌다 → 빈 문자열
     if isinstance(v, (list, tuple)):
         return ','.join(str(x) for x in v)
     return str(v)

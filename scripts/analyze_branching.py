@@ -8,9 +8,12 @@
   프레임 = [ε̃_vel, ε̃_gyro] (ObsSpec 로 압축·정규화된 값),  창 = 최근 4 프레임(행동 칸 제외 8 차원)
   오프셋 k = 창 마지막 스텝 − 온셋.  k=3 → 창 = 온셋 t0..t3 (prefix 구간)
 
-판정 (결과를 보기 전에 고정)
-  겹침   OVERLAP  : AUC_burst↔persist(k=3) ≤ 0.70           — prefix 창만으로는 형태를 못 가린다
-  분기   DIVERGE  : k ∈ [4, 15] 에서 AUC ≥ 0.85 가 3 스텝 연속 — 이후 창에서는 가린다 (첫 k = '분기 시점')
+온셋 t0 = delta_eff(이 스텝 NIS 가 반영하는 세기 = δ[t−1], 주입은 스텝 끝 발행) 가 처음 0 보다 큰 스텝 — 09-18 검토 반영.
+
+판정 (결과를 보기 전에 고정; 09-18 검토로 순열 보정 추가)
+  겹침   OVERLAP  : AUC(k=3) ≤ 0.70  ∧  순열 p(k=3) ≥ 0.05   — prefix 창만으로는 형태를 못 가린다
+  분기   DIVERGE  : k ∈ [4, 15] 에서 AUC ≥ 0.85 ∧ p < 0.01 이 3 스텝 연속 (첫 k = '분기 시점')
+  순열: 짝마다 burst/persistent 라벨을 무작위로 바꾼 귀무 분포(N_PERM 회)에서 AUC ≥ 관측값 비율 (단측)
   가시성 VISIBLE  : AUC_attack↔none(k=3) — prefix 창에서 공격 자체는 보이나 (정보용; 약공격은 낮을 수 있음)
   설계 성립 = 등급별 OVERLAP ∧ DIVERGE.  (강 등급은 persistent 가 성장하지 않아 분기가 약할 수 있음 — 정보용)
 AUC: 짝 단위 leave-one-pair-out 교차검증 Fisher 판별(공분산 릿지). 짝 = (d0·성장률·온셋·방향·패턴·풍속) 공유.
@@ -25,6 +28,7 @@ import os
 import numpy as np
 
 K_MIN, K_MAX = -2, 30
+N_PERM = 200
 
 
 def load(d):
@@ -35,8 +39,11 @@ def load(d):
         if R.ndim != 2 or len(R) == 0:
             continue
         C = {c: R[:, i] for i, c in enumerate(cols)}
+        de = C.get('delta_eff')
+        on_eff = (int(C['step'][np.flatnonzero(de > 0)[0]]) if (de is not None and (de > 0).any())
+                  else int(z['onset']) + (1 if de is not None else 0))
         eps.append(dict(file=os.path.basename(f), pair=str(z['pair']), grade=str(z['grade']), kind=str(z['kind']),
-                        onset=int(z['onset']), step=C['step'].astype(int), v=C['v_obs'], g=C['g_obs'],
+                        onset=on_eff, step=C['step'].astype(int), v=C['v_obs'], g=C['g_obs'],
                         vr=C['nis_v_raw'], gr=C['nis_g_raw'], delta=C['delta'], reason=str(z['reason'])))
     return eps
 
@@ -48,7 +55,8 @@ def window(ep, k):
     rows = [idx.get(t - 3 + j) for j in range(4)]
     if any(r is None for r in rows):
         return None
-    return np.array([[ep['v'][r], ep['g'][r]] for r in rows]).ravel()
+    w = np.array([[ep['v'][r], ep['g'][r]] for r in rows]).ravel()
+    return w if np.all(np.isfinite(w)) else None          # NaN 프레임이 든 창은 제외(09-18 검토)
 
 
 def auc(pos, neg):
@@ -84,7 +92,7 @@ def analyze(eps):
     for gr in grades:
         E = [e for e in eps if e['grade'] == gr]
         pairs = sorted({e['pair'] for e in E})
-        res = dict(pairs=len(pairs), k=[], auc_bp=[], auc_an=[], n=[])
+        res = dict(pairs=len(pairs), k=[], auc_bp=[], p_bp=[], auc_an=[], n=[])
         for k in range(K_MIN, K_MAX + 1):
             X, y, G = [], [], []
             for e in E:
@@ -92,23 +100,36 @@ def analyze(eps):
                 if w is not None:
                     X.append(w); y.append(1 if e['kind'] == 'persistent' else 0); G.append(e['pair'])
             a_bp = fisher_lopo(X, y, G) if len(set(y)) == 2 and len(set(G)) >= 4 else np.nan
+            p_bp = np.nan
+            if np.isfinite(a_bp):                   # 짝 내부 라벨 치환 귀무 분포
+                rng = np.random.default_rng(1000 + k); y0 = np.asarray(y); G0 = np.asarray(G); null = []
+                for _ in range(N_PERM):
+                    yp = y0.copy()
+                    for gname in np.unique(G0):
+                        m = G0 == gname
+                        if rng.random() < 0.5: yp[m] = 1 - yp[m]
+                    null.append(fisher_lopo(X, yp, G0))
+                null = np.asarray(null); p_bp = float((np.sum(null >= a_bp) + 1) / (np.isfinite(null).sum() + 1))
             Xa = [window(e, k) for e in E if e['kind'] == 'burst']; Xn = [window(e, k) for e in nones]
             Xa = [w for w in Xa if w is not None]; Xn = [w for w in Xn if w is not None]
             a_an = np.nan
             if len(Xa) >= 3 and len(Xn) >= 3:   # 공격(burst — prefix 는 두 형태 동일) vs 무공격, 무공격은 에피소드별 그룹
                 a_an = fisher_lopo(Xa + Xn, [1] * len(Xa) + [0] * len(Xn),
                                    [f'a{i}' for i in range(len(Xa))] + [f'n{i}' for i in range(len(Xn))])
-            res['k'].append(k); res['auc_bp'].append(a_bp); res['auc_an'].append(a_an); res['n'].append(len(y))
-        K = np.array(res['k']); A = np.array(res['auc_bp'])
+            res['k'].append(k); res['auc_bp'].append(a_bp); res['p_bp'].append(p_bp); res['auc_an'].append(a_an); res['n'].append(len(y))
+        K = np.array(res['k']); A = np.array(res['auc_bp']); P = np.array(res['p_bp'])
         a3 = float(A[K == 3][0]) if (K == 3).any() else np.nan
+        p3 = float(P[K == 3][0]) if (K == 3).any() else np.nan
         div_k = None
         for k0 in range(4, 16):
-            seg = [A[K == k0 + j][0] for j in range(3) if (K == k0 + j).any()]
-            if len(seg) == 3 and all(np.isfinite(seg)) and min(seg) >= 0.85:
+            ok = [(K == k0 + j).any() and np.isfinite(A[K == k0 + j][0]) and A[K == k0 + j][0] >= 0.85 and P[K == k0 + j][0] < 0.01
+                  for j in range(3)]
+            if all(ok):
                 div_k = k0; break
-        res.update(auc_k3=a3, overlap=bool(np.isfinite(a3) and a3 <= 0.70), diverge_k=div_k, diverge=div_k is not None,
+        overlap = bool(np.isfinite(a3) and a3 <= 0.70 and np.isfinite(p3) and p3 >= 0.05)
+        res.update(auc_k3=a3, p_k3=p3, overlap=overlap, diverge_k=div_k, diverge=div_k is not None,
                    visible_k3=float(np.array(res['auc_an'])[K == 3][0]) if (K == 3).any() else np.nan,
-                   holds=bool(np.isfinite(a3) and a3 <= 0.70 and div_k is not None),
+                   holds=bool(overlap and div_k is not None),
                    crashes={kind: sum(1 for e in E if e['kind'] == kind and e['reason'] in ('crash_drift', 'crash_altitude', 'crash_flip'))
                             for kind in ('burst', 'persistent')})
         out[gr] = res
@@ -173,10 +194,10 @@ def main():
         print('캡처 없음'); return
     res = analyze(eps)
     L = ['# burst vs persistent 관측 분기 판정', '', f'에피소드 {len(eps)} (무공격 {sum(e["kind"] == "none" for e in eps)})', '',
-         '| 등급 | 짝 | AUC(k=3, prefix 창) | 겹침 ≤0.70 | 분기 시점 k (AUC≥0.85 3연속) | 공격 가시성 AUC(k=3) | 추락 burst/persist | 설계 성립 |',
+         '| 등급 | 짝 | AUC(k=3, prefix 창) · 순열 p | 겹침 (≤0.70 ∧ p≥0.05) | 분기 시점 k (AUC≥0.85 ∧ p<0.01, 3연속) | 공격 가시성 AUC(k=3) | 추락 burst/persist | 설계 성립 |',
          '|---|---|---|---|---|---|---|---|']
     for gr, r in res.items():
-        L.append(f"| {gr} | {r['pairs']} | {r['auc_k3']:.2f} | {'O' if r['overlap'] else '·'} | {r['diverge_k'] if r['diverge'] else '없음'} | "
+        L.append(f"| {gr} | {r['pairs']} | {r['auc_k3']:.2f} · {r['p_k3']:.2f} | {'O' if r['overlap'] else '·'} | {r['diverge_k'] if r['diverge'] else '없음'} | "
                  f"{r['visible_k3']:.2f} | {r['crashes']['burst']}/{r['crashes']['persistent']} | {'**성립**' if r['holds'] else '·'} |")
     open(os.path.join(a.dir, 'BRANCHING.md'), 'w').write('\n'.join(L) + '\n')
     json.dump(res, open(os.path.join(a.dir, 'branching.json'), 'w'), indent=1, default=float)

@@ -37,7 +37,7 @@ def make_agent(exp):
     return AG(exp.cfg)
 
 
-def probe(agent, exp, ob_template, n_ep):
+def probe(agent, exp, ob_template, n_ep, episode=0):
     """greedy(ε=0) 프로브: 학습·push 없음, 별도 시드의 환경, steps_done 복원."""
     from sim.surrogate import SurrogateEnv
     sd0 = agent.steps_done
@@ -47,6 +47,7 @@ def probe(agent, exp, ob_template, n_ep):
     ob = copy.deepcopy(ob_template)
     tp = fp = fn = tn = 0; dels = []; crashes = 0
     for _ in range(n_ep):
+        genv.ep_idx = int(episode) - 1          # ★09-18 검토: 바람 schedule 이 있으면 현재 학습 에피소드의 체제로 평가 (없으면 무영향)
         genv.reset(); ob.reset(); prev_a = 0; det = None
         for _t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
@@ -142,7 +143,7 @@ def run_surrogate(exp, log=print):
                    wrec=(wtp / (wtp + wfn) if wtp + wfn else float('nan')), srec=(stp / (stp + sfn) if stp + sfn else float('nan')),
                    sec=time.time() - t0)
         if pe > 0 and ep % pe == 0:
-            row.update(probe(agent, exp, ob, pn))
+            row.update(probe(agent, exp, ob, pn, episode=ep))
         hist.append(row)
         if ep % 10 == 0 or ep == cfg.max_episodes - 1:
             log(f"ep{ep:4d} R={epr:8.2f} loss={row['loss']:.4f} F1={row['f1']:.3f} FPR={row['fpr']:.3f} "
