@@ -28,7 +28,7 @@ reward:              # 탐지기형 (09-18 확정): 오경보 · 지연 · 탐�
   alive: 0.5
   c_fa: 0.7           # 평시 hover (오경보)
   c_d: 0.3            # 공격 중 track, 스텝마다 상수 → 누적 = c_d × 탐지 지연
-  bonus: 1.0          # 사건마다 첫 hover 1회 (burst 도 공격 — 잡는다)
+  bonus: 2.0          # 사건마다 첫 hover 1회 (burst 도 공격 — 잡는다). 2 = 공격 끝 뒤 ≤4 스텝 안에 풀면 burst 탐지가 이득(잡고 빨리 풀기)
   terminal_penalty: 0.0
 agent:
   gamma: 0.97
