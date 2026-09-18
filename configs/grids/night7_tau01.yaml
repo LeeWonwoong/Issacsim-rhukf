@@ -1,0 +1,11 @@
+# 밤샘 7단계 · τ 더 빠르게: 0.1 (act=target·B256, 3시드)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night7
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sTau:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.tau: [0.1]}

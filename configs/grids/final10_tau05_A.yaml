@@ -1,0 +1,11 @@
+# 최종 10시드 · τ0.05 (night6: 0.782±0.029 · cost/c −0.20 · ρL −0.98) — 무대 A(Adam 최선: B256·buf1e4·εdec4000), 시드 42–51
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/final10_tau05
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sA:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.03, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.buffer: [10000]}

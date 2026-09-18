@@ -60,7 +60,7 @@ def label(names, vals, base):
 
 def main():
     dirs = sys.argv[1:] or sorted(glob.glob('results/claudecodefortest/newenv_Rregime') + glob.glob('results/claudecodefortest/newenv_PQ_ll')
-                                  + glob.glob('results/claudecodefortest/night*'))
+                                  + glob.glob('results/claudecodefortest/night*') + glob.glob('results/claudecodefortest/final*'))
     runs = [load(os.path.dirname(f)) for d in dirs for f in glob.glob(os.path.join(d, '*/hist.json'))]
     base_sh = (0.6, 0.97, 128, 50000, 3, 4000, 0.1, None, None)
     base_sw = (0.03, 0.01, 0.001, 5, 5.0, 0.02, 4, 'spas', None)
