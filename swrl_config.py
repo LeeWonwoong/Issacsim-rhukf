@@ -368,6 +368,8 @@ class Config:
     adam_grad_clip: float = 1.0
     replay_mode: str = 'uniform'       # uniform | cer | recency
     replay_halflife: float = 3000.0
+    log_zu: bool = False              # 구 --log-zu (env.isaac.cfg 로 켠다, 09-18 검토)
+    log_sysid: bool = False           # 구 --log-sysid
 
     # ══════════════════════════════════════════════════════════
     #  평가 (고정 시나리오)

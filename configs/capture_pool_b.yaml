@@ -1,0 +1,5 @@
+# configs/capture_pool_b.yaml — 축 B(바람 전환)용 강풍 풀 보강: 바람 U(6,10), 100 에피소드
+#   실행: python3 train.py --config configs/capture_pool_b.yaml --config configs/overlays/isaac.yaml --config configs/overlays/wind_strong.yaml
+extends: capture_pool.yaml
+run: {name: capture_pool_b, outdir: results/claudecodefortest/capture_pool_b, seed: 43}
+capture: {episodes: 100}

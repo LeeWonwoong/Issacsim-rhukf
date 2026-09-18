@@ -38,7 +38,7 @@ _REPLAY_KEYS = {'mode', 'halflife'}
 _SWIRL_KEYS = {'form', 'p_delta', 'p_init', 'huber_c', 'N', 'R', 'q', 'alpha', 'anchor', 'argmax', 'h0', 'spas'}
 _ADAM_KEYS = {'lr', 'amsgrad', 'init', 'optimizer', 'loss', 'huber_beta', 'grad_clip'}
 _RUN_KEYS = {'name', 'seed', 'episodes', 'ep_steps', 'outdir', 'device'}
-_LOG_KEYS = {'probe_every', 'probe_n'}
+_LOG_KEYS = {'probe_every', 'probe_n', 'steps'}
 _ENV_KEYS = {'kind', 'surrogate', 'isaac'}
 _ISAAC_KEYS = {'headless', 'speed', 'sim_env', 'launcher', 'compile', 'knobs', 'cfg'}
 _TOP = {'extends', 'run', 'env', 'scenario', 'obs', 'reward', 'agent', 'log', 'capture'}
@@ -124,7 +124,7 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
 
     run = dict(seed=42, episodes=200, ep_steps=300, outdir='results/claudecodefortest/untitled', device='auto', name='untitled')
     _check(d.get('run'), _RUN_KEYS, 'run'); run.update(d.get('run') or {})
-    log = dict(probe_every=1, probe_n=4)
+    log = dict(probe_every=1, probe_n=4, steps=False)   # steps: Isaac 학습 중 스텝 기록(원시 NIS·관측·보상) → <outdir>/steps/
     _check(d.get('log'), _LOG_KEYS, 'log'); log.update(d.get('log') or {})
 
     obs = _build_dc(ObsSpec, d.get('obs'), 'obs')

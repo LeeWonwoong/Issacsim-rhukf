@@ -259,7 +259,11 @@ class OnlineRLNode(Node):
             cfg.max_episodes = int(self.capture.episodes)
         if self.capture is not None:
             cfg.eval_interval = 10 ** 9                    # 평가 라운드 끔
-            os.makedirs(os.path.join(cfg.outdir, 'capture'), exist_ok=True)
+        # ★09-18 스텝 기록: 캡처 모드는 항상, 학습 중에는 log.steps=true 일 때 (실제 온라인 RL 분포 → 새 surrogate 원자료)
+        self._log_steps = self.capture is not None or bool(exp is not None and exp.log.get('steps'))
+        self._step_dir = os.path.join(cfg.outdir, 'capture' if self.capture is not None else 'steps')
+        if self._log_steps:
+            os.makedirs(self._step_dir, exist_ok=True)
 
         # ── Sensor state ──
         self.cur_accel = np.zeros(3); self.cur_gyro = np.zeros(3)
@@ -1117,7 +1121,7 @@ class OnlineRLNode(Node):
                     bias_scale=plan.dmax, attack_direction=plan.direction, attack_class=plan.cls, plan=plan,
                     capture_meta=dict(pair=c['pair'], grade=c['grade'], kind=c['kind'], d0=c['d0'], grow=c['grow']))
 
-    def _capture_log(self, state, nis_v_raw, nis_g_raw, done, term_reason):
+    def _capture_log(self, state, nis_v_raw, nis_g_raw, done, term_reason, reward=0.0):
         """스텝 행. 주입 명령은 스텝 끝에 발행되어 다음 스텝부터 효과 → 이 스텝 NIS 가 반영하는 세기는 delta_eff = δ[t−1]."""
         plan = self.scenario.get('plan'); k = min(self.step_count, plan.n - 1) if plan is not None else 0
         k1 = max(k - 1, 0) if self.step_count > 0 else -1
@@ -1125,20 +1129,22 @@ class OnlineRLNode(Node):
                                float(plan.delta[k1]) if (plan is not None and k1 >= 0) else 0.0, int(self.attack_active_flag),
                                int(self.prev_action if self.prev_action is not None else 0), float(nis_v_raw), float(nis_g_raw),
                                *self.obs.last_scaled, float(-self.cur_pos[2]), float(self.cur_euler[0]), float(self.cur_euler[1]),
-                               int(done), *[float(x) for x in state]])
+                               int(done), float(reward), *[float(x) for x in state]])
 
     def _capture_flush(self, reason):
-        if self.capture is None or not self._cap_rows:
+        if not getattr(self, '_log_steps', False) or not self._cap_rows or self.eval_mode:
             self._cap_rows = []; return
         m = self.scenario.get('capture_meta', {})
-        cols = ['step', 'delta', 'delta_eff', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done'] + \
+        cols = ['step', 'delta', 'delta_eff', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done', 'reward'] + \
                [f's{i}' for i in range(self.obs_spec.dim)]
-        np.savez(os.path.join(self.cfg.outdir, 'capture', f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
-                 cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', ''), kind=m.get('kind', ''),
+        _cls = str(self.scenario.get('attack_class', 'none'))
+        np.savez(os.path.join(self._step_dir, f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
+                 cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', _cls.split('_')[0]), kind=m.get('kind', _cls),
                  d0=m.get('d0', 0.0), grow=m.get('grow', 1.0), pattern=self.scenario.get('pattern', ''),
                  wind_speed=float(self.scenario.get('wind_speed', 0.0)), direction=float(self.scenario.get('attack_direction') or 0.0),
-                 onset=(self.capture.onset if self.capture.mode == 'pairs' else int(self.scenario.get('attack_start_step', -1))),
-                 policy=m.get('policy', self.capture.policy), mode=self.capture.mode,
+                 onset=(self.capture.onset if (self.capture is not None and self.capture.mode == 'pairs') else int(self.scenario.get('attack_start_step', -1))),
+                 policy=m.get('policy', self.capture.policy if self.capture is not None else f'agent:{self.cfg.agent_type}'),
+                 mode=(self.capture.mode if self.capture is not None else 'train'), epsilon=float(self.agent.get_epsilon()),
                  reason=str(reason), delta_plan=self.scenario['plan'].delta, format='raw')
         self._cap_rows = []
 
@@ -1705,8 +1711,8 @@ class OnlineRLNode(Node):
         # (추락 벌점은 RewardTracker 가 terminated 로 처리 — 09-18)
         # ★2026-09-11 추락 벌점 없음(사용자 확정): 절벽 = terminated 부트스트랩 절단만. (잠시 넣었던 track-only −5 규칙 제거)
 
-        if self.capture is not None:                     # ★09-18 캡처: 기록만, 학습 없음
-            self._capture_log(state, nis_v_raw, nis_g_raw, done, term_reason)
+        if self._log_steps and not self.eval_mode:       # ★09-18 캡처(학습 없음) · 학습 중 스텝 기록
+            self._capture_log(state, nis_v_raw, nis_g_raw, done, term_reason, reward)
 
         # ── Transition 저장 + 비동기 학습 ──
         if self.prev_state is not None and self.prev_action is not None:

@@ -1,0 +1,3 @@
+# 강풍 체제 덮어쓰기 (Isaac 오버레이 뒤에 붙인다): 에피소드 전체 turbulence U(6,10)
+scenario:
+  wind: {mode: uniform, range: [6.0, 10.0]}
