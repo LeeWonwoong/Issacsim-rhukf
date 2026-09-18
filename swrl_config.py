@@ -484,7 +484,7 @@ class Config:
             _tilt(0.70, 0, 'aggressive', 0.0),  _tilt(0.70, 0, 'circle', 0.0),                                     # 강공격(easy)
             _tilt(0.40, _m.pi/4, 'aggressive', 0.0),                                                              # 동시축(방향 일반화)
         ]
-        os.makedirs(self.outdir, exist_ok=True)
+        # (결과 폴더는 train.py 가 만든다 — 설정 객체 생성만으로 ./results 를 만들지 않음, 09-18)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -508,117 +508,7 @@ def get_curriculum_intensity(episode: int, cfg: Config) -> Tuple[float, float]:
 # ══════════════════════════════════════════════════════════════
 #  시나리오 샘플러
 # ══════════════════════════════════════════════════════════════
-def sample_episode_scenario(episode: int, cfg: Config) -> dict:
-    """★2026-09-15 짝비교용 시나리오 RNG 고정: env SCENARIO_SEED=S 이면 (S, episode) 로 시드한 전역 random 상태에서 추첨하고 원상복구.
-    (없으면 기존처럼 전역 random — 정책의 ε-greedy 가 같은 RNG 를 소비해 학습기마다 시나리오가 갈라진다: isaac_v30 swirl/adam 실측)"""
-    _ss = os.environ.get('SCENARIO_SEED', '').strip()
-    if not _ss: return _sample_episode_scenario_impl(episode, cfg)
-    _st = random.getstate(); random.seed(int(_ss) * 1000003 + int(episode))
-    try: return _sample_episode_scenario_impl(episode, cfg)
-    finally: random.setstate(_st)
-
-
-def _sample_episode_scenario_impl(episode: int, cfg: Config) -> dict:
-    scenario = {
-        'pattern': random.choice(cfg.flight_patterns),
-        'attack_type': 'none',
-        'attack_intensity': 0.0,
-        'attack_start_step': 0,
-        'attack_end_step': 99999,
-        'attack_bursts': [],
-        'disturbance_type': 'none',
-        'wind_speed': 0.0,
-    }
-    if cfg.attack_enabled and random.random() > float(os.environ.get('PROB_NO_ATTACK', '') or cfg.prob_no_attack):   # ★2026-09-12 env
-        # ★ 2026-08-19 확정: torque-only 틸트 FDI. 방향 α=에피소드당 랜덤, 크기 δ=버스트마다 랜덤.
-        #   attack_bursts = [(start, end, roll_Nm, pitch_Nm)] — 버스트별 크기를 담아 주입 시 조회.
-        scenario['attack_type'] = 'tilt'
-        scenario['pattern'] = random.choice(getattr(cfg, 'attack_flight_patterns', cfg.flight_patterns))
-        scenario['attack_intensity'] = 1.0
-        alpha = random.uniform(0.0, 2.0 * math.pi)
-        A = cfg.attack_tq_authority_nm
-        dlo, dhi = cfg.attack_delta_range
-        # ★2026-09-01 STEALTH_FRAC: 약공격(≤0.3, 보상한계 아래=stealthy) 비율 env조절. 기본=균일(현행).
-        _stealth = float(os.environ.get('STEALTH_FRAC', '0') or 0.0)  # 0=균일 / 0.5,0.8=약공격 비율
-        def _bb():
-            if _stealth > 0 and random.random() < _stealth:
-                d = random.uniform(dlo, min(0.3, dhi))   # 약공격(stealthy)
-            else:
-                d = random.uniform(dlo, dhi)             # 균일(강 포함)
-            return (d * math.cos(alpha) * A, d * math.sin(alpha) * A, d)
-        t0 = random.randint(*cfg.attack_start_range)
-        emax = cfg.episode_max_steps - 5
-        # ★2026-09-08 결과성 클래스 (급작 강버스트 1회): track 유지 시 LOC = 에피 절단(절벽).
-        #   호버만이 막는다(실측 25/25). 그 외는 기존 약버스트 체인(탐지 채널).
-        if os.environ.get('ATK_FAMILY', '') == 'v5':
-            # ★2026-09-12 v5 단일 가족(사용자 확정): δ ~ 0.5·U(lo, split) + 0.5·U(split, hi), plateau ~ U(ON_LO, ON_HI),
-            #   온셋 ~ U(START_LO, START_HI), 버스트 1개/에피, 온셋 step(플랜트 τ). 결과성은 플랜트가 정한다(밴드 실측 09-11/12).
-            _lo = float(os.environ.get('ATK_DELTA_LO', '0.15')); _hi = float(os.environ.get('ATK_DELTA_HI', '0.84'))
-            _sp = float(os.environ.get('ATK_SPLIT', '0.72')); _pu = float(os.environ.get('ATK_P_UPPER', '0.5'))
-            d = random.uniform(_sp, _hi) if random.random() < _pu else random.uniform(_lo, _sp)
-            hold = random.randint(int(os.environ.get('ATK_ON_LO', '25')), int(os.environ.get('ATK_ON_HI', '50')))
-            t0 = random.randint(int(os.environ.get('ATK_START_LO', '60')), int(os.environ.get('ATK_START_HI', '200')))
-            r, p = d * math.cos(alpha) * A, d * math.sin(alpha) * A
-            scenario['attack_bursts'] = [(t0, min(t0 + hold, emax), r, p)]
-            scenario['bias_scale'] = d
-            scenario['lethal_class'] = bool(d >= 0.80)
-        elif random.random() < getattr(cfg, 'prob_lethal_attack', 0.0):
-            dl_lo, dl_hi = cfg.lethal_delta_range
-            d = random.uniform(dl_lo, dl_hi)
-            hold = random.randint(*cfg.lethal_hold_range)
-            r, p = d * math.cos(alpha) * A, d * math.sin(alpha) * A
-            scenario['attack_bursts'] = [(t0, min(t0 + hold, emax), r, p)]
-            scenario['bias_scale'] = d
-            scenario['lethal_class'] = True
-        elif random.random() < cfg.prob_constant_attack:
-            r, p, d = _bb()
-            scenario['attack_bursts'] = [(t0, emax, r, p)]
-            scenario['bias_scale'] = d
-        else:
-            bursts = []; t = t0; ds = []
-            while t < emax:
-                on = random.randint(*cfg.attack_burst_on_range)
-                r, p, d = _bb(); ds.append(d)
-                bursts.append((t, min(t + on, emax), r, p))
-                t += on + random.randint(*cfg.attack_burst_off_range)
-            scenario['attack_bursts'] = bursts
-            scenario['bias_scale'] = sum(ds) / len(ds) if ds else 0.0
-        scenario['attack_direction'] = alpha
-        scenario['attack_start_step'] = scenario['attack_bursts'][0][0]
-        scenario['attack_end_step'] = scenario['attack_bursts'][-1][1]
-
-    if cfg.disturbance_enabled:
-        # 항상 turbulence. nominal(약풍) 65% / 강풍 35%.
-        scenario['disturbance_type'] = 'wind_turbulence'
-        if random.random() < cfg.prob_strong_wind:
-            scenario['wind_speed'] = random.uniform(*cfg.wind_strong_range)
-            # ★FROZEN-ENV v2: 강풍은 윈도우로만 (안정화 후 온셋, 공격 burst 보다 긴 구간)
-            ws0 = random.randint(*cfg.wind_window_start_range)
-            scenario['wind_window'] = (ws0, min(ws0 + random.randint(*cfg.wind_window_len_range),
-                                                cfg.episode_max_steps - 5))
-        else:
-            scenario['wind_speed'] = random.uniform(*cfg.wind_nominal_range)
-    # ★2026-09-15 에피소드 스케줄 바람 티어 (Isaac v30 급변 블록 검증): env WIND_SCHED="0-59:0:0.6,7:0.4;60-109:10:1;110-:0:0.6,7:0.4"
-    #   → 해당 에피소드 구간의 티어 분포에서 ws 추첨. ws=0 → none, ws>0 → turbulence 를 창 WIND_WIN(기본 60,290, cert 캡처와 동일)에서만.
-    #   surrogate env8 의 SURR_TIER_SCHED 와 같은 문법. 설정되면 위 nominal/strong 추첨을 덮어쓴다.
-    _ws_sched = os.environ.get('WIND_SCHED', '').strip()
-    if _ws_sched:
-        spec = None
-        for seg in _ws_sched.split(';'):
-            rng_, sp_ = seg.split(':', 1); a_, _, b_ = rng_.partition('-')
-            if int(a_ or 0) <= episode and (b_ == '' or episode <= int(b_)): spec = sp_; break
-        if spec:
-            it = [(float(x.split(':')[0]), float(x.split(':')[1])) for x in spec.split(',')]; z = sum(p for _, p in it)
-            u = random.random() * z; acc = 0.0; ws = it[-1][0]
-            for w, p in it:
-                acc += p
-                if u <= acc: ws = w; break
-            scenario['wind_speed'] = float(ws)
-            scenario['disturbance_type'] = 'wind_turbulence' if ws > 0 else 'none'
-            _win = os.environ.get('WIND_WIN', '60,290').split(',')
-            if ws > 0: scenario['wind_window'] = (int(_win[0]), min(int(_win[1]), cfg.episode_max_steps - 5))
-            else: scenario.pop('wind_window', None)
-    return scenario
+# ★2026-09-18 구 Isaac 시나리오 샘플러(sample_episode_scenario, env 변수 의존) 제거 → env/scenario.py(sample_isaac_scenario)
 
 
 # ══════════════════════════════════════════════════════════════

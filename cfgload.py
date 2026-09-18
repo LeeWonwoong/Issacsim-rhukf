@@ -40,7 +40,7 @@ _ADAM_KEYS = {'lr', 'amsgrad', 'init', 'optimizer', 'loss', 'huber_beta', 'grad_
 _RUN_KEYS = {'name', 'seed', 'episodes', 'ep_steps', 'outdir', 'device'}
 _LOG_KEYS = {'probe_every', 'probe_n'}
 _ENV_KEYS = {'kind', 'surrogate', 'isaac'}
-_ISAAC_KEYS = {'headless', 'speed', 'sim_env', 'launcher', 'compile'}
+_ISAAC_KEYS = {'headless', 'speed', 'sim_env', 'launcher', 'compile', 'knobs', 'cfg'}
 _TOP = {'extends', 'run', 'env', 'scenario', 'obs', 'reward', 'agent', 'log'}
 
 
@@ -131,7 +131,7 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     _check(sur, _dc_keys(SurrogateConfig), 'env.surrogate')
     _check(sur.get('crash'), _dc_keys(CrashConfig), 'env.surrogate.crash')
     surrogate = SurrogateConfig(**sur)
-    isaac = dict(headless=True, speed=1.0, sim_env={}, launcher='isim', compile=True)
+    isaac = dict(headless=True, speed=1.0, sim_env={}, launcher='isim', compile=True, knobs={}, cfg={})
     _check(envd.get('isaac'), _ISAAC_KEYS, 'env.isaac'); isaac.update(envd.get('isaac') or {})
 
     # ── 평면 Config (학습기·Isaac 노드) ─────────────────────────────────────────────
@@ -183,6 +183,15 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     cfg.window_size = obs.window; cfg.dimS = obs.dim; cfg.obs_scale = [1.0] * obs.dim
     cfg.reward = reward; cfg.reward_scale = 1.0
     cfg.attack_tq_authority_nm = scenario.attack.authority_nm
+
+    # ── Isaac 전용: 노브(구 env 변수) + Config 필드 직접 설정(구 CLI 플래그: sweep·capture·deadline 등) ──
+    from env.knobs import set_knobs
+    set_knobs(isaac.get('knobs') or {})
+    for k, v in (isaac.get('cfg') or {}).items():
+        if not hasattr(cfg, k):
+            raise KeyError(f'설정 env.isaac.cfg.{k}: Config 에 없는 필드')
+        cur = getattr(cfg, k)
+        setattr(cfg, k, tuple(v) if isinstance(cur, tuple) and isinstance(v, list) else v)
 
     resolved = _deep_merge(d, {'run': run, 'log': log, 'env': {'kind': kind, 'isaac': isaac}})
     return SimpleNamespace(cfg=cfg, obs=obs, reward=reward, scenario=scenario, surrogate=surrogate,

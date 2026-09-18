@@ -21,6 +21,7 @@ import math
 import json
 import collections
 import os
+from env.knobs import knob   # ★09-18 env 변수 → YAML 노브
 import random
 import signal
 import subprocess
@@ -42,9 +43,11 @@ from nav_msgs.msg import Odometry as GroundTruthOdometry
 from std_msgs.msg import String
 
 import torch
-from swrl_config import Config, sample_episode_scenario, sweep_bias_vector
+from swrl_config import Config, sweep_bias_vector
 from env.ukf_filter import DynamicsUKF, compute_nis_scaled, load_calibration, to_physical_u
-from env.reward import calculate_reward
+from env.reward import RewardTracker
+from env.observation import ObsBuilder, ObsSpec
+from env.scenario import ScenarioConfig, sample_isaac_scenario
 from rl.agent import OnlineRHUKFAgent
 
 
@@ -56,18 +59,16 @@ from rl.agent import OnlineRHUKFAgent
 #   timeout·논리종료는 여기 넣지 않는다(truncation — 부트스트랩 유지).
 PHYSICAL_TERMINALS = ('crash_drift', 'crash_altitude', 'crash_flip')
 
-# env OBS_NORM=1 → 관측 압축 clip 3.5 후 /3.5 정규화([0,1]). off면 clip3.0([0,3], 기존).
-_OBS_NORM = os.environ.get('OBS_NORM', '') == '1'
-_OBS_CLIP = 3.5 if _OBS_NORM else 3.0
-_OBS_DIV = 3.5 if _OBS_NORM else 1.0
-# env OBS_CLIP=3.5 → 클립 상한만 변경(나눗셈 없음). 미설정시 기존과 완전 동일 (2026-08-29 변형실험 V3)
-if os.environ.get('OBS_CLIP'):
-    _OBS_CLIP = float(os.environ['OBS_CLIP'])
-# ★2026-08-24 POMDP화: 에피별 랜덤 COM 토크바이어스(UKF 미모델링) + GPS vel 노이즈.
-#   COM_BIAS_STD=0.10 → 매 에피 τ_com~U(-0.10,0.10)N·m(roll/pitch) → gyro 바닥↑·변동 → 약공격 묻힘(POMDP).
-#   = 배터리/페이로드 COM 변동(현실적, ~7mm). VEL_NOISE=0.3 → vel 바닥↑.
-_COM_BIAS_STD = float(os.environ.get('COM_BIAS_STD', '0') or 0)
-_VEL_NOISE = float(os.environ.get('UKF_VEL_NOISE', '0') or 0)
+# ★2026-09-18 관측 정의(압축·클립·정규화·창)는 env/observation.ObsSpec(YAML obs) 한 곳. 구 OBS_NORM/OBS_CLIP 폐기.
+# POMDP 노브(에피별 COM 토크바이어스 · GPS vel 노이즈)는 설정 로드 후 _apply_module_knobs() 로 갱신한다.
+_COM_BIAS_STD = 0.0
+_VEL_NOISE = 0.0
+
+
+def _apply_module_knobs():
+    global _COM_BIAS_STD, _VEL_NOISE
+    _COM_BIAS_STD = float(knob('COM_BIAS_STD', '0') or 0)
+    _VEL_NOISE = float(knob('UKF_VEL_NOISE', '0') or 0)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -76,7 +77,7 @@ _VEL_NOISE = float(os.environ.get('UKF_VEL_NOISE', '0') or 0)
 class SimProcessManager:
     def __init__(self, sim_script='run_sim.py', headless=True,
                  log_dir='./results', sim_launcher='~/isaacsim/python.sh',
-                 px4_ns='', kill_stale=True, speed_factor=1.0):
+                 px4_ns='', kill_stale=True, speed_factor=1.0, sim_env=None):
         self.sim_script = sim_script
         self.headless = headless
         self.log_dir = log_dir
@@ -84,6 +85,7 @@ class SimProcessManager:
         self.px4_ns = px4_ns
         self.kill_stale = kill_stale
         self.speed_factor = float(speed_factor)
+        self.sim_env = {str(k): str(v) for k, v in (sim_env or {}).items()}   # YAML env.isaac.sim_env → run_sim 서브프로세스 env
         self.process = None
         self._log_file = None
         os.makedirs(log_dir, exist_ok=True)
@@ -111,7 +113,7 @@ class SimProcessManager:
         self._log_file = open(log_path, 'w')
         self.process = subprocess.Popen(
             cmd, stdout=self._log_file, stderr=self._log_file,
-            preexec_fn=os.setsid)
+            preexec_fn=os.setsid, env=dict(os.environ, **self.sim_env))
         print(f"  [SimManager] Started PID={self.process.pid} "
               f"(cmd={' '.join(cmd[:3])}..., log={log_path})")
 
@@ -141,9 +143,10 @@ class SimProcessManager:
 #  Main Node
 # ══════════════════════════════════════════════════════════════
 class OnlineRLNode(Node):
-    def __init__(self, cfg):
+    def __init__(self, cfg, exp=None):
         super().__init__('online_rl_controller')
         self.cfg = cfg
+        self.exp = exp   # ★09-18 cfgload 실험 설정(관측·보상·시나리오 공용 모듈)
         self.step_dt = 0.02  # 50Hz
 
         qos = QoSProfile(
@@ -157,7 +160,8 @@ class OnlineRLNode(Node):
             log_dir=cfg.outdir, sim_launcher=cfg.sim_launcher,
             px4_ns=cfg.px4_namespace,
             kill_stale=getattr(cfg, 'kill_stale_px4_on_start', True),
-            speed_factor=getattr(cfg, 'sim_speed_factor', 1.0))
+            speed_factor=getattr(cfg, 'sim_speed_factor', 1.0),
+            sim_env=getattr(cfg, 'isaac_sim_env', {}))
         self.sim_mgr.start()
         self.get_logger().info(
             '  Sim 기동 대기: 첫 GT(/gt/odometry) 수신까지 IDLE 유지 '
@@ -187,7 +191,7 @@ class OnlineRLNode(Node):
         # ★ 2026-08-17 모델오차 주입: UKF calib 에만 오차(플랜트 run_sim 은 calibration.json 그대로).
         #   UKF≠플랜트 → 기동 중 모델오차 innovation 생성(실기 현실화). 센서노이즈론 안 생기는 aliasing.
         #   UKF_CALIB_ERR="ctq:0.1,cth:0.05,m:0.05" → UKF C_torque×1.1, C_thrust×1.05, mass×1.05.
-        _ce = os.environ.get('UKF_CALIB_ERR', '').strip()
+        _ce = knob('UKF_CALIB_ERR', '').strip()
         if _ce:
             import copy as _copy
             self.calib = _copy.deepcopy(self.calib)
@@ -208,7 +212,7 @@ class OnlineRLNode(Node):
             self.get_logger().warn(f'[UKF_CALIB_ERR] UKF 모델오차: C_torque×{_ctq:.2f} C_thrust×{_cth:.2f} mass×{_m:.2f} I×{_iI:.2f} (플랜트 불변)')
         # ★ 2026-08-18 진단: UKF_NO_COUPLING=1 → UKF 에서 추력-토크 커플링 보정항 제거(순수 12차원).
         #   플랜트(run_sim COM offset)는 커플링 유지 → UKF 가 PX4 트림토크를 실토크로 오해 = 표준모델 한계 재현.
-        if os.environ.get('UKF_NO_COUPLING', '') == '1':
+        if knob('UKF_NO_COUPLING', '') == '1':
             import copy as _cp2
             self.calib = _cp2.deepcopy(self.calib)
             _rm = self.calib.pop('torque_thrust_coupling', None)
@@ -230,24 +234,29 @@ class OnlineRLNode(Node):
         else:
             self.agent = OnlineRHUKFAgent(cfg)
         # ★2026-09-09 LOAD_MODEL=경로.pt → 학습된 정책 로드 + greedy 추론 모드 (시연/평가)
-        _lm = os.environ.get('LOAD_MODEL', '').strip()
+        _lm = knob('LOAD_MODEL', '').strip()
         if _lm:
             self.agent.load(_lm)
             try: self.agent.eps = 0.0
             except Exception: pass
             self.get_logger().warn(f'[LOAD_MODEL] {_lm} 로드 — greedy 추론 모드')
-        self.window_buffer = collections.deque(maxlen=cfg.window_size)
+        # ★09-18 관측·보상·시나리오 = 공용 모듈 (surrogate 와 같은 코드)
+        self.obs_spec = exp.obs if exp is not None else ObsSpec()
+        self.obs = ObsBuilder(self.obs_spec)
+        self.window_buffer = self.obs.buf          # 구 참조(clear) 호환 — 같은 deque
+        self.rtrack = RewardTracker(cfg.reward)
+        self.scen_cfg = exp.scenario if exp is not None else ScenarioConfig()
 
         # ── Sensor state ──
         self.cur_accel = np.zeros(3); self.cur_gyro = np.zeros(3)
         # ★2026-08-20 센서 σ 정합: gyro 노이즈(실기 실측) + 전역 스케일(스윕용).
-        self._sensor_noise_scale = float(os.environ.get('SENSOR_NOISE_SCALE', '1.0'))
+        self._sensor_noise_scale = float(knob('SENSOR_NOISE_SCALE', '1.0'))
         # ── 속도변조 (env SPEED_MOD_AMP>0): 같은 도형을 가감속하며 주행 (2026-08-21 실험용) ──
         #   OFF(기본 0)면 궤적은 현재와 수학적으로 동일. 가감속이 gyro 추정오차를 얼마나 만드는지 측정용.
-        self._speed_mod_amp = float(os.environ.get('SPEED_MOD_AMP', '0') or 0.0)
-        self._speed_mod_freq = float(os.environ.get('SPEED_MOD_FREQ', '0.5') or 0.5)
-        self._alt_mod_amp = float(os.environ.get('ALT_MOD_AMP', '0') or 0.0)    # ★2026-09-08 고도변조(m)
-        self._alt_mod_freq = float(os.environ.get('ALT_MOD_FREQ', '0.3') or 0.3)
+        self._speed_mod_amp = float(knob('SPEED_MOD_AMP', '0') or 0.0)
+        self._speed_mod_freq = float(knob('SPEED_MOD_FREQ', '0.5') or 0.5)
+        self._alt_mod_amp = float(knob('ALT_MOD_AMP', '0') or 0.0)    # ★2026-09-08 고도변조(m)
+        self._alt_mod_freq = float(knob('ALT_MOD_FREQ', '0.3') or 0.3)
         #   ★2026-08-27 1.0→0.5 (버그 수정): freq 1.0 은 접선가속 피크 v·amp·2πf = 3.77 m/s² 로
         #   MPC_ACC_HOR 3.0 을 초과 — 추종 불가 명령 → 상시 가속포화 → 사냥(hunting) 진동
         #   (실측: 실제 |v| 중앙 0.43 vs 설계 1.2, 경로이탈 90p 0.65 m). 0.5 는 피크 1.88,
@@ -269,8 +278,8 @@ class OnlineRLNode(Node):
         self.step_count = 0; self.tick_count = 0
         self.init_counter = 0; self.stable_counter = 0; self.theta = 0.0
         # ★ 2026-08-13 궤적 명령 후처리 옵션 (env). 둘 다 sim·실기 동일 적용해야 비교 성립.
-        self._yaw_slew_rate = float(os.environ.get('YAW_SLEW_RATE', '1.57') or 0.0)  # rad/s, 0=끔
-        self._accel_ff = os.environ.get('ACCEL_FF', '0') not in ('', '0')
+        self._yaw_slew_rate = float(knob('YAW_SLEW_RATE', '1.57') or 0.0)  # rad/s, 0=끔
+        self._accel_ff = knob('ACCEL_FF', '0') not in ('', '0')
         self._yaw_cmd_prev = None; self._vel_cmd_prev = None
         self.prev_state = None; self.prev_action = None
         self.episode_reward = 0.0; self.is_ukf_initialized = False
@@ -296,7 +305,7 @@ class OnlineRLNode(Node):
         self._ep_min_alt = 999.0          # [진단] 공격중 최저 고도(m) — 침하 확인용
 
         # ── Evaluation mode ──
-        self.eval_mode = bool(os.environ.get('FORCE_EVAL',''))   # FORCE_EVAL=1: 전 에피 greedy·learn OFF (추론 시연)
+        self.eval_mode = bool(knob('FORCE_EVAL',''))   # FORCE_EVAL=1: 전 에피 greedy·learn OFF (추론 시연)
         self.eval_scenario_idx = 0
         self.current_eval_results = []
         self.eval_history = []
@@ -524,7 +533,7 @@ class OnlineRLNode(Node):
 
         msg.timestamp = 0
         # ── 디버그: env SETPOINT_LOG=경로 → 보낸 setpoint 전량 기록 (2026-08-27 추종 진단용) ──
-        _spl = os.environ.get('SETPOINT_LOG', '')
+        _spl = knob('SETPOINT_LOG', '')
         if _spl:
             try:
                 with open(_spl, 'a') as _f:
@@ -561,17 +570,17 @@ class OnlineRLNode(Node):
         e = _np.array([float(anc[0]) - float(self.cur_pos[0]),
                        float(anc[1]) - float(self.cur_pos[1])])
         v = _np.array([float(self.cur_vel[0]), float(self.cur_vel[1])])
-        Kp = float(os.environ.get('HOVER_ATT_KP', '3.0') or 3.0)
-        Kd = float(os.environ.get('HOVER_ATT_KD', '2.5') or 2.5)
+        Kp = float(knob('HOVER_ATT_KP', '3.0') or 3.0)
+        Kd = float(knob('HOVER_ATT_KD', '2.5') or 2.5)
         a_h = Kp * e - Kd * v                                     # 목표 수평가속 (m/s^2)
-        if os.environ.get('HOVER_ATT_LEVEL'):                     # 진단: 반격 없음(순수 수평)
+        if knob('HOVER_ATT_LEVEL'):                     # 진단: 반격 없음(순수 수평)
             a_h = _np.zeros(2)
-        a_max = float(os.environ.get('HOVER_A_MAX', '12.0') or 12.0)  # 수평가속 상한 (전권한)
+        a_max = float(knob('HOVER_A_MAX', '12.0') or 12.0)  # 수평가속 상한 (전권한)
         an = float(_np.linalg.norm(a_h))
         if an > a_max: a_h = a_h * (a_max / an)
         g = 9.81
         # 고도 P → 수직 가속 보정
-        _kpz = float(os.environ.get('HOVER_ALT_KP', '3.0') or 3.0)
+        _kpz = float(knob('HOVER_ALT_KP', '3.0') or 3.0)
         az = _kpz * float(self._hover_alt - self.cur_pos[2])      # NED: hover_alt(<0) 위, 오차 위로+
         # 추력 벡터 (NED, z 음수=위). t = [a_hN, a_hE, -(g+az)]
         t = _np.array([float(a_h[0]), float(a_h[1]), -(g + az)])
@@ -601,7 +610,7 @@ class OnlineRLNode(Node):
             qx=(R[0,2]+R[2,0])/S; qy=(R[1,2]+R[2,1])/S; qz=0.25*S
         msg = VehicleAttitudeSetpoint()
         msg.q_d = [float(qw), float(qx), float(qy), float(qz)]
-        _hov = float(os.environ.get('HOVER_THR', '0.35') or 0.35)
+        _hov = float(knob('HOVER_THR', '0.35') or 0.35)
         thr = _hov * tn / g                                       # 추력 크기 ∝ |t|/g (호버=0.35)
         thr = max(0.15, min(0.85, float(thr)))
         msg.thrust_body = [0.0, 0.0, -thr]
@@ -983,7 +992,7 @@ class OnlineRLNode(Node):
         self._yaw_cmd_prev = None; self._vel_cmd_prev = None   # 궤적 후처리 상태 리셋(2026-08-13)
         self.prev_state = None; self.prev_action = None
         self.episode_reward = 0.0; self.episode_losses = []; self.attack_active_flag = False
-        self.window_buffer.clear(); self.gps_updated = False
+        self.obs.reset(); self.rtrack.reset(); self.gps_updated = False
         self.first_hover_step = None; self.hover_before_attack_count = 0
         self._hover_latched = False; self._ep_relapse = 0; self._ep_min_alt = 999.0; self._pprev_action = None
         self._ep_max_roll = 0.0; self._ep_max_pitch = 0.0   # 마감분석: 에피소드 최대 자세이탈
@@ -1019,7 +1028,7 @@ class OnlineRLNode(Node):
             self.episode += 1
             if self.episode > self.cfg.max_episodes:
                 self._finish_training(); return
-            self.scenario = sample_episode_scenario(self.episode, self.cfg)
+            self.scenario = self._sample_scenario(self.episode)
             label = f'TRAIN Ep {self.episode}/{self.cfg.max_episodes}'
 
         atk = self.scenario
@@ -1051,9 +1060,35 @@ class OnlineRLNode(Node):
         self._cur_burst_bias = (0.0, 0.0)
         self._last_burst_end = None
 
+    def _sample_scenario(self, episode):
+        """★09-18 공용 샘플러(env/scenario.py). 난수 = (seed, episode) → 학습기와 무관하게 같은 시나리오(짝 비교).
+        공격 세기는 스텝별 δ(t)(plan) 로 주입하고, attack_bursts 는 활성 구간(로그·구 코드 호환)만 담는다."""
+        rng = np.random.default_rng([int(self.cfg.seed) & 0xFFFFFFFF, int(episode)])
+        sc = sample_isaac_scenario(rng, self.scen_cfg, self.cfg.episode_max_steps)
+        plan = sc['plan']
+        on = np.flatnonzero(plan.active); segs = []
+        if len(on):
+            cut = np.flatnonzero(np.diff(on) > 1)
+            starts = np.r_[on[0], on[cut + 1]]; ends = np.r_[on[cut], on[-1]] + 1
+            segs = [(int(a), int(b)) for a, b in zip(starts, ends)]
+        return dict(pattern=sc['pattern'], attack_type=('tilt' if plan.has_attack else 'none'),
+                    attack_intensity=(1.0 if plan.has_attack else 0.0), attack_bursts=segs,
+                    attack_start_step=(segs[0][0] if segs else 0), attack_end_step=(segs[-1][1] if segs else 99999),
+                    disturbance_type=sc['disturbance_type'], wind_speed=sc['wind_speed'],
+                    bias_scale=plan.dmax, attack_direction=plan.direction, attack_class=plan.cls, plan=plan)
+
+    def _plan_bias(self, step):
+        """plan 이 있으면 이 스텝의 (공격 여부, roll_Nm, pitch_Nm). 없으면 None(구 버스트 방식)."""
+        plan = self.scenario.get('plan') if self.scenario else None
+        if plan is None:
+            return None
+        k = min(int(step), plan.n - 1)
+        d = float(plan.delta[k]); A = self.cfg.attack_tq_authority_nm; al = float(plan.direction or 0.0)
+        return bool(plan.active[k]), d * A * math.cos(al), d * A * math.sin(al)
+
     def _check_done(self, trajectory_sp):
         dist = math.hypot(self.cur_pos[0]-trajectory_sp[0], self.cur_pos[1]-trajectory_sp[1])
-        _maxerr = float(os.environ.get('DRIFT_MAX_ERR', '0') or 0) or self.cfg.max_error  # 실험용 완화
+        _maxerr = float(knob('DRIFT_MAX_ERR', '0') or 0) or self.cfg.max_error  # 실험용 완화
         # drift는 순간 스파이크가 아니라 지속 이탈일 때만 종료 (transient 보호)
         if dist >= _maxerr:
             self.drift_counter += 1
@@ -1064,7 +1099,7 @@ class OnlineRLNode(Node):
             # ★2026-09-14 공격 조건부 지오펜스(env ATK_COND_DONE=K 스텝, 기본 0=무조건): 결과성 = "하이재킹 미대응의 결과" 이므로
             #   최근 K 스텝 안에 공격이 없었던 이탈(바람 단독, cert_WIND ws10 1/20 실측)은 종료하지 않는다 — 절단은 벌점 없어도
             #   남은 TN 보상이 사라져 결정과 무관한 암묵적 벌점이 되기 때문. surrogate 절벽(치명 에피 전용)과도 정합.
-            _K = int(os.environ.get('ATK_COND_DONE', '0') or 0)
+            _K = int(knob('ATK_COND_DONE', '0') or 0)
             if _K > 0 and (getattr(self, '_last_atk_step', None) is None or self.step_count - self._last_atk_step > _K):
                 self._wind_drift_events = getattr(self, '_wind_drift_events', 0) + 1
                 if self._wind_drift_events == 1 or self._wind_drift_events % 50 == 0:
@@ -1074,7 +1109,7 @@ class OnlineRLNode(Node):
             return True, 'crash_drift'
         if self.cur_pos[2] > self.cfg.min_altitude: return True, 'crash_altitude'
         # ★2026-09-11 사용자 확정: 종료 = 지면 충돌(고도) ∨ 비행공간 이탈(drift) 뿐. 각도 규칙(60°)은 기본 OFF (FLIP_TERMINAL=1 로만 복원).
-        if os.environ.get('FLIP_TERMINAL', '0') not in ('', '0') and (abs(self.cur_euler[0]) > 1.05 or abs(self.cur_euler[1]) > 1.05): return True, 'crash_flip'
+        if knob('FLIP_TERMINAL', '0') not in ('', '0') and (abs(self.cur_euler[0]) > 1.05 or abs(self.cur_euler[1]) > 1.05): return True, 'crash_flip'
         if self.step_count >= self.cfg.episode_max_steps: return True, 'timeout'
         return False, None
 
@@ -1156,7 +1191,7 @@ class OnlineRLNode(Node):
             f'R={self.episode_reward:.1f} | Steps={self.step_count} | DetDelay={dd} | FA={fa_rate:.2f}')
 
     def _finish_eval_round(self):
-        self.eval_mode = bool(os.environ.get("FORCE_EVAL", ""))
+        self.eval_mode = bool(knob("FORCE_EVAL", ""))
         results = self.current_eval_results
         survival_rate = np.mean([r['survived'] for r in results])
         mean_rr = np.mean([r['reward_rate'] for r in results])
@@ -1190,7 +1225,7 @@ class OnlineRLNode(Node):
         #   이번 틱 자세-수평 홀드 여부를 offboard 모드 발행 전에 확정(모드↔셋포인트 일치).
         self._att_hold_active = bool(self.flight_state == 'LEARNING'
                                      and getattr(self, 'prev_action', 0) == 1
-                                     and os.environ.get('HOVER_ATT'))
+                                     and knob('HOVER_ATT'))
         if self.flight_state in ('SOFT_RECOVERY', 'TAKEOFF', 'STABILIZE', 'LEARNING'):
             self._publish_offboard()
 
@@ -1339,7 +1374,7 @@ class OnlineRLNode(Node):
                 #              포화 회피(구 사수-flip 진단은 구플랜트·구공격 산물 — 재검 대상)
                 #     매우 큼 = 사실상 좌표 사수
                 #   고도·yaw latch 유지, 속도목표 0. (soft hold 2026-07-23 주석은 이력으로 대체)
-                _emax = float(os.environ.get('HOVER_EMAX', '1e9') or 1e9)   # ★기본=강제 홀딩(사수). 07-23 flip 트레이드 부재 재검 완료(roll 47.6<60)
+                _emax = float(knob('HOVER_EMAX', '1e9') or 1e9)   # ★기본=강제 홀딩(사수). 07-23 flip 트레이드 부재 재검 완료(roll 47.6<60)
                 if _emax > 0.0:
                     _anc = getattr(self, '_hover_anchor', None)
                     if _anc is None:
@@ -1349,7 +1384,7 @@ class OnlineRLNode(Node):
                     if _d > _emax:
                         _anc = _anc + _err * (1.0 - _emax / _d)   # 앵커가 e_max 밖으로는 끌려옴
                     self._hover_anchor = _anc
-                    _hg = float(os.environ.get('HOVER_HARD_GAIN', '0') or 0)  # ★사수모드: 앵커 너머 가상타깃+속도FF
+                    _hg = float(knob('HOVER_HARD_GAIN', '0') or 0)  # ★사수모드: 앵커 너머 가상타깃+속도FF
                     if _hg > 0.0:
                         _e = _anc - np.array([float(self.cur_pos[0]), float(self.cur_pos[1])])  # 앵커로의 오차
                         _tgt = _anc + _hg * _e                                    # 앵커 너머로 목표 밀기(공격적 P)
@@ -1366,17 +1401,17 @@ class OnlineRLNode(Node):
                 #   호버 중 drift 판정 비활성(구 soft-hold 의 의미론 복원). 명령(control_sp)은 앵커.
                 #   (이거 없으면 사수 홀드가 밀리는 과도 중에 crash_drift 로 잘림 — δ0.8 실측 +2.5s 절단)
                 # ★2026-09-12 종료 규칙 대칭(사용자 확정): hover 중에도 앵커 기준 10 m·1 s 지오펜스 적용 (HOVER_DRIFT_SYM=0 이면 구 면제)
-                if os.environ.get('HOVER_DRIFT_SYM', '1') not in ('', '0') and _emax > 0.0:
+                if knob('HOVER_DRIFT_SYM', '1') not in ('', '0') and _emax > 0.0:
                     trajectory_sp = (float(self._hover_anchor[0]), float(self._hover_anchor[1]),
                                      float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
                 else:
                     trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
                                      float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
                 self._did_hover = True   # ★재접근은 '호버 후 복귀'에서만 — 무대응 track 은 재접근 안함(hijack 노출)
-            elif (not os.environ.get('NAIVE_TRACK')) and getattr(self, '_did_hover', False) and (getattr(self, '_reengaging', False) or (
+            elif (not knob('NAIVE_TRACK')) and getattr(self, '_did_hover', False) and (getattr(self, '_reengaging', False) or (
                  getattr(self, '_last_traj_sp', None) is not None and
                  (lambda _n: math.hypot(self.cur_pos[0]-_n[0], self.cur_pos[1]-_n[1])
-                     > float(os.environ.get('REENGAGE_R', '2.0') or 2.0))(self._nearest_xy()))):
+                     > float(knob('REENGAGE_R', '2.0') or 2.0))(self._nearest_xy()))):
                 # ★2026-08-27 재접근 — "강제 홀딩 후 원궤적 복귀 기동". 목표 = 궤적 **최근접점**
                 #   (동결점 아님 → 지나온 경로 역주행 방지). 도달(REENGAGE_R 안)하면 시계가 그
                 #   phase 로 재동기된 채 정상 track 으로 넘어가 전진 재개. 판정은 유예(현재위치).
@@ -1385,7 +1420,7 @@ class OnlineRLNode(Node):
                 _tx, _ty = float(_tgt[0]), float(_tgt[1])
                 _dx, _dy = _tx - float(self.cur_pos[0]), _ty - float(self.cur_pos[1])
                 _dd = math.hypot(_dx, _dy)
-                if _dd <= float(os.environ.get('REENGAGE_R', '2.0') or 2.0):
+                if _dd <= float(knob('REENGAGE_R', '2.0') or 2.0):
                     self._reengaging = False; self._did_hover = False   # 도달 → 순수 track 재개
                 _vap = min(self.cfg.flight_radius * self.cfg.flight_omega * 1.4,
                            math.sqrt(max(2.0 * 2.0 * (_dd - 0.5), 0.01)))
@@ -1517,10 +1552,10 @@ class OnlineRLNode(Node):
     def _rl_step_10hz(self, trajectory_sp):
         cfg = self.cfg
 
-        nis_v_raw, nis_vel = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0, clip=_OBS_CLIP)  # OBS_NORM시 clip3.5
-        nis_g_raw, nis_gyr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0, clip=_OBS_CLIP)
+        # ★09-18 원시 NIS 만 계산하고 관측 변환은 ObsBuilder(ObsSpec) 가 한다 (surrogate 와 같은 코드)
+        nis_v_raw = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)[0]
+        nis_g_raw = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)[0]
         nis_p_raw, nis_p = compute_nis_scaled(self.last_res[0:3], self.last_Pzz[0:3, 0:3], 3.0)    # pos NIS(로깅 전용, 정책 입력 아님)
-        nis_vel /= _OBS_DIV; nis_gyr /= _OBS_DIV   # OBS_NORM=1 → /3.5 정규화([0,1]), off면 무변화
         self._last_nis_raw = (nis_v_raw, nis_g_raw)   # 디버그 로깅용
 
         if self.step_count < cfg.learning_warmup_steps:
@@ -1537,17 +1572,13 @@ class OnlineRLNode(Node):
                 self._send_scenario_cmd(dist_override='none', ws_override=0.0); self._wind_win_on = False
                 self.get_logger().info(f'  🌬 강풍 윈도우 OFF @ step {self.step_count}')
 
-        act_val = float(self.prev_action if self.prev_action is not None else 0.0)
-        if getattr(cfg, '_gyro_only', False):   # GYRO_ONLY ablation: vel 채널 제거
-            self.window_buffer.append([nis_gyr, act_val])
-        else:
-            self.window_buffer.append([nis_vel, nis_gyr, act_val])
-
-        if len(self.window_buffer) < cfg.window_size:
+        state = self.obs.push(nis_v_raw, nis_g_raw, int(self.prev_action if self.prev_action is not None else 0))
+        nis_vel, nis_gyr = self.obs.last_scaled     # 로그용 정책 입력 스칼라
+        if state is None:
             self.step_count += 1; return
 
-        state = np.array(self.window_buffer).flatten()
         done, term_reason = self._check_done(trajectory_sp)
+        _terminated_phys = term_reason in PHYSICAL_TERMINALS
 
         attack_delay = 0
         recovery_delay = 0
@@ -1570,21 +1601,9 @@ class OnlineRLNode(Node):
         # FP 인자: 공격직후 recovery는 recovery_delay(offset grace); 순수오탐은 연속 hover 카운트(첫스텝 -1 점증).
         fp_rec_arg = (min(recovery_delay, 5) if self._last_burst_end is not None
                       else min(self.continuous_fp_count, 5))
-        reward = calculate_reward(
-            self.prev_action if self.prev_action is not None else 0,
-            self.attack_active_flag,
-            min(attack_delay, 5),      # FN: attack_delay (onset grace + 에스컬레이션)
-            fp_rec_arg,                # FP: recovery_delay (offset grace) or 큰값(순수오탐)
-            rc=self.cfg.reward,
-            relapse=bool(self.attack_active_flag and self.prev_action == 0
-                         and getattr(self, '_pprev_action', None) == 1),   # ★2026-09-10 재발 벌점(RELAPSE_PEN)
-        )
-        # ★2026-09-07 terminal_penalty 삭제(사용자 확정): 절벽 = 보상이 아니라 에피 절단.
-        #   CartPole 동형 — 추락하면 TN +0.5 흐름이 끊기는 것 자체가 절벽(γ0.85 가치 3.3 + 직전 FN 사슬).
-        #   보상은 TP/TN/FP/FN 4개뿐. 절단 반영은 아래 terminated(PHYSICAL_TERMINALS)가 담당.
-        # ── LL원리 보상 스케일링: 타깃 T_Var를 필터 R에 정합(loss 수렴 목적). push·로그 모두 스케일 단위 ──
-        #   ※ F1/delay/crash 등 탐지지표는 reward 무관이라 실단위 유지. reward_sum만 스케일됨.
-        reward *= getattr(cfg, 'reward_scale', 1.0)
+        # ★09-18 보상 = env/reward.RewardTracker (label4|cost, 추락 벌점·배율 포함; surrogate 와 같은 코드)
+        reward = self.rtrack.step(self.prev_action if self.prev_action is not None else 0,
+                                  self.attack_active_flag, attack_delay, terminated=_terminated_phys)
         self.episode_reward += reward
 
         # ── confusion/지연 메트릭 누적 (prev_action vs 공격상태) ──
@@ -1614,10 +1633,7 @@ class OnlineRLNode(Node):
 
         # ── 부트스트랩용 terminal: 물리적 crash만 True (timeout·논리종료는 truncation) ──
         terminated = term_reason in PHYSICAL_TERMINALS
-        # ★2026-09-12 추락 벌점 A/B (env TERMINAL_PEN, 기본 0 = 절단만). 사용자 요청: SWIRL/Adam × {0, −5} 비교.
-        _tp = float(getattr(cfg.reward, 'terminal_penalty', 0.0) or 0.0)
-        if terminated and _tp:
-            _tp *= getattr(cfg, 'reward_scale', 1.0); reward += _tp; self.episode_reward += _tp
+        # (추락 벌점은 RewardTracker 가 terminated 로 처리 — 09-18)
         # ★2026-09-11 추락 벌점 없음(사용자 확정): 절벽 = terminated 부트스트랩 절단만. (잠시 넣었던 track-only −5 규칙 제거)
 
         # ── Transition 저장 + 비동기 학습 ──
@@ -1641,7 +1657,7 @@ class OnlineRLNode(Node):
                 action = self.agent.act(state, eps)
         # ★2026-09-13 약속 hover (env HOVER_DWELL=D, 기본 0=끔): hover 선언 후 D−1 스텝은 선택 없이 hover 유지(환경 동역학 = failsafe 래치).
         #   저장되는 transition 의 행동은 실행된 행동(강제 hover 포함). Hammar&Stadler 2022 다중정지의 '정지=지속되는 방어행동' 과 동일 구조.
-        _dw = int(os.environ.get('HOVER_DWELL', '0') or 0)
+        _dw = int(getattr(cfg, 'hover_dwell', 0) or 0)
         if _dw > 0:
             if getattr(self, '_dwell_left', 0) > 0:
                 action = 1; self._dwell_left -= 1
@@ -1681,12 +1697,16 @@ class OnlineRLNode(Node):
             self._ep_min_alt = min(self._ep_min_alt, -float(self.cur_pos[2]))
 
         # ── Attack burst on/off (버스트 경계에서 토글) ──
-        want_attack = (self.scenario['attack_type'] != 'none') and self._is_attack_step(self.step_count)
+        _pb = self._plan_bias(self.step_count)   # ★09-18 공용 샘플러 δ(t) 프로파일 (없으면 구 버스트 방식)
+        if _pb is not None:
+            want_attack = _pb[0]
+        else:
+            want_attack = (self.scenario['attack_type'] != 'none') and self._is_attack_step(self.step_count)
         if want_attack and not self.attack_active_flag:
             sc = self.scenario
             if sc['attack_type'] == 'tilt':
                 # ★ 2026-08-19 틸트 FDI: 이 버스트의 (roll_Nm, pitch_Nm)를 조회해 주입.
-                _gx, _gz = self._current_burst_bias(self.step_count)
+                _gx, _gz = (_pb[1], _pb[2]) if _pb is not None else self._current_burst_bias(self.step_count)
                 _gt = 0.0; _int = 1.0
                 self._cur_burst_bias = (_gx, _gz)
                 self._send_attack_cmd(True, 'tilt', 1.0,
@@ -1706,15 +1726,20 @@ class OnlineRLNode(Node):
                 f'  🚨 Attack ON (burst) @ step {self.step_count}: {self.scenario["attack_type"]} '
                 f'| int={_int:.2f} → τx={_int*_gx:+.3f} τy/z={_int*_gz:+.3f} N·m, '
                 f'thrust={_int*_gt:+.2f} N')
-        elif want_attack and self.attack_active_flag and os.environ.get('HIJACK_TARGET'):
+        elif want_attack and self.attack_active_flag and _pb is not None and \
+                (abs(_pb[1] - self._cur_burst_bias[0]) > 1e-9 or abs(_pb[2] - self._cur_burst_bias[1]) > 1e-9):
+            # ★09-18 δ(t) 프로파일: 버스트 중 세기가 바뀌면 재발행 (v5 계단형은 버스트 동안 일정 → 재발행 없음)
+            self._cur_burst_bias = (_pb[1], _pb[2])
+            self._send_attack_cmd(True, 'tilt', 1.0, bias_torque_xy=_pb[1], bias_torque_z=_pb[2], bias_thrust_n=0.0)
+        elif want_attack and self.attack_active_flag and knob('HIJACK_TARGET'):
             # ★2026-08-27 B 유인공격(closed-loop): burst 시간구조는 A와 동일, 방향만 매 스텝
             #   해커 목표점 방향으로 갱신 재발행. HIJACK_TARGET="N,E" (NED 수평 목표) + HIJACK_DELTA.
             try:
-                _tn, _te = [float(v) for v in os.environ['HIJACK_TARGET'].split(',')]
+                _tn, _te = [float(v) for v in knob('HIJACK_TARGET').split(',')]
                 _dn = _tn - float(self.gt_pos[1]); _de = _te - float(self.gt_pos[0])  # gt_pos=(E,N,U)?→NED 변환은 아래 일관
                 _dd = math.hypot(_dn, _de)
                 if _dd > 1e-3:
-                    _dl = float(os.environ.get('HIJACK_DELTA', '0.5')) * self.cfg.attack_tq_authority_nm
+                    _dl = float(knob('HIJACK_DELTA', '0.5')) * self.cfg.attack_tq_authority_nm
                     _gx = _dl * (_dn/_dd); _gz = _dl * (_de/_dd)   # roll/pitch = 목표방향 성분
                     self._cur_burst_bias = (_gx, _gz)
                     self._send_attack_cmd(True, 'tilt', 1.0, bias_torque_xy=_gx, bias_torque_z=_gz, bias_thrust_n=0.0)
@@ -1923,14 +1948,14 @@ class OnlineRLNode(Node):
             cells = []; extra = []   # extra[i] = (disturbance_type, wind_speed)
             # track 셀: 패턴 비행 중 하이재킹 → crash 나면 나는 대로 기록(현실 조건)
             #   env CAPTURE_POLICIES="track,whover2" 지정 시 정책 확장(지정 시 자동 hover 셀 생략)
-            _cap_pols = [x for x in os.environ.get('CAPTURE_POLICIES', 'track').split(',') if x]
+            _cap_pols = [x for x in knob('CAPTURE_POLICIES', 'track').split(',') if x]
             for pat in cfg.capture_patterns:
                 for (dist, ws) in cfg.capture_disturbances:
                     for b in biases:
                         for _pol in _cap_pols:
                             cells.append((float(b), _pol, pat)); extra.append((dist, float(ws)))
             n_track = len(cells)
-            if os.environ.get('CAPTURE_POLICIES'):
+            if knob('CAPTURE_POLICIES'):
                 cap = 'normal'   # 아래 자동 hover 셀 생략 (커스텀 정책 모드)
             # hover 셀(hijack만): 강제 원점호버 → 온셋 후 생존(basin)해 under-attack NIS 장기관측.
             #   pattern은 무관(action=1이면 _compute_setpoint 미호출·trajectory_sp=hover라 drift 오탐 없음) → dist×bias만 순회(중복 제거).
@@ -2010,13 +2035,13 @@ class OnlineRLNode(Node):
         # ★ 2026-08-17 시간창: 공격/바람을 에피소드 내 창으로 (겹침구간 생성).
         #   SWEEP_ATK_START/END = 공격 창(스텝),  WIND_START/END = 바람 창(스텝).
         #   WIND_START≥0 이면 바람도 창(시작 clean → WIND_START on → WIND_END off).
-        s = int(os.environ.get('SWEEP_ATK_START', s))
-        self._atk_end = int(os.environ.get('SWEEP_ATK_END', '99999'))
-        self._wind_start = int(os.environ.get('WIND_START', '-1'))
-        self._wind_end = int(os.environ.get('WIND_END', '99999'))
+        s = int(knob('SWEEP_ATK_START', s))
+        self._atk_end = int(knob('SWEEP_ATK_END', '99999'))
+        self._wind_start = int(knob('WIND_START', '-1'))
+        self._wind_end = int(knob('WIND_END', '99999'))
         self.scenario = {
             'pattern': self.sweep_pattern_cur,
-            'attack_type': os.environ.get('SWEEP_ATTACK_TYPE', 'loe_combined'),  # 2026-08-13 roll 전용 스윕용
+            'attack_type': knob('SWEEP_ATTACK_TYPE', 'loe_combined'),  # 2026-08-13 roll 전용 스윕용
             'attack_intensity': 1.0, 'attack_start_step': s,
             'attack_end_step': self._atk_end, 'attack_bursts': [(s, self._atk_end)],
             'disturbance_type': _dist,     # 로깅용 셀 배정값(창 무관 상수)
@@ -2039,10 +2064,10 @@ class OnlineRLNode(Node):
         #   SWEEP_BURST 미설정        → 상수(단일 창 [s,∞)), γ_k=1 지속
         #   SWEEP_BURST="on,off"      → 고정 주기 펄스 (ON on / OFF off 스텝 반복)
         #   SWEEP_BURST="rand:a,b,c,d"→ 무작위 지시함수(표준 FDI): ON~U(a,b), OFF~U(c,d) 스텝
-        _burst_env = os.environ.get('SWEEP_BURST', '').strip()
+        _burst_env = knob('SWEEP_BURST', '').strip()
         _atk_hi = min(self._atk_end, self.cfg.episode_max_steps)   # 공격 창 상한
         # ★2026-09-07 SWEEP_ATK_WINDOWS="s1-e1,s2-e2,…" : 명시적 다중 공격창 (시나리오 타임라인 그림용).
-        _win_env = os.environ.get('SWEEP_ATK_WINDOWS', '').strip()
+        _win_env = knob('SWEEP_ATK_WINDOWS', '').strip()
         if _win_env:
             self.attack_bursts = [(int(w.split('-')[0]), int(w.split('-')[1])) for w in _win_env.split(',')]
         elif _burst_env.startswith('rand:'):
@@ -2076,7 +2101,7 @@ class OnlineRLNode(Node):
         if fs is None:
             from env.failsafe_params import FailsafeParams
             fs = self._fs = FailsafeParams(log=lambda m: self.get_logger().info(m))
-        if os.environ.get('FAILSAFE_ALWAYS', '') not in ('', '0'): on = True   # D 실험: 평시에도 failsafe 파라미터 상시 적용
+        if knob('FAILSAFE_ALWAYS', '') not in ('', '0'): on = True   # D 실험: 평시에도 failsafe 파라미터 상시 적용
         (fs.engage if on else fs.release)()
 
     def _sweep_step_10hz(self, trajectory_sp):
@@ -2092,17 +2117,16 @@ class OnlineRLNode(Node):
 
         if self.sweep_policy == 'model':
             # ★2026-09-15 학습 정책 greedy 롤아웃(LOAD_MODEL): RL 루프(_rl_step_10hz)와 같은 관측 [vel, gyro, 이전행동]×W·클립/정규화·약속 hover(HOVER_DWELL)
-            _nv = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0, clip=_OBS_CLIP)[1] / _OBS_DIV
-            _ng = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0, clip=_OBS_CLIP)[1] / _OBS_DIV
-            _pa = float(self.prev_action if self.prev_action is not None else 0.0)
+            _nvr = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)[0]
+            _ngr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)[0]
             if self.step_count == cfg.learning_warmup_steps: self._dwell_left = 0
-            self.window_buffer.append([_ng, _pa] if getattr(cfg, '_gyro_only', False) else [_nv, _ng, _pa])
-            if len(self.window_buffer) < cfg.window_size:
+            _st = self.obs.push(_nvr, _ngr, int(self.prev_action if self.prev_action is not None else 0))
+            if _st is None:
                 action = 0
             else:
                 with self._learn_lock:
-                    action = int(self.agent.act(np.array(self.window_buffer).flatten(), eps=0.0))
-            _dw = int(os.environ.get('HOVER_DWELL', '0') or 0)
+                    action = int(self.agent.act(_st, eps=0.0))
+            _dw = int(getattr(cfg, 'hover_dwell', 0) or 0)
             if _dw > 0:
                 if getattr(self, '_dwell_left', 0) > 0:
                     action = 1; self._dwell_left -= 1
@@ -2174,11 +2198,11 @@ class OnlineRLNode(Node):
             tq_xy, tq_z, th_n = self._sweep_bias
             self._send_attack_cmd(True, self.scenario.get('attack_type', 'loe_combined'), _int,
                 bias_torque_xy=tq_xy, bias_torque_z=tq_z, bias_thrust_n=th_n)
-        elif want_attack and self.attack_active_flag and os.environ.get('WORLD_ATK_DIR'):
+        elif want_attack and self.attack_active_flag and knob('WORLD_ATK_DIR'):
             # ★2026-08-28 월드 고정방향 hijack: 매 스텝 yaw 보상해 body roll/pitch 재계산 →
             #   드론 자세와 무관하게 한 월드 방향으로 민다(깔끔한 단일방향 이탈 데모용).
             import math as _m
-            _pw = _m.radians(float(os.environ['WORLD_ATK_DIR']))
+            _pw = _m.radians(float(knob('WORLD_ATK_DIR')))
             _yaw = float(self.cur_euler[2]); _mag = float(self._sweep_bias[0])
             _bd = _pw - _yaw
             _rt = _mag * _m.cos(_bd); _pt = _mag * _m.sin(_bd)
@@ -2302,173 +2326,31 @@ def _ensure_xrce_agent(cfg):
         print(f'[XRCE] 기동 실패(무시하고 진행): {e}')
 
 
-def main():
-    cfg = Config()
-    # ★ 2026-08-17 진단용: SPEED_SCALE 로 궤적 속도 배율(circle/fig8 = radius×omega). run_sim MPC 캡도 같은 env로 상향.
-    # ★2026-09-11 TRAJ_SCALE: 궤적 속도만 배율 (PX4 캡은 실기값 2.0 그대로 — SPEED_SCALE 과 달리 제어기는 안 건드림).
-    #   circle/figure8/scurve: ω×s · aggressive: Tp/s · waypoint: v_cruise·v_corner ×s (a_prof 유지)
-    _ts = float(os.environ.get('TRAJ_SCALE', '1.0'))
+def run_isaac(exp, log=print):
+    """★2026-09-18 Isaac 학습·스윕 진입점 (train.py 가 부른다). 설정은 전부 YAML(cfgload) — env 변수·CLI 플래그 없음.
+    학습 지표는 노드가 cfg.outdir 에 CSV 로 남긴다(구 경로와 동일)."""
+    cfg = exp.cfg
+    _apply_module_knobs()
+    # 궤적 속도 배율 노브 (TRAJ_SCALE: 궤적만 / SPEED_SCALE: run_sim MPC 캡도 같이 — sim_env 로도 넘길 것)
+    _ts = float(knob('TRAJ_SCALE', '1.0'))
     if _ts != 1.0:
         cfg.flight_omega *= _ts; cfg.agg_phase_s /= _ts
         cfg.wp_v_cruise *= _ts; cfg.wp_v_corner *= _ts
-        print(f'[TRAJ_SCALE] ×{_ts}: ω {cfg.flight_omega:.3f} (접선 {cfg.flight_radius*cfg.flight_omega:.2f} m/s) · agg Tp {cfg.agg_phase_s:.2f} '
-              f'(반원 {cfg.agg_radius*3.14159/cfg.agg_phase_s:.2f} m/s) · wp {cfg.wp_v_cruise:.2f}/{cfg.wp_v_corner:.2f} m/s')
-    _ss = float(os.environ.get('SPEED_SCALE', '1.0'))
+        log(f'[TRAJ_SCALE] ×{_ts}: ω {cfg.flight_omega:.3f} · agg Tp {cfg.agg_phase_s:.2f} · wp {cfg.wp_v_cruise:.2f}/{cfg.wp_v_corner:.2f} m/s')
+    _ss = float(knob('SPEED_SCALE', '1.0'))
     if _ss != 1.0:
-        cfg.flight_omega *= _ss
-        cfg.agg_phase_s /= _ss   # ★2026-09-02 aggressive 도 동일 배율(반원속도 Ra·π/Tp ∝ 1/Tp, 선회각속도 ∝ ss)
-        print(f'[SPEED_SCALE] flight_omega ×{_ss} → {cfg.flight_omega:.3f} (circle/fig8 속도 {cfg.flight_radius*cfg.flight_omega:.2f} m/s) '
-              f'| agg_phase_s → {cfg.agg_phase_s:.2f} (반원속도 {cfg.agg_radius*3.14159/cfg.agg_phase_s:.2f} m/s)')
+        cfg.flight_omega *= _ss; cfg.agg_phase_s /= _ss
+        log(f'[SPEED_SCALE] flight_omega ×{_ss} → {cfg.flight_omega:.3f} | agg_phase_s → {cfg.agg_phase_s:.2f}')
+    iz = exp.isaac
+    cfg.headless = bool(iz['headless']); cfg.sim_speed_factor = float(iz['speed'])
+    cfg.isaac_sim_env = dict(iz.get('sim_env') or {}); cfg.use_compile = bool(iz.get('compile', True))
+    os.makedirs(cfg.outdir, exist_ok=True)
 
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--sweep', action='store_true', help='bias-sweep 모드(학습 OFF)')
-    ap.add_argument('--headless', dest='headless', action='store_true', default=None)
-    ap.add_argument('--sweep-mode', choices=['combined', 'torque', 'thrust'], default=None,
-                    help='sweep 공격 채널(미지정 시 config값)')
-    ap.add_argument('--sweep-values', default=None,
-                    help='쉼표구분 bias값 (미지정 시 모드별 권장 grid)')
-    ap.add_argument('--outdir', default=None, help='결과 폴더(미지정 시 config값)')
-    ap.add_argument('--agent', choices=['rhukf', 'adam'], default=None,
-                    help='학습 옵티마이저 선택 (rhukf=제안 | adam=Adam+Huber baseline)')
-    ap.add_argument('--speed', type=float, default=None,
-                    help='sim 속도배율(>1=실시간보다 빠름; lockstep 한계까지. 2~4부터)')
-    ap.add_argument('--ramp', type=float, default=None,
-                    help='attack_ramp_duration(s) override (미지정 시 config값)')
-    ap.add_argument('--episodes', type=int, default=None,
-                    help='sweep_episodes(셀당 반복) override (미지정 시 config값)')
-    ap.add_argument('--max-ep', dest='max_ep', type=int, default=None,
-                    help='학습 총 에피소드 상한(max_episodes) override (미지정 시 config값=200)')
-    ap.add_argument('--reward-scale', dest='reward_scale', type=float, default=None,
-                    help='보상 스케일 c override (LL원리: 타깃 T_Var→필터R 정합). 미지정 시 config값')
-    ap.add_argument('--gamma', dest='gamma', type=float, default=None,
-                    help='할인율 gamma override (loss개형/부트스트랩 분산 튜닝)')
-    ap.add_argument('--p-delta', dest='p_delta', type=float, default=None,
-                    help='p_delta_init override (K_gain 조절: ↑p_Δ→↑K)')
-    ap.add_argument('--r-init', dest='r_init_cli', type=float, default=None,
-                    help='r_init override (K_gain 조절: ↑r→↓K)')
-    ap.add_argument('--huber-c', dest='huber_c_cli', type=float, default=None,
-                    help='huber_c override (잔차스케일에 맞춤; reward_scale 바뀌면 함께 조정)')
-    ap.add_argument('--ft-ratio', dest='ft_ratio', type=float, default=None,
-                    help='combined 모드 추력/토크비 sweep_combined_ft_ratio override (th_n=ft_ratio·b)')
-    ap.add_argument('--hover-delays', dest='hover_delays', default=None,
-                    help='쉼표구분 dhover 지연 스텝 목록 override (예: 1,2,3)')
-    ap.add_argument('--log-zu', dest='log_zu', action='store_true',
-                    help='UKF 오프라인 튜닝용 (z,u) 시계열을 outdir/zu_log.npz로 저장')
-    ap.add_argument('--log-sysid', dest='log_sysid', action='store_true',
-                    help='재캘리브레이션용 GT 시계열(속도/오일러/IMU/명령)을 outdir/sysid_log.npz로 저장')
-    ap.add_argument('--capture-mode', dest='capture_mode', default=None,
-                    choices=['normal', 'hijack', 'deadline'], help='캡처 격자 (normal|hijack|deadline)')
-    ap.add_argument('--capture-disturbances', dest='capture_disturbances', default=None,
-                    help='capture 외란 override (쉼표; 예: none:0,wind_turbulence:2,wind_turbulence:4)')
-    ap.add_argument('--capture-biases', dest='capture_biases', default=None,
-                    help='capture hijack bias override (쉼표; 예: 0.0,2.62)')
-    ap.add_argument('--capture-patterns', dest='capture_patterns', default=None,
-                    help='capture 패턴 override (쉼표; 예: hover,aggressive)')
-    ap.add_argument('--sweep-attack-start', dest='sweep_attack_start', type=int, default=None,
-                    help='sweep/capture 공격 ON 스텝 override (하이재킹은 100+ 권장)')
-    ap.add_argument('--deadline-patterns', dest='deadline_patterns', default=None,
-                    help='deadline 격자 패턴 override (쉼표구분; 예: hover,waypoint)')
-    ap.add_argument('--deadline-biases', dest='deadline_biases', default=None,
-                    help='deadline 격자 bias override (쉼표구분; 예: 1.37,1.40)')
-    ap.add_argument('--deadline-delays', dest='deadline_delays', default=None,
-                    help='deadline 격자 dhover 지연 override (쉼표구분; 예: 0,3,5). track 자동추가')
-    ap.add_argument('--torque-yaw-ratio', dest='torque_yaw_ratio', type=float, default=None,
-                    help='sweep torque 모드 yaw/roll 비 override. loe_yaw 스윕=1.0, 순수 tilt=0.0')
-    ap.add_argument('--sweep-pattern', dest='sweep_pattern', default=None,
-                    help='track/dhover 셀 비행패턴 override (aggressive|circle|figure8|waypoint)')
-    ap.add_argument('--sweep-wind-type', dest='sweep_wind_type', default=None,
-                    choices=['none', 'wind_constant', 'wind_gust', 'wind_turbulence'],
-                    help='sweep 외란 타입 override (기본 none)')
-    ap.add_argument('--sweep-wind-speed', dest='sweep_wind_speed', type=float, default=None,
-                    help='sweep 바람 속도 m/s override (force≈0.031·v²N; 8≈2N 15≈7N)')
-    ap.add_argument('--seed', type=int, default=None,
-                    help='재현성 seed (random/numpy/torch 동시 시드) — baseline seed 반복용')
-    _args, _ = ap.parse_known_args()
-
-    # 모드별 권장 grid (값 미지정 시) — 각 모드의 '붕괴 경계'를 브래킷
-    _grids = {
-        'combined': [0.8, 1.0, 1.2, 1.3, 1.5, 1.7],          # Nm 토크 (추력=ft_ratio·b:4~8.5N); 토크를 flip영역까지
-        'torque':   [1.0, 1.2, 1.3, 1.4, 1.5, 1.7],          # Nm; 밴드 [1.3,1.5) 정밀화
-        'thrust':   [8.0, 12.0, 14.0, 16.0, 20.0, 25.0],     # N; 고도붕괴(~14N=권한포화) 브래킷
-    }
-    if _args.sweep:
-        cfg.sweep_mode = True
-    if _args.headless:
-        cfg.headless = True
-    if _args.sweep_mode:
-        cfg.sweep_attack_mode = _args.sweep_mode
-        if _args.sweep_values is None:
-            cfg.sweep_values = _grids[_args.sweep_mode]
-    if _args.sweep_values:
-        cfg.sweep_values = [float(x) for x in _args.sweep_values.split(',')]
-    if _args.agent:
-        cfg.agent_type = _args.agent
-        if _args.outdir is None:                 # 미지정 시 에이전트별 폴더로 분리(비교용)
-            cfg.outdir = f'results_{_args.agent}'
-    if _args.speed is not None:
-        cfg.sim_speed_factor = float(_args.speed)
-    if _args.ramp is not None:
-        cfg.attack_ramp_duration = float(_args.ramp)
-    if _args.episodes is not None:
-        cfg.sweep_episodes = int(_args.episodes)
-    if _args.max_ep is not None:
-        cfg.max_episodes = int(_args.max_ep)
-    if _args.reward_scale is not None:
-        cfg.reward_scale = float(_args.reward_scale)
-    if _args.gamma is not None:
-        cfg.gamma = float(_args.gamma)
-    if _args.p_delta is not None:
-        cfg.p_delta_init = float(_args.p_delta)
-    if _args.r_init_cli is not None:
-        cfg.r_init = float(_args.r_init_cli); cfg.r_end = float(_args.r_init_cli)
-    if _args.huber_c_cli is not None:
-        cfg.huber_c = float(_args.huber_c_cli)
-    if _args.ft_ratio is not None:
-        cfg.sweep_combined_ft_ratio = float(_args.ft_ratio)
-    if _args.hover_delays is not None:
-        cfg.sweep_hover_delays = tuple(int(x) for x in _args.hover_delays.split(','))
-    if getattr(_args, 'log_zu', False):
-        cfg.log_zu = True
-    if getattr(_args, 'log_sysid', False):
-        cfg.log_sysid = True
-    if _args.capture_mode is not None:
-        cfg.capture_mode = _args.capture_mode
-    if _args.sweep_attack_start is not None:
-        cfg.sweep_attack_start = int(_args.sweep_attack_start)
-    if _args.deadline_patterns is not None:
-        cfg.deadline_patterns = [p.strip() for p in _args.deadline_patterns.split(',') if p.strip()]
-    if _args.deadline_biases is not None:
-        cfg.deadline_biases = [float(b) for b in _args.deadline_biases.split(',') if b.strip()]
-    if _args.deadline_delays is not None:
-        cfg.deadline_delays = tuple(int(d) for d in _args.deadline_delays.split(',') if d.strip())
-    if getattr(_args, 'capture_disturbances', None) is not None:
-        cfg.capture_disturbances = [(s.split(':')[0], float(s.split(':')[1]))
-                                    for s in _args.capture_disturbances.split(',') if ':' in s]
-    if getattr(_args, 'capture_biases', None) is not None:
-        cfg.capture_biases_hijack = [float(b) for b in _args.capture_biases.split(',') if b.strip()]
-    if getattr(_args, 'capture_patterns', None) is not None:
-        cfg.capture_patterns = [p.strip() for p in _args.capture_patterns.split(',') if p.strip()]
-    if getattr(_args, 'torque_yaw_ratio', None) is not None:
-        cfg.sweep_torque_yaw_ratio = float(_args.torque_yaw_ratio)
-    if _args.sweep_pattern is not None:
-        cfg.sweep_pattern = _args.sweep_pattern
-    if _args.sweep_wind_type is not None:
-        cfg.sweep_wind_type = _args.sweep_wind_type
-    if _args.sweep_wind_speed is not None:
-        cfg.sweep_wind_speed = float(_args.sweep_wind_speed)
-    if _args.outdir:
-        cfg.outdir = _args.outdir
-        os.makedirs(cfg.outdir, exist_ok=True)
-
-    # ── 재현성 seed 적용 (baseline seed 반복 / RHUKF 공정비교). 미지정 시 cfg.seed(42) ──
-    if _args.seed is not None:
-        cfg.seed = int(_args.seed)
     import random as _random
     _random.seed(cfg.seed); np.random.seed(cfg.seed); torch.manual_seed(cfg.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(cfg.seed)
-    print(f"[SEED] {cfg.seed} 적용 (random/numpy/torch{'/cuda' if torch.cuda.is_available() else ''})")
+    log(f"[SEED] {cfg.seed} 적용 (random/numpy/torch{'/cuda' if torch.cuda.is_available() else ''})")
 
     import warnings
     warnings.filterwarnings("ignore", category=FutureWarning)
@@ -2498,7 +2380,7 @@ def main():
     _ensure_xrce_agent(cfg)   # PX4 /fmu/* ↔ ROS2 브리지 보장 (이륙/공격주입/센서에 필수)
 
     rclpy.init()
-    node = OnlineRLNode(cfg)
+    node = OnlineRLNode(cfg, exp)
 
     # ── PX4 배터리 Failsafe는 최초 1회 pxh에서 끄고 저장하면 영구 유지(매 실행 reminder는 노이즈라 제거) ──
     #     param set COM_LOW_BAT_ACT 0
@@ -2506,7 +2388,8 @@ def main():
     #     param save
     #   (미설정이면 에피소드 중 배터리 failsafe로 disarm될 수 있음)
 
-    node.agent.warmup_compile()
+    if cfg.use_compile:
+        node.agent.warmup_compile()
 
     try:
         rclpy.spin(node)
@@ -2527,6 +2410,15 @@ def main():
             rclpy.shutdown()
         except Exception:
             pass
+
+    return []
+
+
+def main():
+    """구 진입점 호환: python3 online_rl_main.py --config X.yaml [--set ...] == python3 train.py (env.kind 는 YAML)."""
+    import train
+    train.main()
+
 
 if __name__ == '__main__':
     main()

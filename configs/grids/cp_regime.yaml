@@ -1,0 +1,21 @@
+# CartPole/LL 레짐 격자 (2026-09-18 착수, 구 cp_regime_scan.py 를 새 진입점으로 옮긴 것)
+# 판정: python3 scripts/judge_regime.py results/claudecodefortest/cp_regime_v2
+base: [configs/cp_regime.yaml]
+outdir: results/claudecodefortest/cp_regime_v2
+seeds: [42]
+stages:
+  lin: {}                                  # FN 선형 (−0.4 − 0.35·d, d≤5), 온셋 가중 끔
+  const: {reward.fn_per_step: 0.0}         # FN 상수 −0.4
+learners:
+  swirl:
+    device: gpu
+    set: {agent.type: swirl}
+    axes:
+      tu: [{_name: cp, agent.tau: 0.005, agent.update_interval: 1}, {_name: ll, agent.tau: 0.02, agent.update_interval: 4}]
+      reward.scale: [0.2, 0.4, 0.6, 1.0]
+      agent.swirl.R: [0.25, 0.5, 1.0, 2.0, 4.0]
+  adam:
+    device: cpu
+    set: {agent.type: adam}
+    axes:
+      reward.scale: [0.2, 0.4, 0.6, 1.0]

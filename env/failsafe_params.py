@@ -1,19 +1,20 @@
 """failsafe_params — hover(failsafe) 진입/복귀 시 PX4 rate-loop 파라미터를 MAVLink 로 스위치.
    ★2026-09-11 사용자 승인: "임무 중지 + failsafe 자세 안정화" 를 문자 그대로 구현.
-   env FAILSAFE_PARAMS="MC_RR_INT_LIM=1.0,MC_PR_INT_LIM=1.0,MC_ROLLRATE_I=0.8,MC_PITCHRATE_I=0.8" (비면 비활성)
-   env FAILSAFE_MAV_URL (기본 udpin:0.0.0.0:14540 = SITL onboard 링크; 실기는 젯슨↔FC USB serial)
+   노브 FAILSAFE_PARAMS="MC_RR_INT_LIM=1.0,MC_PR_INT_LIM=1.0,MC_ROLLRATE_I=0.8,MC_PITCHRATE_I=0.8" (비면 비활성)
+   노브 FAILSAFE_MAV_URL (기본 udpin:0.0.0.0:14540 = SITL onboard 링크; 실기는 젯슨↔FC USB serial)
    명목값은 접속 직후 PX4 에서 읽어 저장(param_request_read) → release() 때 원복. sim=실기 같은 코드."""
 import os, time, threading
+from env.knobs import knob   # ★09-18 env 변수 → YAML 노브
 
 class FailsafeParams:
     def __init__(self, spec=None, url=None, log=print):
-        spec = spec if spec is not None else os.environ.get('FAILSAFE_PARAMS', '')
+        spec = spec if spec is not None else knob('FAILSAFE_PARAMS', '')
         self.enabled = bool(spec.strip()); self.log = log; self.m = None; self.nominal = {}; self.engaged = False
         self.fs = {}
         if not self.enabled: return
         for kv in spec.split(','):
             k, v = kv.split('='); self.fs[k.strip()] = float(v)
-        self.url = url or os.environ.get('FAILSAFE_MAV_URL', 'udpin:0.0.0.0:14540')
+        self.url = url or knob('FAILSAFE_MAV_URL', 'udpin:0.0.0.0:14540')
         self._lock = threading.Lock(); self.ready = False
         threading.Thread(target=self._connect, daemon=True).start()
 

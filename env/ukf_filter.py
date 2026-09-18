@@ -9,6 +9,7 @@ Obs    z = [gps_pos_ned(3), gps_vel_ned(3), gyro(3)]    → 9차원
 
 import numpy as np
 import os
+from env.knobs import knob   # ★09-18 env 변수 → YAML 노브
 import json
 
 
@@ -64,7 +65,7 @@ def to_physical_u(thrust, torque, calib):
     return u
 
 
-_NIS_CLIP_DEFAULT = float(os.environ.get('NIS_CLIP', '3.0'))   # ★2026-09-12 클립 env (확정 4.0: 밴드 최대 3.75 무손실)
+_NIS_CLIP_DEFAULT = float(knob('NIS_CLIP', '3.0'))   # ★2026-09-12 클립 env (확정 4.0: 밴드 최대 3.75 무손실)
 def compute_nis_scaled(r_sub, Pzz_sub, nz, offset=1.0, clip=None):
     clip = _NIS_CLIP_DEFAULT if clip is None else clip
     """관측 압축 ε̃ = min( log(1 + √NIS) , clip ),  NIS = rᵀS⁻¹r / nz.
@@ -134,7 +135,7 @@ class DynamicsUKF:
         #     (구 UKF_R_VEL 을 쓴 스크립트는 없어 과거 실험은 오염되지 않았다.)
         def _envset(mat, lo, hi, *names):
             for nm in names:
-                v = os.environ.get(nm, '')
+                v = knob(nm, '')
                 if v:
                     for _i in range(lo, hi):
                         mat[_i, _i] = float(v)

@@ -26,3 +26,5 @@ etc/media/
 *.bak
 *_console.log
 isaac_*.log
+# 결과 폴더 링크(worktree → 원본 results)
+/results
