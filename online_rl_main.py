@@ -1145,7 +1145,8 @@ class OnlineRLNode(Node):
                  onset=(self.capture.onset if (self.capture is not None and self.capture.mode == 'pairs') else int(self.scenario.get('attack_start_step', -1))),
                  policy=m.get('policy', self.capture.policy if self.capture is not None else f'agent:{self.cfg.agent_type}'),
                  mode=(self.capture.mode if self.capture is not None else 'train'), epsilon=float(self.agent.get_epsilon()),
-                 reason=str(reason), delta_plan=self.scenario['plan'].delta, format='raw')
+                 reason=str(reason), delta_plan=self.scenario['plan'].delta, format='raw',
+                 events=json.dumps(self.scenario['plan'].events))       # ★09-18 사건별 그룹·세기·길이 (다중 사건)
         self._cap_rows = []
 
     def _plan_bias(self, step):
