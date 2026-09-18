@@ -1,0 +1,22 @@
+# 새 무대 · SWIRL R 레짐 (c 0.6 고정 = Q~O(10), pΔ 0.01 · q 1e-3 작게), 3시드 — 워크플로 wf_2b05db31 판독 근거
+#   · K ∝ (pΔ+q)/R 이지만 pΔ·q 는 시그마 평균 편향 b≈(P/2)tr∇²Q (고정점 ×11.5) 로 Qmax 팽창: qmax ≈ 9.7 + 38·P → K 는 R 로 올린다
+#   · c 2/5/10 은 초·중반 거의 단위 변환(불변)이라 R 대리가 아님 → c 0.6 유지, R 직접 스윕
+#   · 시드 s42 는 ε 감쇠기(ep12–42)에 공격 가뭄 → 3시드(42·43·44) 필수, SWIRL 은 전부 GPU(장치 교란 제거)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/newenv_Rregime
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sR:          # CP 결합(τ0.005·ui1) — R↓ = K↑
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda}
+    axes: {agent.swirl.R: [0.1, 0.03, 0.01]}
+  sRll:        # 아티팩트 ③ 고-K 결합(τ0.02·ui4·spas) — sCll5(c5 LL) 의 Q~10 쌍둥이
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas}
+    axes: {agent.swirl.R: [0.03]}
+  adam:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu}
+    axes: {reward.scale: [0.6]}
