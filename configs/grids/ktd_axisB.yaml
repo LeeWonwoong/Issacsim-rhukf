@@ -1,0 +1,10 @@
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/axisB
+seeds: [42, 43, 44, 45, 46, 47]
+stages:
+  a: {}
+learners:
+  kB:
+    device: gpu
+    set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], scenario.wind.schedule: [{from_ep: 100, mode: uniform, range: [6.0, 10.0]}]}
+    axes: {agent.type: [ekf]}

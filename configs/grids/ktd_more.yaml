@@ -1,0 +1,11 @@
+# EKF-TD(IIR 공분산) 10시드 완성(45–51) + 축 B(바람 전환) EKF-TD 6시드 — SWIRL·Adam 과 같은 공유 노브
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/ktd_v4
+seeds: [45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  kt:
+    device: gpu
+    set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24]}
+    axes: {agent.type: [ekf]}
