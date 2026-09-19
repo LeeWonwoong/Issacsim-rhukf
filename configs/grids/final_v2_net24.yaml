@@ -1,0 +1,12 @@
+# 최종 v2 (사용자 결정): 망 [24,24](962) · B256 · N5(표본 1280 > 파라미터) · c5·R1 · Huber 끔(huber_c 0) · act=target · τ0.02·ui4(LL 결합, 스텝당 0.005 = CP/LL) · spas · buf5e4, 10시드
+#  Adam 짝 = adam_best10/a_aB_hidden[24, 24] (lr1e-3·B256·[24,24]·c0.6)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/final_v2
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sV2:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.swirl.N: 5}
+    axes: {agent.hidden: [[24, 24]]}
