@@ -1,0 +1,9 @@
+# 밤샘 D · 바람 상한 8 (U(0,8)) 무대 — 격차 확대 후보(4–6 에서 격차 최대), 관측 상한 저하 감수, SWIRL·Adam·EKF-TD 6시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n4_wind8
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, scenario.wind.range: [0.0, 8.0]}, axes: {agent.buffer: [50000]}}
+  k: {device: gpu, set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: target, agent.type: ekf, scenario.wind.range: [0.0, 8.0]}, axes: {agent.buffer: [50000]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], scenario.wind.range: [0.0, 8.0]}, axes: {agent.buffer: [50000]}}

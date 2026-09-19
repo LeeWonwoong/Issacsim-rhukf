@@ -1,0 +1,7 @@
+# 밤샘 C · 사전분산 pΔ {0.03, 0.1} (0.01 기준) — 'P 가 너무 작아 FIR 처럼 안 보인다' 검토, Q/V 팽창 감시, 6시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n3_pdelta
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6}, axes: {agent.swirl.p_delta: [0.03, 0.1]}}

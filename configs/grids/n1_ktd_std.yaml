@@ -1,0 +1,7 @@
+# 밤샘 A · 칼만-TD 표준판(행동 = 온라인 추정 θ_active, DQN 관례; act=target 은 SWIRL 기여로 분리) EKF/UKF-TD 10시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n1_ktd_std
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  kS: {device: gpu, set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active}, axes: {agent.type: [ekf, ukf]}}

@@ -1,0 +1,8 @@
+# 밤샘 E · 사건 희소화(에피당 사건 1개 · p_attack 0.35) — 가치학습 난이도↑(양성 표본↓) → 수렴속도 격차 후보, SWIRL·Adam 6시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n5_sparse
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, scenario.attack.events: [1, 1], scenario.attack.p_attack: 0.35}, axes: {agent.buffer: [50000]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], scenario.attack.events: [1, 1], scenario.attack.p_attack: 0.35}, axes: {agent.buffer: [50000]}}
