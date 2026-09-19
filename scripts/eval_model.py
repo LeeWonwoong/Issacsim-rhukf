@@ -14,7 +14,8 @@ import train
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    argv = sys.argv[1:]; skip = {i + 1 for i, a in enumerate(argv) if a in ('--n', '--device')}
+    args = [a for i, a in enumerate(argv) if not a.startswith('--') and i not in skip]
     n = int(sys.argv[sys.argv.index('--n') + 1]) if '--n' in sys.argv else 100
     dev = sys.argv[sys.argv.index('--device') + 1] if '--device' in sys.argv else 'cpu'
     for d in args:
