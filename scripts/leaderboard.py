@@ -18,12 +18,12 @@ import yaml
 from scipy.stats import spearmanr
 
 SHARED = [('reward', 'scale'), ('agent', 'gamma'), ('agent', 'batch'), ('agent', 'buffer'), ('agent', 'n_step'),
-          ('agent', 'eps', 'decay'), ('agent', 'eps', 'hover_p'), ('agent', 'eps', 'z_mu'), ('agent', 'eps', 'z_cap'), ('agent', 'hidden'), ('scenario', 'attack', 'family'), ('reward', 'mode'), ('agent', 'adam', 'lr'), ('agent', 'adam', 'huber_beta'), ('agent', 'adam', 'grad_clip')]
+          ('agent', 'eps', 'decay'), ('agent', 'eps', 'hover_p'), ('agent', 'eps', 'z_mu'), ('agent', 'eps', 'z_cap'), ('agent', 'hidden'), ('scenario', 'attack', 'family'), ('reward', 'mode'), ('agent', 'adam', 'lr'), ('agent', 'adam', 'huber_beta'), ('agent', 'adam', 'grad_clip'), ('env', 'surrogate', 'pool'), ('scenario', 'wind', 'mode')]
 SWIRL = [('agent', 'swirl', 'R'), ('agent', 'swirl', 'p_delta'), ('agent', 'swirl', 'q'), ('agent', 'swirl', 'N'),
          ('agent', 'swirl', 'huber_c'), ('agent', 'tau'), ('agent', 'update_interval'), ('agent', 'swirl', 'argmax'), ('agent', 'swirl', 'act')]
 SHORT = {'scale': 'c', 'gamma': 'γ', 'batch': 'B', 'buffer': 'buf', 'n_step': 'n', 'decay': 'εdec', 'hover_p': 'hp',
          'z_mu': 'z', 'z_cap': 'zcap', 'R': 'R', 'p_delta': 'pΔ', 'q': 'q', 'N': 'N', 'huber_c': 'hub', 'tau': 'τ',
-         'update_interval': 'ui', 'argmax': 'arg', 'act': 'act', 'hidden': 'net', 'family': 'atk', 'mode': 'rw', 'lr': 'lr', 'huber_beta': 'β', 'grad_clip': 'clip'}
+         'update_interval': 'ui', 'argmax': 'arg', 'act': 'act', 'hidden': 'net', 'family': 'atk', 'mode': 'rw', 'lr': 'lr', 'huber_beta': 'β', 'grad_clip': 'clip', 'pool': '풀', 'mode': 'rw'}
 
 
 def get(d, path, default=None):
@@ -38,7 +38,7 @@ def load(d):
     H = json.load(open(os.path.join(d, 'hist.json')))['hist']
     C = yaml.safe_load(open(os.path.join(d, 'config.yaml')))
     typ = C['agent']['type']; seed = C['run']['seed']
-    sh = tuple((','.join(map(str, v)) if isinstance(v, list) else v) for v in (get(C, p) for p in SHARED))
+    sh = tuple((','.join(map(str, v)) if isinstance(v, list) else (os.path.basename(str(v)).replace('pool_', '').replace('train_pool_', '').replace('.npz', '') if isinstance(v, str) and v.endswith('.npz') else v)) for v in (get(C, p) for p in SHARED))
     sw = tuple(get(C, p) for p in SWIRL) if typ != 'adam' else ()
     c = float(C['reward'].get('scale', 1)); g = float(C['agent'].get('gamma', 0.97)); al = float(C['reward'].get('alive', 0.5))
     late = H[100:]; atk = [h for h in late if h.get('has_atk')]
@@ -55,14 +55,14 @@ def load(d):
 
 
 def label(names, vals, base):
-    return ' '.join(f'{SHORT[n[-1]]}{v}' for n, v, b in zip(names, vals, base) if v != b) or '기준'
+    return ' '.join(f"{('바람' if n[0] == 'scenario' and n[-1] == 'mode' else SHORT[n[-1]])}{v}" for n, v, b in zip(names, vals, base) if v != b) or '기준'
 
 
 def main():
     dirs = sys.argv[1:] or sorted(glob.glob('results/claudecodefortest/newenv_Rregime') + glob.glob('results/claudecodefortest/newenv_PQ_ll')
-                                  + glob.glob('results/claudecodefortest/night*') + glob.glob('results/claudecodefortest/final*') + glob.glob('results/claudecodefortest/s1_*') + glob.glob('results/claudecodefortest/e[12]_*') + glob.glob('results/claudecodefortest/adam_lr'))
+                                  + glob.glob('results/claudecodefortest/night*') + glob.glob('results/claudecodefortest/final*') + glob.glob('results/claudecodefortest/s1_*') + glob.glob('results/claudecodefortest/e[12]_*') + glob.glob('results/claudecodefortest/adam_*'))
     runs = [load(os.path.dirname(f)) for d in dirs for f in glob.glob(os.path.join(d, '*/hist.json'))]
-    base_sh = (0.6, 0.97, 128, 50000, 3, 4000, 0.1, None, None, '16,16', 'profile', 'cost', 0.0003, 1.0, 1.0)
+    base_sh = (0.6, 0.97, 128, 50000, 3, 4000, 0.1, None, None, '16,16', 'profile', 'cost', 0.0003, 1.0, 1.0, 'knn_v1', 'uniform')
     base_sw = (0.03, 0.01, 0.001, 5, 5.0, 0.02, 4, 'spas', None)
     G = defaultdict(list)
     seen = set()
