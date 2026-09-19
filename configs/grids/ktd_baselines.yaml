@@ -1,0 +1,11 @@
+# IIR 공분산 베이스라인(칼만-TD): agent.type ekf(EKF-TD) / ukf(UKF-TD, P 를 호출 간 지속, 마지막 배치만, 시그마 앙상블 없음) — v2 무대, SWIRL 과 같은 공유 노브·R1·c5·act=target, 3시드, greedy 100ep 평가
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/ktd_v4
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  kt:
+    device: gpu
+    set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24]}
+    axes: {agent.type: [ekf, ukf]}
