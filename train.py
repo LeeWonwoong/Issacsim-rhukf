@@ -92,12 +92,12 @@ def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
                 if atk:
                     tt = max(genv.t - (1 if genv.knn else 0), 0); c = genv.plan.cls_at(tt); b = by_cls.setdefault(c, [0, 0])
                     ev = int(genv.plan.bstart[tt]) if hasattr(genv.plan, 'bstart') else 0
+                    det_t.setdefault(ev, None)                 # 사건 등록(시작 스텝 = id)
                     if prev_a == 1:
                         tp += 1; b[0] += 1
-                        if ev not in det_t: det_t[ev] = genv.attack_delay()
+                        if det_t[ev] is None: det_t[ev] = genv.attack_delay()   # 사건 첫 탐지 지연
                     else:
                         fn += 1; b[1] += 1
-                    det_t.setdefault(ev, None)
                 elif prev_a == 1: fp += 1; ep_fp += 1
                 else: tn += 1
                 prev_a = agent.act(s, 0.0)
