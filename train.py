@@ -83,7 +83,7 @@ def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
     ob = copy.deepcopy(ob_template)
     tp = fp = fn = tn = 0; by_cls = {}; ev_seen = ev_det = 0; dels = []; crashes = 0; fa_eps = 0; n_clean = 0
     for k in range(n_ep):
-        genv.ep_idx = exp.cfg.max_episodes - 1               # 바람 schedule 이 있으면 마지막 체제로 평가
+        genv.ep_idx = exp.cfg.max_episodes - 1 + k           # 에피소드마다 다른 (시드, ep) 난수 + 바람 schedule 은 마지막 체제
         genv.reset(); ob.reset(); prev_a = 0; ep_fp = 0; det_t = {}
         for _t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
