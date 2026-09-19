@@ -207,6 +207,10 @@ class SurrogateEnv:
         self._absorb = (rng.random() > p_loc) if self.lethal else True
         self._expose = 0
         self._dwell = -1; self._since_end = 99
+        self._t_shift = None; self._ws2 = None                # ★09-20 에피소드 중간 풍속 전환 (난수는 마지막에: 앞 스트림 불변)
+        sh = getattr(self.wcfg, 'shift', None)
+        if self.knn and sh and rng.random() < float(sh.get('p', 1.0)):
+            self._t_shift = int(rng.integers(int(sh['t'][0]), int(sh['t'][1]) + 1)); self._ws2 = float(rng.uniform(*sh['range']))
         return self
 
     def _bin(self, d): return min(7, max(0, int((d - 0.1) / 0.1)))
@@ -240,7 +244,8 @@ class SurrogateEnv:
                     self._doom = int(P.bstart[tt]) + self._lag
             if self._doom is not None and t >= self._doom:
                 self.crashed = True
-        q = self._feat(dl(0), dl(1), dl(3), dl(6), since, prev_action, self._act_dwell, self.ws, self._dlast)[0]
+        ws_now = self._ws2 if (self._t_shift is not None and tt >= self._t_shift) else self.ws   # ★09-20 중간 전환 반영
+        q = self._feat(dl(0), dl(1), dl(3), dl(6), since, prev_action, self._act_dwell, ws_now, self._dlast)[0]
         key = tuple(np.round(q, 1))
         nn = self._nn_cache.get(key)
         if nn is None:

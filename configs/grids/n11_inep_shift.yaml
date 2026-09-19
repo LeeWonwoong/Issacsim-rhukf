@@ -1,0 +1,9 @@
+# 밤샘 K · 에피소드 중간 풍속 전환(aliasing 강화): 기본 U(1,5), 확률 0.5 로 t∈[60,200] 에서 U(6,10) 으로 전환 — SWIRL·Adam·EKF-TD 6시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n11_inep
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.act: target, scenario.wind.range: [1.0, 5.0], scenario.wind.shift: {p: 0.5, t: [60, 200], range: [6.0, 10.0]}}, axes: {agent.buffer: [50000]}}
+  k: {device: gpu, set: {agent.type: ekf, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], scenario.wind.range: [1.0, 5.0], scenario.wind.shift: {p: 0.5, t: [60, 200], range: [6.0, 10.0]}}, axes: {agent.buffer: [50000]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], scenario.wind.range: [1.0, 5.0], scenario.wind.shift: {p: 0.5, t: [60, 200], range: [6.0, 10.0]}}, axes: {agent.buffer: [50000]}}

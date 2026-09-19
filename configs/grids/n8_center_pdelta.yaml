@@ -1,0 +1,7 @@
+# 밤샘 H · 잔차 기준 center(중심 시그마점 Q(θ̄)) × pΔ {0.03, 0.1, 0.2} — UT 평균 편향(Q 팽창) 없이 사전분산을 키워 'FIR 다움'을 살릴 수 있는지, 6시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n8_center
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.act: target, agent.swirl.innov: center}, axes: {agent.swirl.p_delta: [0.03, 0.1, 0.2]}}

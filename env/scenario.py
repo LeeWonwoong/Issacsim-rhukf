@@ -22,11 +22,18 @@ class WindConfig:
     # 축 B(바람 체제 전환): [{from_ep: 100, mode: uniform, range: [6, 10]}, ...] — from_ep(0 기준) 부터 그 분포로 바뀐다.
     #   항목에 없는 키는 바로 위 체제의 값을 물려받는다. 비어 있으면 전환 없음(축 A).
     schedule: List[dict] = field(default_factory=list)
+    # ★09-20 에피소드 중간 풍속 전환(surrogate k-NN 전용): {p: 전환 확률, t: [t_lo, t_hi] 전환 스텝, range: [lo, hi] 새 풍속}.
+    #   전환 뒤 k-NN 조건 ws 만 바뀐다(공격·보상 불변). 난수는 reset 끝에 뽑아 기존 공격·바람 스트림과 짝 비교가 유지된다. 비어 있으면 없음.
+    shift: Dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.mode not in ('tiers', 'uniform'):
             raise ValueError(f'scenario.wind.mode={self.mode!r} (tiers|uniform)')
         self.tiers = {float(k): float(v) for k, v in self.tiers.items()}
+        if self.shift:
+            bad = set(self.shift) - {'p', 't', 'range'}
+            if bad or 't' not in self.shift or 'range' not in self.shift:
+                raise ValueError(f'scenario.wind.shift 키 오류 {sorted(bad)} (t·range 필수, p 선택)')
         prev = -1
         for i, seg in enumerate(self.schedule):
             bad = set(seg) - {'from_ep', 'mode', 'tiers', 'range'}
@@ -38,12 +45,12 @@ class WindConfig:
 
     def at(self, episode: int) -> 'WindConfig':
         """에피소드(0 기준)에 적용되는 체제."""
-        cur = WindConfig(mode=self.mode, tiers=dict(self.tiers), range=tuple(self.range), kind=self.kind)
+        cur = WindConfig(mode=self.mode, tiers=dict(self.tiers), range=tuple(self.range), kind=self.kind, shift=dict(self.shift))
         for seg in self.schedule:
             if int(episode) >= int(seg['from_ep']):
                 mode = seg.get('mode') or ('tiers' if 'tiers' in seg else 'uniform' if 'range' in seg else cur.mode)   # ★09-18 검토: 적힌 키로 모드 추론
                 cur = WindConfig(mode=mode, tiers=seg.get('tiers', cur.tiers),
-                                 range=tuple(seg.get('range', cur.range)), kind=cur.kind)
+                                 range=tuple(seg.get('range', cur.range)), kind=cur.kind, shift=dict(self.shift))
         return cur
 
 

@@ -1,0 +1,8 @@
+# 밤샘 J · 공격 중 track 페널티(c_d) 제거 — 사용자 질문 "FN 딜레이 패널티 없애면?" 3시드 SWIRL·Adam (예상: 보너스만 남아 hover 1스텝 후 해제 → recall 붕괴)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n10_cd0
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.act: target}, axes: {reward.c_d: [0.0]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24]}, axes: {reward.c_d: [0.0]}}
