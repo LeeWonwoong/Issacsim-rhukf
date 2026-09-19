@@ -1,0 +1,11 @@
+# Adam 최선 조합 10시드 (공정성): lr1e-3(3시드 0.735) × 망 {16,16 / 24,24} × B256 · buf5e4 · c0.6 — SWIRL 최선(10시드 0.764–0.782)과 대조
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/adam_best10
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  aB:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256, agent.adam.lr: 1.0e-3}
+    axes: {agent.hidden: [[16, 16], [24, 24]]}
