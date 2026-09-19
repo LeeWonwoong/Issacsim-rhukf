@@ -1,0 +1,25 @@
+# E1 · 직전 프레임워크(configs/cp_regime.yaml: v5 무작위 burst · 옛 surrogate 풀 v5e · 바람 티어 {0,6}) 에 SWIRL 교훈 적용. 3시드.
+#  (a) 보상 그대로(label4 ×0.6): act=target·τ0.05·ui4·spas·B256, R {1, 0.1}   (b) 보상만 지금처럼(cost c5): R1·huber42
+#  Adam 짝: B256 (label4), c5 스케일 적응 (cost)
+base: [configs/cp_regime.yaml]
+outdir: results/claudecodefortest/e1_oldframework
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sL4:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.R: [1.0, 0.1]}
+  sCost:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, reward.mode: cost, reward.scale: 5.0, reward.alive: 0.5, reward.c_fa: 0.7, reward.c_d: 0.3, reward.bonus: 2.0, agent.swirl.huber_c: 42.0, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.R: [1.0]}
+  aL4:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256}
+    axes: {agent.buffer: [50000]}
+  aCost:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, reward.mode: cost, reward.scale: 5.0, reward.alive: 0.5, reward.c_fa: 0.7, reward.c_d: 0.3, reward.bonus: 2.0, agent.batch: 256, agent.adam.huber_beta: 8.3, agent.adam.grad_clip: 8.3}
+    axes: {agent.buffer: [50000]}

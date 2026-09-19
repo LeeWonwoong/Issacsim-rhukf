@@ -1,0 +1,17 @@
+# S1 · 사용자 결정: 보상 배율 c↑ · huber↑ 로 R=1 유지 (CP/LL 서사). c5 → T_Var≈2.4 (LL 밴드), R1 ≈ c0.6 기준 R 0.015–0.03(둔감 구간 안).
+#  huber on/off: huber_c 5(보너스 잔차 2c=10 에서 R 팽창 = on) vs 42(8.3c, 비활성 = off). 3시드.
+#  Adam 짝: c 는 공유 노브. Adam 기본(β1·clip1)은 잔차 8배에 grad_clip 이 걸림 → 스케일 적응(β·clip ×8.3)도 같이 (기본 c5 는 newenv_swirl_cscale/newenv_cll5 에 있음).
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/s1_c5
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sH:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, reward.scale: 5.0, agent.swirl.R: 1.0, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.swirl.huber_c: [42.0, 5.0]}
+  aS:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, reward.scale: 5.0, agent.batch: 256, agent.adam.huber_beta: 8.3, agent.adam.grad_clip: 8.3}
+    axes: {agent.buffer: [50000]}

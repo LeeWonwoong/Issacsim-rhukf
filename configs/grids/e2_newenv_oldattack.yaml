@@ -1,0 +1,16 @@
+# E2 · 현 프레임워크(cost 보상 c5 · k-NN v1 · 바람 U(0,6)) 에서 공격 형태만 옛 v5(무작위 burst: δ U(0.10,0.72)|U(0.72,0.84), 지속 25–40, 에피 1회). 3시드.
+#  ⚠ k-NN 풀은 profile 공격(램프 prefix)으로 캡처 → v5 의 급격한 온셋은 근사 재생.
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/e2_oldattack
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sV5:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, scenario.attack.family: v5, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 42.0, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.buffer: [50000]}
+  aV5:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, scenario.attack.family: v5, reward.scale: 5.0, agent.batch: 256, agent.adam.huber_beta: 8.3, agent.adam.grad_clip: 8.3}
+    axes: {agent.buffer: [50000]}

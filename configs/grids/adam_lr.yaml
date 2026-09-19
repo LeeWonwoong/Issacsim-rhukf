@@ -1,0 +1,11 @@
+# Adam 공정성: lr {1e-3, 1e-4} (기본 3e-4), 현 무대 B(c0.6·B256·buf5e4), 3시드 — "Adam 이 덜 튜닝됐다" 반론 대비
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/adam_lr
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  aLr:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256}
+    axes: {agent.adam.lr: [1.0e-3, 1.0e-4]}
