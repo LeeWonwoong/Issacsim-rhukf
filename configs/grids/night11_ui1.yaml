@@ -1,0 +1,11 @@
+# 11단계 · 사용자 제안: ui1 (매 스텝 학습 호출) × τ {0.01, 0.02} — 현 τ0.05·ui4 는 스텝당 0.0125. act=target·R0.01·B256, 3시드. (호출 4배 → 에피소드당 시간 ~4배)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night11
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sUi1:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, agent.update_interval: 1, agent.swirl.argmax: spas, agent.swirl.R: 0.01, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.tau: [0.01, 0.02]}
