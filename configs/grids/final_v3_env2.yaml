@@ -1,0 +1,15 @@
+# 최종 v3 = 새 무대 v2(약 d0≥0.15 · burst 4–8) × 최종 SWIRL([24,24]·B256·N{5,6}·c5·R1·Huber 끔·act=target·τ0.02·ui4·spas) 10시드 + Adam([24,24]·lr1e-3·B256·c0.6) 10시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/final_v3
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sV3:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24]}
+    axes: {agent.swirl.N: [5, 6]}
+  aV3:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24]}
+    axes: {agent.buffer: [50000]}

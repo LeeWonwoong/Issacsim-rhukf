@@ -1,0 +1,14 @@
+# configs/newenv_v2.yaml — 새 무대 v2 (09-19 사용자 결정): 탐지 불가 바닥 제거 + burst 4–8
+#   · 약공격 d0 [0.10, 0.30] → [0.15, 0.30]  (prefix ×0.3 → 첫 스텝 δ ≥ 0.045; 0.03 은 바람과 구분 불가 = 관측 상한 밖)
+#   · burst 지속 [3, 6] → [4, 8] (전 등급)   · 사건 수 1–3 · 보상 · 바람 U(0,6) 은 그대로
+extends: newenv.yaml
+run: {name: newenv_v2}
+scenario:
+  attack:
+    classes:
+      - {name: weak_burst,     weight: 0.175, delta: [0.15, 0.30], kind: burst,      dur: [4, 8]}
+      - {name: weak_persist,   weight: 0.175, delta: [0.15, 0.30], kind: persistent, dur: [15, 30], grow: [1.8, 2.2], grow_steps: [3, 6]}
+      - {name: trans_burst,    weight: 0.175, delta: [0.35, 0.60], kind: burst,      dur: [4, 8]}
+      - {name: trans_persist,  weight: 0.175, delta: [0.35, 0.60], kind: persistent, dur: [15, 30], grow: [1.3, 1.5], grow_steps: [3, 6]}
+      - {name: strong_burst,   weight: 0.15,  delta: [0.72, 0.84], kind: burst,      dur: [4, 8]}
+      - {name: strong_persist, weight: 0.15,  delta: [0.72, 0.84], kind: persistent, dur: [25, 40]}
