@@ -18,12 +18,12 @@ import yaml
 from scipy.stats import spearmanr
 
 SHARED = [('reward', 'scale'), ('agent', 'gamma'), ('agent', 'batch'), ('agent', 'buffer'), ('agent', 'n_step'),
-          ('agent', 'eps', 'decay'), ('agent', 'eps', 'hover_p'), ('agent', 'eps', 'z_mu'), ('agent', 'eps', 'z_cap'), ('agent', 'hidden'), ('scenario', 'attack', 'family'), ('reward', 'mode')]
+          ('agent', 'eps', 'decay'), ('agent', 'eps', 'hover_p'), ('agent', 'eps', 'z_mu'), ('agent', 'eps', 'z_cap'), ('agent', 'hidden'), ('scenario', 'attack', 'family'), ('reward', 'mode'), ('agent', 'adam', 'lr'), ('agent', 'adam', 'huber_beta'), ('agent', 'adam', 'grad_clip')]
 SWIRL = [('agent', 'swirl', 'R'), ('agent', 'swirl', 'p_delta'), ('agent', 'swirl', 'q'), ('agent', 'swirl', 'N'),
          ('agent', 'swirl', 'huber_c'), ('agent', 'tau'), ('agent', 'update_interval'), ('agent', 'swirl', 'argmax'), ('agent', 'swirl', 'act')]
 SHORT = {'scale': 'c', 'gamma': 'γ', 'batch': 'B', 'buffer': 'buf', 'n_step': 'n', 'decay': 'εdec', 'hover_p': 'hp',
          'z_mu': 'z', 'z_cap': 'zcap', 'R': 'R', 'p_delta': 'pΔ', 'q': 'q', 'N': 'N', 'huber_c': 'hub', 'tau': 'τ',
-         'update_interval': 'ui', 'argmax': 'arg', 'act': 'act', 'hidden': 'net', 'family': 'atk', 'mode': 'rw'}
+         'update_interval': 'ui', 'argmax': 'arg', 'act': 'act', 'hidden': 'net', 'family': 'atk', 'mode': 'rw', 'lr': 'lr', 'huber_beta': 'β', 'grad_clip': 'clip'}
 
 
 def get(d, path, default=None):
@@ -60,9 +60,9 @@ def label(names, vals, base):
 
 def main():
     dirs = sys.argv[1:] or sorted(glob.glob('results/claudecodefortest/newenv_Rregime') + glob.glob('results/claudecodefortest/newenv_PQ_ll')
-                                  + glob.glob('results/claudecodefortest/night*') + glob.glob('results/claudecodefortest/final*'))
+                                  + glob.glob('results/claudecodefortest/night*') + glob.glob('results/claudecodefortest/final*') + glob.glob('results/claudecodefortest/s1_*') + glob.glob('results/claudecodefortest/e[12]_*') + glob.glob('results/claudecodefortest/adam_lr'))
     runs = [load(os.path.dirname(f)) for d in dirs for f in glob.glob(os.path.join(d, '*/hist.json'))]
-    base_sh = (0.6, 0.97, 128, 50000, 3, 4000, 0.1, None, None, '16,16', 'profile', 'cost')
+    base_sh = (0.6, 0.97, 128, 50000, 3, 4000, 0.1, None, None, '16,16', 'profile', 'cost', 0.0003, 1.0, 1.0)
     base_sw = (0.03, 0.01, 0.001, 5, 5.0, 0.02, 4, 'spas', None)
     G = defaultdict(list)
     seen = set()
