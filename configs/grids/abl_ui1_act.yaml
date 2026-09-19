@@ -1,0 +1,11 @@
+# 사용자 요청 ablation (v2 무대·최종 설정 기준): (a) τ0.005·ui1 (CartPole 결합, 학습 호출 4배) 6시드  (b) act=active(θ_T+μΔ 로 행동) 10시드 — 각각 greedy 100ep 평가
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/abl_v4
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sAct:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.tau: 0.02, agent.update_interval: 4}
+    axes: {agent.swirl.act: [active]}

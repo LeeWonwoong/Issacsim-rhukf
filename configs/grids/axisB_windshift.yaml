@@ -1,0 +1,15 @@
+# 축 B(비정상성): ep100 부터 바람 U(0,6) → U(6,10) 전환 — 전환 뒤 재수렴 속도(FIR 유한기억 vs Adam), SWIRL·Adam 6시드, greedy 평가는 마지막 체제(6–10)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/axisB
+seeds: [42, 43, 44, 45, 46, 47]
+stages:
+  a: {}
+learners:
+  sB:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, scenario.wind.schedule: [{from_ep: 100, mode: uniform, range: [6.0, 10.0]}]}
+    axes: {agent.buffer: [50000]}
+  aB:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], scenario.wind.schedule: [{from_ep: 100, mode: uniform, range: [6.0, 10.0]}]}
+    axes: {agent.buffer: [50000]}

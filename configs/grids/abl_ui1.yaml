@@ -1,0 +1,10 @@
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/abl_v4
+seeds: [42, 43, 44, 45, 46, 47]
+stages:
+  a: {}
+learners:
+  sUi1:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.act: target, agent.update_interval: 1}
+    axes: {agent.tau: [0.005]}

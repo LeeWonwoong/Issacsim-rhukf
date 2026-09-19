@@ -1,0 +1,15 @@
+# burst 꼬리 제거(정점에서 바로 끝) — 사용자 질문: 보상 격차가 더 잘 보이나. SWIRL·Adam 5시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/abl_notail
+seeds: [42, 43, 44, 45, 46]
+stages:
+  a: {}
+learners:
+  sNT:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, scenario.attack.tail: []}
+    axes: {agent.buffer: [50000]}
+  aNT:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], scenario.attack.tail: []}
+    axes: {agent.buffer: [50000]}
