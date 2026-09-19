@@ -1,0 +1,11 @@
+# E2 Adam 자기 스케일 짝: 현 프레임워크 + 옛 v5 공격, c0.6 · lr1e-3 · B256 (Adam 은 c5 에서 무조건 나빠지므로 자기 스케일에서 비교)
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/e2_oldattack
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  aV5own:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, scenario.attack.family: v5, agent.batch: 256, agent.adam.lr: 1.0e-3}
+    axes: {agent.buffer: [50000]}

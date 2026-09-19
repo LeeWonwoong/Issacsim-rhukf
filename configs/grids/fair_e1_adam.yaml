@@ -1,0 +1,15 @@
+# E1 Adam 자기 스케일·lr 튜닝 짝: 직전 프레임워크(cp_regime) × {label4 lr1e-3, cost c0.6 lr1e-3}, B256
+base: [configs/cp_regime.yaml]
+outdir: results/claudecodefortest/e1_oldframework
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  aL4lr:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256, agent.adam.lr: 1.0e-3}
+    axes: {agent.buffer: [50000]}
+  aCostOwn:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, reward.mode: cost, reward.scale: 0.6, reward.alive: 0.5, reward.c_fa: 0.7, reward.c_d: 0.3, reward.bonus: 2.0, agent.batch: 256, agent.adam.lr: 1.0e-3}
+    axes: {agent.buffer: [50000]}
