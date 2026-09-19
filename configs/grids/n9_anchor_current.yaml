@@ -1,7 +1,0 @@
-# 밤샘 I · DQN 표준 구조 시험: 앵커 = 현재 추정(θ_active 연쇄, 보정 전량 반영) · 행동 = θ_active · 타깃망 = EMA. 보폭이 τ 배 커지므로 pΔ {0.01, 0.002}, 6시드
-base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
-outdir: results/claudecodefortest/n9_anchor_current
-seeds: [42, 43, 44, 45, 46, 47]
-stages: {a: {}}
-learners:
-  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.anchor: current, agent.swirl.act: active}, axes: {agent.swirl.p_delta: [0.01, 0.002]}}
