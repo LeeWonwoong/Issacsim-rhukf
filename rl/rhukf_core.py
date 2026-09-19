@@ -165,7 +165,7 @@ def rhukf_step_fv(theta_current_in, theta_target, filter_P_cov, batch, sp,
 
     # ── [F] Huber-adaptive R + PER IS-weight ────────────────────────
     res_abs = torch.abs(residual).squeeze(-1)
-    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0)
+    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0) if cfg.huber_c > 0 else torch.ones_like(res_abs)   # huber_c<=0: Huber 끔
     current_r_std = sp.get('current_r_std', cfg.r_init)
     R_diag_eff = current_r_std * adapt_factor   # Phase0: 분산 컨벤션(제곱 제거)
     R_diag_eff = _apply_is_weight_to_R(R_diag_eff, batch, cfg)
@@ -383,7 +383,7 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache, need
     P_delta_z = X_dev.t() @ (Wc_col * Z_dev)
 
     res_abs = torch.abs(residual).squeeze(-1)
-    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0)
+    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0) if cfg.huber_c > 0 else torch.ones_like(res_abs)   # huber_c<=0: Huber 끔
     current_r_std = sp.get('current_r_std', cfg.r_init)
     R_diag_eff = current_r_std * adapt_factor   # Phase0: 분산 컨벤션(제곱 제거)
     R_diag_eff = _apply_is_weight_to_R(R_diag_eff, batch, cfg)
@@ -519,7 +519,7 @@ def ekf_step(theta_current_in, theta_target, filter_P_cov, batch, sp, is_first, 
     loss = torch.mean(residual ** 2)
     # ── R (Huber 적응, huber_c 크면 사실상 상수) + PER IS ──
     res_abs = torch.abs(residual).squeeze(-1)
-    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0)
+    adapt_factor = torch.clamp(res_abs / cfg.huber_c, min=1.0) if cfg.huber_c > 0 else torch.ones_like(res_abs)   # huber_c<=0: Huber 끔
     current_r_std = sp.get('current_r_std', cfg.r_init)
     R_diag_eff = _apply_is_weight_to_R(current_r_std * adapt_factor, batch, cfg)
     # ── EKF 갱신 ──
