@@ -1,0 +1,15 @@
+# 수렴 확인: 새 무대 v2 · 400 에피소드 (학습 F1 이 ep200 에서 아직 상승 중) · 끝에 greedy 100ep 평가(eval.json). SWIRL [24,24]·B256·N5 최종 · Adam [24,24]·lr1e-3, 3시드
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/v3_long400
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sL:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, run.episodes: 400, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 5}
+    axes: {agent.buffer: [50000]}
+  aL:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, run.episodes: 400, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24]}
+    axes: {agent.buffer: [50000]}
