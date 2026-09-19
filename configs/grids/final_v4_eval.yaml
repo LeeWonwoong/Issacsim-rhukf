@@ -1,0 +1,15 @@
+# 최종 v4 (논문 표용): v2 무대 · SWIRL [24,24]·B256·N6·c5·R1·Huber끔·act=target·τ0.02·ui4·spas vs Adam [24,24]·lr1e-3·B256 · 10시드 · 200ep · 끝에 greedy 100ep 평가(eval.json)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/final_v4
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages:
+  a: {}
+learners:
+  sF:
+    device: gpu
+    set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6}
+    axes: {agent.buffer: [50000]}
+  aF:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24]}
+    axes: {agent.buffer: [50000]}
