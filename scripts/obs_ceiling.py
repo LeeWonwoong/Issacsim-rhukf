@@ -9,9 +9,11 @@
 import glob
 import json
 import os
+import sys
 
 import numpy as np
 import torch
+V2 = '--v2' in sys.argv          # 새 무대 v2 분포(약 d0≥0.15 · burst≥4)로 필터
 
 R = 'results/claudecodefortest/'
 X, y, cls, ep = [], [], [], []
@@ -25,9 +27,13 @@ for d in ['capture_pool', 'capture_pool_b', 'capture_branching', 'isaac_adam_pro
         if not ev and 'onset' in z.files and float(z['onset']) > 0:   # 분기 캡처: 단일 사건(grade_kind), 길이는 delta_eff>0 구간
             de = Rw[:, cols.index('delta_eff')]; idx = np.flatnonzero(de > 0)
             if len(idx): ev = [dict(start=int(st[idx[0]]) - 1, end=int(st[idx[-1]]), cls=f"{z['grade']}_{z['kind']}")]
-        c = np.array(['none'] * len(Rw), dtype=object)
+        c = np.array(['none'] * len(Rw), dtype=object); keep = np.ones(len(Rw), bool)
         for e in ev:
             m = (st - 1 >= e['start']) & (st - 1 < e['end']); c[m] = e['cls']
+            if V2 and ((e['cls'].startswith('weak') and e.get('d0', 1.0) < 0.15) or (e['cls'].endswith('burst') and e['end'] - e['start'] < 4)):
+                keep[m] = False                          # v2 분포 밖 사건 행 제거
+        if V2 and not keep.all():
+            S, a, st, c = S[keep], a[keep], st[keep], c[keep]; Rw = Rw[keep]
         X.append(S); y.append(a); cls.append(c); ep.append(np.full(len(Rw), k)); k += 1
 X = np.concatenate(X).astype(np.float32); y = np.concatenate(y); cls = np.concatenate(cls); ep = np.concatenate(ep)
 print(f'행 {len(X)} · 에피소드 {k} · 공격 행 {y.sum()} ({y.mean():.3f})')
