@@ -74,6 +74,48 @@ def probe(agent, exp, ob_template, n_ep, episode=0):
                 probe_rec=rec, probe_delay=float(np.mean(dels)) if dels else float('nan'), probe_crash=crashes)
 
 
+def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
+    """★09-19 최종 평가(논문 보고용): 학습 끝난 정책을 greedy(ε=0)로 별도 시드·서로 다른 n_ep 에피소드에 돌려
+    스텝 F1/정밀도/재현율/FPR, 사건 탐지율·지연, 그룹별 recall 을 낸다. 학습·push 없음. (탐지기 자체 성능 = 다른 논문 지표와 비교 가능)"""
+    from sim.surrogate import SurrogateEnv
+    sd0 = agent.steps_done; ep_steps = exp.cfg.episode_max_steps
+    genv = SurrogateEnv(exp.surrogate, exp.scenario.attack, exp.scenario.wind, ep_steps, exp.cfg.seed + seed_off, reseed_per_episode=True)
+    ob = copy.deepcopy(ob_template)
+    tp = fp = fn = tn = 0; by_cls = {}; ev_seen = ev_det = 0; dels = []; crashes = 0; fa_eps = 0; n_clean = 0
+    for k in range(n_ep):
+        genv.ep_idx = exp.cfg.max_episodes - 1               # 바람 schedule 이 있으면 마지막 체제로 평가
+        genv.reset(); ob.reset(); prev_a = 0; ep_fp = 0; det_t = {}
+        for _t in range(ep_steps):
+            v, g, atk = genv.nis(prev_a)
+            s = ob.push(v, g, prev_a)
+            if s is not None:
+                if atk:
+                    tt = max(genv.t - (1 if genv.knn else 0), 0); c = genv.plan.cls_at(tt); b = by_cls.setdefault(c, [0, 0])
+                    ev = int(genv.plan.bstart[tt]) if hasattr(genv.plan, 'bstart') else 0
+                    if prev_a == 1:
+                        tp += 1; b[0] += 1
+                        if ev not in det_t: det_t[ev] = genv.attack_delay()
+                    else:
+                        fn += 1; b[1] += 1
+                    det_t.setdefault(ev, None)
+                elif prev_a == 1: fp += 1; ep_fp += 1
+                else: tn += 1
+                prev_a = agent.act(s, 0.0)
+            if genv.step(): break
+        for ev, d in det_t.items():
+            ev_seen += 1
+            if d is not None: ev_det += 1; dels.append(d)
+        crashes += int(genv.crashed)
+        if not genv.plan.has_attack: n_clean += 1; fa_eps += int(ep_fp > 0)
+    agent.steps_done = sd0
+    prec = tp / (tp + fp) if tp + fp else 0.0; rec = tp / (tp + fn) if tp + fn else 0.0
+    return dict(n_ep=n_ep, f1=(2 * prec * rec / (prec + rec) if prec + rec else 0.0), prec=prec, rec=rec,
+                fpr=(fp / (fp + tn) if fp + tn else 0.0), event_det=(ev_det / ev_seen if ev_seen else float('nan')), n_events=ev_seen,
+                delay=(float(np.mean(dels)) if dels else float('nan')), delay_med=(float(np.median(dels)) if dels else float('nan')),
+                fa_episode_rate=(fa_eps / n_clean if n_clean else float('nan')), crash=crashes,
+                rec_by_cls={k: (v[0] / (v[0] + v[1]) if v[0] + v[1] else None) for k, v in sorted(by_cls.items())})
+
+
 def run_surrogate(exp, log=print):
     from sim.surrogate import SurrogateEnv
     cfg = exp.cfg
@@ -153,6 +195,14 @@ def run_surrogate(exp, log=print):
         if ep % 10 == 0 or ep == cfg.max_episodes - 1:
             log(f"ep{ep:4d} R={epr:8.2f} loss={row['loss']:.4f} F1={row['f1']:.3f} FPR={row['fpr']:.3f} "
                 f"qmax={row['qmax'] if row['qmax'] is None else round(row['qmax'], 2)} eps={agent.get_epsilon():.3f} ({row['sec']:.1f}s)")
+    ne = int(exp.log.get('eval_n', 0))
+    if ne > 0:                                          # ★09-19 최종 greedy 평가 + 모델 저장
+        ev = evaluate(agent, exp, ob, ne)
+        with open(os.path.join(cfg.outdir, 'eval.json'), 'w') as f: json.dump(ev, f, default=float, ensure_ascii=False)
+        log(f"[eval] greedy {ne}ep: F1={ev['f1']:.3f} P={ev['prec']:.3f} R={ev['rec']:.3f} FPR={ev['fpr']:.4f} 사건탐지 {ev['event_det']:.3f} 지연 {ev['delay']:.2f} "
+            + ' '.join(f"{k}={v:.2f}" for k, v in ev['rec_by_cls'].items() if v is not None))
+        try: agent.save(os.path.join(cfg.outdir, 'final_model.pt'))
+        except Exception as e: log(f"[eval] 모델 저장 실패: {e}")
     return hist
 
 
