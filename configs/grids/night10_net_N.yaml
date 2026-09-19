@@ -1,0 +1,19 @@
+# 10단계 · 최종 레짐(act=target·τ0.05·R0.01·B256) 위에서: 망 [24,24](962 params ≈ 표본 5×256=1280 에 근접, 사용자 제안) · N {3, 8}, 3시드. 망은 공유 노브 → Adam 짝
+base: [configs/newenv.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/night10
+seeds: [42, 43, 44]
+stages:
+  a: {}
+learners:
+  sNet:
+    device: gpu
+    set: &S {agent.type: swirl, run.device: cuda, agent.tau: 0.05, agent.update_interval: 4, agent.swirl.argmax: spas, agent.swirl.R: 0.01, agent.swirl.act: target, agent.batch: 256}
+    axes: {agent.hidden: [[24, 24]]}
+  sN:
+    device: gpu
+    set: *S
+    axes: {agent.swirl.N: [3, 8]}
+  aNet:
+    device: cpu
+    set: {agent.type: adam, run.device: cpu, agent.batch: 256}
+    axes: {agent.hidden: [[24, 24]]}
