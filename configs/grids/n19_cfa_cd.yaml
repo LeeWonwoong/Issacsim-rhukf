@@ -1,0 +1,8 @@
+# 사용자 09-20 결정: 보상 형태·done 유지, 오탐(c_fa)·지연(c_d) 벌점을 키워 R_decision 을 R_common(kT=150) 대비 키운다. n14(c_fa 0.7 × c_d {0.5,0.7}) 에 이어 c_fa {1.0, 1.4} × c_d {0.5, 0.7}, SWIRL·Adam 10시드, 프로브16 + greedy 100ep. 채택 기준 greedy F1 ≥0.85·사건탐지 ≥0.95·FPR ≤0.01
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n19_cfa_cd
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {reward.c_fa: [1.0, 1.4], reward.c_d: [0.5, 0.7]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16}, axes: {reward.c_fa: [1.0, 1.4], reward.c_d: [0.5, 0.7]}}
