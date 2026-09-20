@@ -35,7 +35,7 @@ _AGENT_KEYS = {'type', 'gamma', 'n_step', 'batch', 'buffer', 'hidden', 'tau', 'u
                'hover_dwell', 'eps', 'replay', 'swirl', 'adam'}
 _EPS_KEYS = {'start', 'end', 'decay', 'hover_p', 'z_mu', 'z_cap'}
 _REPLAY_KEYS = {'mode', 'halflife'}
-_SWIRL_KEYS = {'form', 'p_delta', 'p_init', 'huber_c', 'N', 'R', 'q', 'alpha', 'anchor', 'argmax', 'h0', 'spas', 'act', 'innov', 'eval'}
+_SWIRL_KEYS = {'form', 'p_delta', 'p_init', 'huber_c', 'N', 'R', 'q', 'alpha', 'anchor', 'argmax', 'h0', 'spas', 'act', 'eval'}
 _ADAM_KEYS = {'lr', 'amsgrad', 'init', 'optimizer', 'loss', 'huber_beta', 'grad_clip'}
 _RUN_KEYS = {'name', 'seed', 'episodes', 'ep_steps', 'outdir', 'device'}
 _LOG_KEYS = {'probe_every', 'probe_n', 'steps', 'eval_n'}
@@ -191,7 +191,7 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     if 'halflife' in rp: cfg.replay_halflife = float(rp['halflife'])
     SW = {'form': 'state_form', 'p_delta': 'p_delta_init', 'p_init': 'p_init', 'huber_c': 'huber_c', 'N': 'N_horizon',
           'alpha': 'alpha', 'anchor': 'anchor_type', 'argmax': 'ddqn_argmax', 'h0': 'h0_online_moving_init', 'spas': 'use_spas',
-          'act': 'act_net', 'innov': 'innov_mean', 'eval': 'eval_net'}
+          'act': 'act_net', 'eval': 'eval_net'}
     for k, a in SW.items():
         if k in sw: setattr(cfg, a, sw[k])
     if 'R' in sw: cfg.r_init = cfg.r_end = float(sw['R'])

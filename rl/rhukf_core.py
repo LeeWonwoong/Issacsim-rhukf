@@ -370,9 +370,8 @@ def rhukf_step_fv_error(filter_state, ctx, batch, h_idx, sp, cfg, fv_cache, need
 
     z_hat = (fv_cache.Wm.view(-1, 1) * Z_sigma_T).sum(dim=0, keepdim=True).t()
     target_var = torch.var(z_measured).item()
-    # ★09-20 innov_mean='center': 잔차를 UT 가중평균(E[Q]≈Q(θ̄)+½tr(P∇²Q), pΔ↑ 시 Q 팽창 원인) 대신 중심 시그마점 Q(θ̄) 로 계산.
     #   공분산(P_zz·P_δz)은 그대로 UT 평균 기준. 기본 'ut' 는 기존과 비트 동일.
-    residual = z_measured - (Z_sigma_T[0:1].t() if getattr(cfg, 'innov_mean', 'ut') == 'center' else z_hat)
+    residual = z_measured - z_hat
     loss = torch.mean(residual ** 2)
 
     # ── Cross-cov in error space, P_zz ──────────────────────────────
