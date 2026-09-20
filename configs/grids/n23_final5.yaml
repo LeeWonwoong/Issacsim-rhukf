@@ -1,0 +1,10 @@
+# 최종 확인(09-21): c_fa 0.7·c_d 0.7 무대에서 SWIRL 후보 A(pΔ0.01·α0.1·ui1·τ0.005)·B(pΔ0.1·α0.05·ui1·τ0.005) vs Adam vs EKF/UKF-TD 표준판 — 5시드 probe16 + greedy 100ep. 사용자 A/B 선택 뒤 Isaac 재실행 근거
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n23_final5
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  sA: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.tau: 0.005, agent.update_interval: 1, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1}, axes: {agent.buffer: [50000]}}
+  sB: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.tau: 0.005, agent.update_interval: 1, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05}, axes: {agent.buffer: [50000]}}
+  a:  {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7}, axes: {agent.buffer: [50000]}}
+  k:  {device: gpu, set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7}, axes: {agent.type: [ekf, ukf]}}
