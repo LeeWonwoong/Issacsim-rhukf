@@ -1,7 +1,7 @@
-# 사용자 09-21: 고-K 가 좋다면 ui1·τ0.005(Adam 과 같은 스케줄)에서 pΔ × α 최적 조합 — pΔ{0.03,0.1} × α{0.1,0.05}, SWIRL 5시드 probe16. 판정: greedy F1·≥0.8 도달·Q/V<1.2 (LL 교훈: 고-K + 빠른 타깃 결합 확인)
+# 사용자 09-21: 고-K 가 좋다면 ui1·τ0.005(Adam 과 같은 스케줄)에서 pΔ × α 최적 조합 — pΔ0.1 × α{0.1,0.05}(0.03 은 n13 에서 이득 없어 제외), SWIRL 5시드 probe16. 판정: greedy F1·≥0.8 도달·Q/V<1.2 (LL 교훈: 고-K + 빠른 타깃 결합 확인)
 base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
 outdir: results/claudecodefortest/n21_highK_ui1
 seeds: [42, 43, 44, 45, 46]
 stages: {a: {}}
 learners:
-  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.swirl.p_delta: [0.03, 0.1], agent.swirl.alpha: [0.1, 0.05]}}
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.swirl.p_delta: [0.1], agent.swirl.alpha: [0.1, 0.05]}}
