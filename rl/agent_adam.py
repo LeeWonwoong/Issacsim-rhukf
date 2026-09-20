@@ -128,7 +128,7 @@ class OnlineAdamAgent:
         _dyn.config.suppress_errors = _prev
         print("  [compile] Adam inductor/aot_eager 모두 실패 → eager 유지")
 
-    def act(self, state, eps):
+    def act(self, state, eps, greedy=False):
         self.steps_done += 1
         if eps > 0 and self._z_left > 0:                 # εz-greedy: 탐험 행동 지속 중 (eps=0 평가는 영향 없음)
             self._z_left -= 1
@@ -141,7 +141,8 @@ class OnlineAdamAgent:
             return a
         with torch.no_grad():
             t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-            return int(self.net(t).squeeze(0).argmax().item())
+            _n = self.target_net if (greedy and getattr(self.cfg, 'eval_net', '') == 'target') else self.net   # ★09-20 평가망 옵션(기본 net, 비트 동일)
+            return int(_n(t).squeeze(0).argmax().item())
 
     def get_q_values(self, state):
         with torch.no_grad():

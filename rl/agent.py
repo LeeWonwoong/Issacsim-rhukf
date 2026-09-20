@@ -132,7 +132,8 @@ class OnlineRHUKFAgent:
     # ═════════════════════════════════════════════════════════
     #  Action Selection
     # ═════════════════════════════════════════════════════════
-    def act(self, state: np.ndarray, eps: float) -> int:
+    def act(self, state: np.ndarray, eps: float, greedy: bool = False) -> int:
+        """greedy=True 는 프로브·평가 호출 표식: cfg.eval_net 이 비어 있지 않으면 그 망으로 행동(기본 '' = act_net, 비트 동일)."""
         self.steps_done += 1
         if eps > 0 and self._z_left > 0:                 # εz-greedy: 탐험 행동 지속 중 (eps=0 평가는 영향 없음)
             self._z_left -= 1
@@ -147,7 +148,8 @@ class OnlineRHUKFAgent:
             s_t = torch.as_tensor(state, dtype=DTYPE, device=self.device)
             if self.normalizer:
                 s_t = self.normalizer.normalize(s_t)
-            th = self.theta_target if self.cfg.act_net == 'target' else self.theta   # ★09-19 행동망: active(θ_T+이번 호출 보정, 기본) | target(누적 θ_T)
+            _net = (getattr(self.cfg, 'eval_net', '') or self.cfg.act_net) if greedy else self.cfg.act_net
+            th = self.theta_target if _net == 'target' else self.theta   # ★09-19 행동망: active(θ_T+이번 호출 보정, 기본) | target(누적 θ_T); ★09-20 greedy 는 eval_net 우선
             q = forward_single(th.squeeze(), self.info, s_t)
             return q.squeeze().argmax().item()
 

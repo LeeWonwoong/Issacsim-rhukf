@@ -1129,14 +1129,22 @@ class OnlineRLNode(Node):
                                float(plan.delta[k1]) if (plan is not None and k1 >= 0) else 0.0, int(self.attack_active_flag),
                                int(self.prev_action if self.prev_action is not None else 0), float(nis_v_raw), float(nis_g_raw),
                                *self.obs.last_scaled, float(-self.cur_pos[2]), float(self.cur_euler[0]), float(self.cur_euler[1]),
-                               int(done), float(reward), *[float(x) for x in state]])
+                               int(done), float(reward), *[float(x) for x in state],
+                               self._cap_gt_err()])   # ★09-20 추종오차(임무 실패 종료 설계용) — 열 끝에 추가(이름 기반 판독)
+
+    def _cap_gt_err(self):
+        """현재 궤적 설정점(hover 중엔 앵커) 대비 수평 GT 오차 [m]. 설정점 미정이면 −1."""
+        sp = getattr(self, '_last_traj_sp', None)
+        if sp is None or getattr(self, 'gt_pos', None) is None: return -1.0
+        gt_ned = (float(self.gt_pos[1]), float(self.gt_pos[0]))
+        return float(math.hypot(gt_ned[0] - float(sp[0]), gt_ned[1] - float(sp[1])))
 
     def _capture_flush(self, reason):
         if not getattr(self, '_log_steps', False) or not self._cap_rows or self.eval_mode:
             self._cap_rows = []; return
         m = self.scenario.get('capture_meta', {})
         cols = ['step', 'delta', 'delta_eff', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done', 'reward'] + \
-               [f's{i}' for i in range(self.obs_spec.dim)]
+               [f's{i}' for i in range(self.obs_spec.dim)] + ['gt_err']
         _cls = str(self.scenario.get('attack_class', 'none'))
         np.savez(os.path.join(self._step_dir, f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
                  cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', _cls.split('_')[0]), kind=m.get('kind', _cls),

@@ -1,0 +1,8 @@
+# 표준 UT 만(center 폐기, 사용자 09-20): pΔ {0.03,0.05,0.1}×α0.1 + pΔ0.1×α0.05, SWIRL 10시드, 프로브 5ep/16ep(n6_probe16 과 같은 시드·프로토콜 → 기준 SWIRL·Adam 은 n6 재사용). 판정: ≥0.8/Adam 최종수준 도달 ep, greedy F1, Q/V 전 시드 <1.2
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n13_pdelta_ut
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.swirl.p_delta: [0.03, 0.05, 0.1]}}
+  sa: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16, agent.swirl.alpha: 0.05}, axes: {agent.swirl.p_delta: [0.1]}}

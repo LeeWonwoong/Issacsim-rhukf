@@ -1,0 +1,8 @@
+# 가치학습 병목 실험(사용자 09-20 21시): γ{0.97,0.99} × n-step{3,1}, SWIRL vs Adam 6시드, 5ep 마다 16ep 프로브 + greedy 100ep — 수렴 시각·격차가 벌어지는지
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n12_gamma_nstep
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.gamma: [0.97, 0.99], agent.n_step: [3, 1]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16}, axes: {agent.gamma: [0.97, 0.99], agent.n_step: [3, 1]}}

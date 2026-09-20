@@ -53,7 +53,7 @@ def probe(agent, exp, ob_template, n_ep, episode=0):
             v, g, atk = genv.nis(prev_a)
             s = ob.push(v, g, prev_a)
             if s is not None:
-                a = agent.act(s, 0.0)
+                a = agent.act(s, 0.0, greedy=True)
                 if atk:
                     if prev_a == 1:
                         tp += 1
@@ -100,7 +100,7 @@ def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
                         fn += 1; b[1] += 1
                 elif prev_a == 1: fp += 1; ep_fp += 1
                 else: tn += 1
-                prev_a = agent.act(s, 0.0)
+                prev_a = agent.act(s, 0.0, greedy=True)
             if genv.step(): break
         for ev, d in det_t.items():
             ev_seen += 1

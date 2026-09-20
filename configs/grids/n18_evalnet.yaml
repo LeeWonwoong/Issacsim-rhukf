@@ -1,0 +1,8 @@
+# 행동/평가망 분리(사용자 09-20 설계: 학습 중 행동 = 추정 파라미터, 평가·배포 = 장기기억): SWIRL act=active + eval=target, Adam eval=target(자기 target net) — 10시드 probe16(기준은 n6_probe16 같은 시드)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n18_evalnet
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.swirl.N: 6, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.scale: 5.0, agent.swirl.act: active, agent.swirl.eval: target}, axes: {agent.buffer: [50000]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.scale: 0.6, agent.swirl.eval: target}, axes: {agent.buffer: [50000]}}

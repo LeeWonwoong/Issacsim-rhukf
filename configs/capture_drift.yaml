@@ -1,0 +1,20 @@
+# configs/capture_drift.yaml — 임무 실패(추종오차) 종료 설계용 Isaac 캡처 (09-20 사용자 D안): 학습 없음, track 고정 정책
+#   실행: bash scripts/isaac_run.sh results/claudecodefortest/capture_drift --config configs/capture_drift.yaml --config configs/overlays/isaac.yaml --set env.isaac.speed=1.5
+#   목적: (a) 평시(패턴×풍속 U(0,10)) 추종오차 분포 (b) 놓친 지속공격(약/전이/강, 30–60 스텝)에서 오차 성장 → e_max·T_max 를 데이터로 정한다.
+#   steps/ep*.npz 의 마지막 열 gt_err(설정점 대비 수평 GT 오차 [m], hover 중엔 앵커 기준) 를 쓴다.
+extends: newenv.yaml
+run: {name: capture_drift, outdir: results/claudecodefortest/capture_drift, seed: 7, ep_steps: 300}
+scenario:
+  wind: {mode: uniform, range: [0.0, 10.0]}
+  attack:
+    p_attack: 0.7
+    events: [1, 1]
+    classes:
+      - {name: weak_persist,   weight: 0.34, delta: [0.15, 0.30], kind: persistent, dur: [40, 60], grow: [1.8, 2.2], grow_steps: [3, 6]}
+      - {name: trans_persist,  weight: 0.33, delta: [0.35, 0.60], kind: persistent, dur: [40, 60], grow: [1.3, 1.5], grow_steps: [3, 6]}
+      - {name: strong_persist, weight: 0.33, delta: [0.72, 0.84], kind: persistent, dur: [30, 45]}
+capture:
+  enabled: true
+  mode: pool
+  episodes: 120
+  policies: {track: 1.0}

@@ -1,0 +1,10 @@
+# 사용자 09-20: (a) 관측 /4 유무 obs.div {4(기준), 1} (b) 보상 ÷4 (SWIRL c 5→1.25·R 1 유지, Adam c 0.6→0.15) — SWIRL·Adam 6시드, 프로브 5ep/16ep + greedy 100ep
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n16_obsdiv
+seeds: [42, 43, 44, 45, 46, 47]
+stages: {a: {}}
+learners:
+  s:  {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.swirl.N: 6, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, agent.swirl.act: target, reward.scale: 5.0}, axes: {obs.div: [4.0, 1.0]}}
+  a:  {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.scale: 0.6}, axes: {obs.div: [4.0, 1.0]}}
+  sr: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.swirl.N: 6, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, agent.swirl.act: target, reward.scale: 1.25}, axes: {obs.div: [4.0]}}
+  ar: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.scale: 0.15}, axes: {obs.div: [4.0]}}

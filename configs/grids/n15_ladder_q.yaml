@@ -1,0 +1,8 @@
+# 붕괴점 사다리(q 축): agent.swirl.q 는 EKF/UKF/SWIRL 공유 키. q {1e-3(기준),1e-2,1e-1} × {EKF-TD 표준, UKF-TD 표준, SWIRL} × 5시드. 예측: 무너지는 순서 EKF < UKF < SWIRL (선형화 오차·P 와인드업 vs 시그마점 vs 창 리셋)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n15_ladder_q
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  k: {device: gpu, set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active}, axes: {agent.type: [ekf, ukf], agent.swirl.q: [1.0e-2, 1.0e-1]}}
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.swirl.q: [1.0e-2, 1.0e-1]}}
