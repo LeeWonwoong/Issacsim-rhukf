@@ -1,0 +1,8 @@
+# 사용자 09-21: ε decay 4000(기준, ε<0.1 @ep32) vs 6000(@ep46) — SWIRL·Adam 5시드 probe16 (기준 4000 은 n6/final_v4 재사용)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n22_epsdecay
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.eps.decay: [6000]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16}, axes: {agent.eps.decay: [6000]}}
