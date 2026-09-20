@@ -20,20 +20,26 @@ try:
 except Exception:                       # scipy 없으면 p 생략
     wilcoxon = None
 
-C_SCALE = {'s': 5.0, 'a': 0.6, 'k': 5.0, 'kS': 5.0, 'sa': 5.0}     # 학습기 접두 → reward.scale (cost/c 정규화)
-Q_ALIVE = 0.5 * 5.0 / (1 - 0.97)                                  # SWIRL Q 상수(=alive c/(1−γ)), Q/V 용
+import yaml
+
+
+def cell_scale(d):
+    """셀 config.yaml 에서 (reward.scale, alive, γ) → cost/c 정규화·Q/V 기준(alive·c/(1−γ))."""
+    c = yaml.safe_load(open(os.path.join(d, 'config.yaml')))
+    r = c.get('reward', {}) or {}; a = c.get('agent', {}) or {}
+    return float(r.get('scale', 1.0)), float(r.get('alive', 0.5)), float(a.get('gamma', 0.97))
 
 
 def load_cell(d):
     H = json.load(open(os.path.join(d, 'hist.json')))['hist']
     ev = json.load(open(os.path.join(d, 'eval.json'))) if os.path.exists(os.path.join(d, 'eval.json')) else {}
-    pre = os.path.basename(d).split('_')[1]; c = C_SCALE.get(pre, 5.0)
+    c, alive, gam = cell_scale(d); q_alive = alive * c / (1 - gam)
     late = H[100:200]
     r = dict(f1=ev.get('f1', np.nan), fa=ev.get('fa_episode_rate', np.nan), ed=ev.get('event_det', np.nan), delay=ev.get('delay', np.nan),
              tf1=np.nanmean([h['f1'] if h['has_atk'] else np.nan for h in late]),
              cost=np.mean([h['reward_cost'] for h in late]) / c,
              wr=np.nanmean([h['wrec'] for h in late if h['wrec'] == h['wrec']]) if any(h['wrec'] == h['wrec'] for h in late) else np.nan,
-             qv=np.mean([h['qmax'] for h in H[150:200]]) / (Q_ALIVE if pre != 'a' else 0.5 * 0.6 / 0.03))
+             qv=np.mean([h['qmax'] for h in H[150:200]]) / q_alive)
     pf = np.array([(h['ep'], h['probe_f1']) for h in H if h.get('probe_f1') is not None and h['ep'] % 5 == 0 and h['ep'] > 0])
     if len(pf) >= 4:
         m = np.convolve(pf[:, 1], np.ones(3) / 3, 'same')
