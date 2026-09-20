@@ -1,8 +1,0 @@
-# 망 확대(사용자 09-20): [32,32]=1538 파라미터 × N{6,9} SWIRL, [32,32] Adam, 10시드, 프로브 5ep/16ep + greedy 100ep. Isaac 은 speed 1.5(예산 67 ms) 예정 → learn-step 실측 필요
-base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
-outdir: results/claudecodefortest/n17_net32
-seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
-stages: {a: {}}
-learners:
-  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16, agent.hidden: [32, 32]}, axes: {agent.swirl.N: [6, 9]}}
-  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, log.probe_every: 5, log.probe_n: 16, agent.hidden: [32, 32]}, axes: {agent.buffer: [50000]}}

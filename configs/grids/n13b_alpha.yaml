@@ -1,0 +1,7 @@
+# 사용자 09-21: α 0.3(구 값) vs 0.1(현) — pΔ 0.01 기준, SWIRL 5시드 probe16 (n13 의 α0.05·pΔ0.1 과 함께 α 감도표)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n13b_alpha
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16}, axes: {agent.swirl.alpha: [0.3]}}
