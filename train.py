@@ -146,7 +146,7 @@ def run_surrogate(exp, log=print):
             if atk:
                 _c = genv.plan.cls_at(max(genv.t - (1 if genv.knn else 0), 0)); _b = by_cls.setdefault(_c, [0, 0])
                 _b[0 if prev_a == 1 else 1] += 1                       # 그룹별 [TP, FN]
-                weak = float(genv.plan.delta[genv.t]) < 0.35
+                weak = float(genv.plan.delta[max(genv.t - (1 if genv.knn else 0), 0)]) < 0.35   # ★09-21 검토: knn 풀은 라벨=δ[t−1] → 약/강 recall 로깅 인덱스 정합(학습 무관)
                 if prev_a == 1:
                     tp += 1; wtp += weak; stp += (not weak)
                     if det_delay is None: det_delay = adly

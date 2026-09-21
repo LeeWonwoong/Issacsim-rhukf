@@ -1000,6 +1000,9 @@ class OnlineRLNode(Node):
     #  Episode State Reset
     # ══════════════════════════════════════════════════════════
     def _reset_episode_state(self):
+        # ★09-21 검토: 하드리셋(heartbeat)으로 에피소드 도중 리셋될 때 N-step 캐시가 남아 다음 에피 첫 push 와 결합되던 구멍 — 캐시만 비움(학습 경로 불변)
+        try: self.agent.buffer.reset_n_step_cache()
+        except Exception: pass
         self.step_count = 0; self.tick_count = 0; self.stable_counter = 0; self.theta = 0.0
         self._traj_t = 0.0   # 속도변조 워프시간 리셋
         self._sim_flight_t = 0.0; self._prev_gt_sim_time = None   # ★sim 시간축 리셋(2026-08-27)
