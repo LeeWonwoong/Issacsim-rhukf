@@ -1,0 +1,8 @@
+# 사용자 09-21: 정수 보상·누적 reward 직접 사용 — alive(R₀) 0, 순값 그대로: FP −1·FN −1·선언 +10 (코드: alive 0, c_fa 0.2, c_d 0.2, B 2, scale 5). 현행(alive 0.5·c_fa 0.7·c_d 0.7)과 정책 동치(추락 없을 때)인지 + 학습 동역학 변화 확인. SWIRL B·Adam 3e-4, 5시드 probe16, v3 무대
+base: [configs/newenv_v3.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n30_alive0
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.alive: 0.0, reward.c_fa: 0.2, reward.c_d: 0.2}, axes: {agent.swirl.R: [1.0, 0.3]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, reward.scale: 5.0, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, log.probe_every: 5, log.probe_n: 16, reward.alive: 0.0, reward.c_fa: 0.2, reward.c_d: 0.2}, axes: {agent.buffer: [50000]}}
