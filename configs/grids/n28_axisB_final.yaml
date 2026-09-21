@@ -1,6 +1,6 @@
 # 논문 Fig.5(a)/P2 용(09-21): 최종 설정(c5·c_d0.7, 전 학습기 ui1·τ0.005)에서 축 B(ep100 에 U(0,6)→U(6,10)) — 초중반 수렴 사다리 + 체제 전환 낙폭·회복. 학습기 5종: SWIRL B · UKF-TD · EKF-TD 표준판 · Adam 3e-4 · SGD 1e-2. 5시드 probe16.
 #   ⚠ SWIRL 설정은 n27(R·N) 판정 후 필요 시 갱신
-base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+base: [configs/newenv_v3.yaml, configs/overlays/surrogate_knn.yaml]
 outdir: results/claudecodefortest/n28_axisB_final
 seeds: [42, 43, 44, 45, 46]
 stages: {a: {}}

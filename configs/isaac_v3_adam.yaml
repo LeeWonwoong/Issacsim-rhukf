@@ -1,5 +1,5 @@
 # configs/isaac_v3_adam.yaml — Isaac 본선 v3 Adam(표준): 같은 보상 c5(β5·clip10 = TD 1 보상단위 기준)·c_fa0.7·c_d0.7, lr3e-4·B256·[24,24]
-extends: newenv_v2.yaml
+extends: newenv_v3.yaml
 run: {name: isaac_v3_adam, outdir: results/claudecodefortest/isaac_v3/adam_s42, seed: 42, episodes: 200, ep_steps: 300, device: cpu}
 reward: {scale: 5.0, c_fa: 0.7, c_d: 0.7}
 agent:
