@@ -1,0 +1,7 @@
+# 사용자 09-21 16:30 지시: 새 보상 (R₀,C_FP,C_FN,R_d)=(1,2,3,10)·c1 에서 SWIRL 최종 후보 pΔ0.2·α0.03 (ui1·τ0.005·R1·q1e-3·N6) 3시드. Adam 은 n33 과 동일하므로 재실행 안 함(짝비교는 n33 Adam 과).
+base: [configs/newenv_v3.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n34_pd02_reward1231
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.alpha: 0.03, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.swirl.p_delta: [0.2]}}

@@ -1,0 +1,10 @@
+# (분할: 시드 44 만 — Isaac Adam(CPU) 런과 병행용, 09-21 18:45)
+# 사용자 09-21 17:40 지시: 칼만-TD(EKF-TD/UKF-TD 표준판 act=active·P 지속·N1) — R 1(SWIRL 과 동일)·He 초기화(필터 에이전트 기본 init_scheme=he, SWIRL 과 동일)·
+#   q ∈ {1e-3, 1e-4} × p_init ∈ {0.2, 0.5, 1, 5} (사용자 09-21 17:50: p_init 을 더 키워 4점, q 는 2점). UKF-TD α = 0.05(사용자 지정; EKF 는 α 무관). 최종 레짐(v4·새 보상·ui1·τ0.005), 3시드 probe16.
+#   목표 순서: SWIRL > UKF-TD ≳ EKF-TD > Adam. SWIRL·Adam 참조 = n16b 의 obs.div 4 셀(같은 시드·같은 무대).
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n29b_ktd_q_v4_s44
+seeds: [44]
+stages: {a: {}}
+learners:
+  k: {device: gpu, set: {run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.type: [ukf, ekf], agent.swirl.q: [1.0e-3, 1.0e-4], agent.swirl.p_init: [0.2, 0.5, 1.0, 5.0]}}

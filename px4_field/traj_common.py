@@ -124,11 +124,10 @@ class TrajGen:
             return (x, y, z_off, yaw, vx, vy, vz)
         if p == 'aggressive':
             Ra, dz1, dz2, Tp = self.Ra, self.dz1, self.dz2, self.Tp
-            # sim 과 동일한 틱 기반 위상 (spp = int(Tp/dt) 틱/phase, T = spp·dt) — 경계 틱 정렬까지 일치
-            tk = int(round(t / dt)); spp = max(1, int(Tp / dt))
-            phase = (tk // spp) % 4
-            f = (tk % spp) / spp
-            T = spp * dt
+            # ★2026-09-21 sim(09-15 수정)과 동일: 위상을 궤적 시간 t 에서 직접 (구 틱 기반 spp/tk 는 dt 가 다르면 어긋났다)
+            T = Tp
+            phase = int(t // T) % 4
+            f = (t % T) / T
             k = (math.pi / T) * mod
             if phase == 0:
                 return (0.0, 0.0, -dz1 * math.sin(math.pi * f), 0.0, 0.0, 0.0, -dz1 * k * math.cos(math.pi * f))

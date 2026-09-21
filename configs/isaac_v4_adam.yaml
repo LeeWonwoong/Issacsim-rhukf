@@ -1,0 +1,12 @@
+# configs/isaac_v4_adam.yaml — Isaac 본선 v4 Adam(표준): 같은 무대·보상 정수안, lr 3e-4·β5·clip10·B256·[24,24]·ui1·τ0.005·He
+extends: newenv_v4.yaml
+run: {name: isaac_v4_adam, outdir: results/claudecodefortest/isaac_v4/adam_s42, seed: 42, episodes: 200, ep_steps: 300, device: cpu}
+reward: {scale: 1.0, alive: 1.0, c_fa: 2.0, c_d: 3.0, bonus: 10.0, terminal_penalty: 0.0}
+agent:
+  type: adam
+  batch: 256
+  hidden: [24, 24]
+  tau: 0.005
+  update_interval: 1
+  adam: {lr: 3.0e-4, huber_beta: 5.0, grad_clip: 10.0}
+log: {steps: true, eval_n: 0}

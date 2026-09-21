@@ -1,0 +1,7 @@
+# 최종 확인 보조(09-21): 고-P 후보 C' = pΔ0.1·α0.05·ui4·τ0.02 (고-K + 느린 타깃) 을 c_d 0.7 무대에서 5시드 — n23 의 A/B 와 같은 시드로 비교
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n23c_highP_ui4
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  sC: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.tau: 0.02, agent.update_interval: 4, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05}, axes: {agent.buffer: [50000]}}

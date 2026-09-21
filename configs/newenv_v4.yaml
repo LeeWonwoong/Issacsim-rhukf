@@ -1,0 +1,16 @@
+# configs/newenv_v4.yaml — v3 + persistent 공격 성장 제거 (09-21 사용자: "persistent 는 샘플링된 세기에 계속 머문다, 상한 0.80")
+#   · 이전(v2/v3): weak_persist 는 d0 → d0·[1.8,2.2], trans_persist 는 d0 → d0·[1.3,1.5] 로 3–6 스텝 성장 → 유효 δ 가 0.66 / 0.90 까지 올라
+#     "강 상한 0.80" 서술과 어긋났다(v3 전이 persistent 의 11.5% 가 0.80 초과, n33 실측 공격 에피 4.7%·최대 0.86).
+#   · v4: 모든 persistent 는 prefix(0.3·0.6·0.9·1.0 × d0) 뒤 d0 에 머문다(burst 와 같은 상승, 꼬리 없음). 유효 δ 최대 = 강 d0 상한 0.80.
+#   · ★ 연속 밴드(09-21 사용자 결정): d0 구간 약 [0.15,0.30) · 전이 [0.30,0.70) · 강 [0.70,0.80] — 간극 없음. 가중·지속·burst 는 v3 그대로.
+extends: newenv_v3.yaml
+run: {name: newenv_v4}
+scenario:
+  attack:
+    classes:
+      - {name: weak_burst,     weight: 0.175, delta: [0.15, 0.30], kind: burst,      dur: [4, 8]}
+      - {name: weak_persist,   weight: 0.175, delta: [0.15, 0.30], kind: persistent, dur: [15, 30]}
+      - {name: trans_burst,    weight: 0.175, delta: [0.30, 0.70], kind: burst,      dur: [4, 8]}
+      - {name: trans_persist,  weight: 0.175, delta: [0.30, 0.70], kind: persistent, dur: [15, 30]}
+      - {name: strong_burst,   weight: 0.15,  delta: [0.70, 0.80], kind: burst,      dur: [4, 8]}
+      - {name: strong_persist, weight: 0.15,  delta: [0.70, 0.80], kind: persistent, dur: [25, 40]}

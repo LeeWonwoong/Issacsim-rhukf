@@ -37,7 +37,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 
-SEQ="${1:?시퀀스 필요: f1 f2 f3 f3b f4 f4b f5 f6 f7 f8 f9}"
+SEQ="${1:?시퀀스 필요: f1 f2 f3 f3b f4 f4b f5 f6 f7 f8 f9 f13}"
 PATARG=()
 SCRIPT_DIR="$HERE"      # 기본은 px4_field. f9 만 저장소 루트의 rc_attack_trigger.py 를 쓴다
 case "$SEQ" in
@@ -53,6 +53,10 @@ case "$SEQ" in
     f8)          SCRIPT=f5_pattern.py; PATARG=(--pattern aggressive) ;;
     f9)          # ★ 공격 주입(RC 트리거). 수동조종 비행 중 /attack_config 발행 → run_sim wrench.
                  SCRIPT=rc_attack_trigger.py; SCRIPT_DIR="$ROOT" ;;
+    f13)         # ★ 실시간 탐지 정책 리허설(2026-09-21): shadow UKF+NN+failsafe hover. 조종기: 이륙 → 오프보드 ON → 패턴 중
+                 #   다른 창 `python3 etc/analysis/rc_attack_trigger.py --stdin` (t 0.3 = 토크 30%) 로 공격 → 정책이 hover.
+                 #   무인 자동검증: HEADLESS=1 ... f13 1.0 --attack dds --sitl-auto 2.5
+                 SCRIPT=f13_policy.py; PATARG=(--model models/swirl_v2_s42.npz --pattern circle --attack rc --fs-url udpin:0.0.0.0:14540 --no-fetch) ;;
     *)  echo "✗ 알 수 없는 시퀀스 '$SEQ' (f1 f2 f3 f3b f4 f4b f5 f6 f7 f8 f9)"; exit 1 ;;
 esac
 if [ $# -ge 2 ] && [[ "${2}" != --* ]]; then SPEED="$2"; shift 2

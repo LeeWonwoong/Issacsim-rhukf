@@ -1,0 +1,11 @@
+# 사용자 09-21 18:25 지시: n35 와 같은 바람 3단 전환을 SWIRL pΔ0.1·α0.05 로 (비교선 추가). Adam 은 n35 것 재사용.
+# (원본 n35 주석) 바람 에피소드 체제 3단 전환 — ep1–80 약풍 U(1,4) → ep81–120 강풍 U(5,10) → ep121–200 전 상황 U(1,10)
+#   (from_ep 는 0 기준: 0/80/120). 무대 v4(persistent 성장 제거, 유효 δ ≤0.80), 새 보상 (1,2,3,10)·c1.
+#   SWIRL 후보(pΔ0.2·α0.03·ui1·τ0.005·R1) vs Adam 3e-4(β5·clip10), 3시드 probe16. greedy 평가는 마지막 체제 U(1,10).
+#   판독: 각 전환 직후 낙폭·회복 속도·새 정상값(cost·프로브 F1·FA) = SWIRL 강건성이 비정상성에서 나오는가; 200ep 예산 충분성(200 vs 250).
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n35b_axisB_pd01
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.schedule: [{from_ep: 0, mode: uniform, range: [1.0, 4.0]}, {from_ep: 80, mode: uniform, range: [5.0, 10.0]}, {from_ep: 120, mode: uniform, range: [1.0, 10.0]}]}, axes: {agent.buffer: [50000]}}

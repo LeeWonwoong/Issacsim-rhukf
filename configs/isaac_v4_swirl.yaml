@@ -1,0 +1,14 @@
+# configs/isaac_v4_swirl.yaml — Isaac 본선 v4 (09-21 확정): 무대 v4(연속 밴드·persistent 무성장·δ≤0.80) · 보상 정수안 (R₀,C_FP,C_FN,R_d)=(1,2,3,10)·c1 ·
+#   SWIRL 최종 = pΔ0.2·α0.03·R1·q1e-3·ui1·τ0.005·N6·[24,24]·B256·act=target·SPAS·Huber끔·He
+#   실행: scripts/isaac_run.sh <out> --config configs/isaac_v4_swirl.yaml --config configs/overlays/isaac.yaml --set run.seed=42
+extends: newenv_v4.yaml
+run: {name: isaac_v4_swirl, outdir: results/claudecodefortest/isaac_v4/swirl_s42, seed: 42, episodes: 200, ep_steps: 300, device: cuda}
+reward: {scale: 1.0, alive: 1.0, c_fa: 2.0, c_d: 3.0, bonus: 10.0, terminal_penalty: 0.0}
+agent:
+  type: swirl
+  batch: 256
+  hidden: [24, 24]
+  tau: 0.005
+  update_interval: 1
+  swirl: {R: 1.0, huber_c: 0, N: 6, act: target, argmax: spas, p_delta: 0.2, alpha: 0.03}
+log: {steps: true, eval_n: 0}
