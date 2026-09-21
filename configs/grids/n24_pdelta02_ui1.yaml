@@ -1,0 +1,7 @@
+# 사용자 09-21: 고-P 를 ui1·τ0.005 에서 더 — pΔ0.2 × α{0.05,0.03} (c_d 0.7 무대, n23 B=pΔ0.1·α0.05 와 같은 시드) 5시드 probe16
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n24_pdelta02_ui1
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.swirl.p_delta: 0.2}, axes: {agent.swirl.alpha: [0.05, 0.03]}}

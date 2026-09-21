@@ -1,3 +1,4 @@
+import os
 """
 agent.py — Online RHUKF-FV Agent
 ==================================
@@ -26,6 +27,8 @@ from .rhukf_core import (
     rhukf_step_fv, rhukf_step_fv_error, init_error_horizon, compute_per_priorities, ekf_step,
 )
 
+
+_P_TRACE = os.environ.get('SWIRL_P_TRACE', '')   # 09-21 진단 전용: 파일 경로를 주면 학습 호출마다 (h, P대각 평균, 최소, 하위10%) 를 append(기본 끔)
 
 class OnlineRHUKFAgent:
     def __init__(self, cfg):
@@ -228,6 +231,9 @@ class OnlineRHUKFAgent:
                     need_diag=(h == cfg.N_horizon - 1))
                 loss = l_val
                 z_var_sum += t_var
+                if _P_TRACE:   # 진단 전용(env SWIRL_P_TRACE=1): 지평 안 P 수렴 — h 마다 P 대각의 평균/최소/하위10% 를 기록(학습 경로 불변)
+                    _d = torch.diagonal(fs['P_delta']).detach().float()
+                    with open(_P_TRACE, 'a') as _f: _f.write(f"{self.steps_done},{h},{_d.mean().item():.6g},{_d.min().item():.6g},{torch.quantile(_d, 0.1).item():.6g}\n")
         else:  # absolute
             filter_state = None
             for h in range(cfg.N_horizon):

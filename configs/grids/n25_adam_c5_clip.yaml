@@ -1,0 +1,7 @@
+# 사용자 09-21 '보상 스케일 c5 통일': Adam c5 에서 손실 쪽 하이퍼를 스케일에 맞춤 — β5 × grad_clip {10, 70} (n20 은 clip 1 고정이라 과잉 클리핑 의심), c_d 0.7 무대, 5시드 CPU. 비교: n23 Adam c0.6(β1·clip1)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n25_adam_c5_clip
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 1.0e-3, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, reward.scale: 5.0, agent.adam.huber_beta: 5.0}, axes: {agent.adam.grad_clip: [10.0, 70.0]}}
