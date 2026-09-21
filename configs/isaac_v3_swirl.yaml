@@ -1,0 +1,13 @@
+# configs/isaac_v3_swirl.yaml — Isaac 본선 v3 (09-21 확정 후보): 보상 c5·c_fa0.7·c_d0.7, SWIRL B = pΔ0.1·α0.05·ui1·τ0.005·act target·SPAS·R1·Huber끔·N6·B256·[24,24]
+#   실행: scripts/isaac_run.sh <out> --config configs/isaac_v3_swirl.yaml --config configs/overlays/isaac.yaml --set run.seed=42
+extends: newenv_v2.yaml
+run: {name: isaac_v3_swirl, outdir: results/claudecodefortest/isaac_v3/swirl_s42, seed: 42, episodes: 200, ep_steps: 300, device: cuda}
+reward: {scale: 5.0, c_fa: 0.7, c_d: 0.7}
+agent:
+  type: swirl
+  batch: 256
+  hidden: [24, 24]
+  tau: 0.005
+  update_interval: 1
+  swirl: {R: 1.0, huber_c: 0, N: 6, act: target, argmax: spas, p_delta: 0.1, alpha: 0.05}
+log: {steps: true, eval_n: 0}
