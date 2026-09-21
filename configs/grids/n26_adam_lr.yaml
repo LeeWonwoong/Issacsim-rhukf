@@ -1,0 +1,7 @@
+# 사용자 09-21 '표준 Adam = lr 3e-4': c5·β5·clip10·c_d0.7 무대에서 lr {3e-4, 1e-4} 5시드 CPU (1e-3 은 n25 clip10 재사용). 참고: torch.optim.Adam 라이브러리 기본 lr 은 1e-3, RL 관행(PPO 등) 3e-4, DQN 계열 6.25e-5~2.5e-4
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n26_adam_lr
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, reward.scale: 5.0, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}, axes: {agent.adam.lr: [3.0e-4, 1.0e-4]}}
