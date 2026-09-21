@@ -1,0 +1,8 @@
+# 사용자 09-21: 전 학습기 ui1·τ0.005 통일 전제에서 B(pΔ0.1·α0.05) 를 R·N 으로 더 조이기 — FA·cost 를 C′(ui4) 수준으로. R {2,4} (N6) · N 10 (R1), c_d 0.7, 5시드 probe16 (기준 B = n23 sB 같은 시드)
+base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n27_B_tune
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  sR: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.swirl.N: 6}, axes: {agent.swirl.R: [2.0, 4.0]}}
+  sN: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.swirl.R: 1.0}, axes: {agent.swirl.N: [10]}}
