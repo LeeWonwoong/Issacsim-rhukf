@@ -207,6 +207,7 @@ class SurrogateEnv:
         self._absorb = (rng.random() > p_loc) if self.lethal else True
         self._expose = 0
         self._dwell = -1; self._since_end = 99
+        self._undecl = 0                                   # ★09-21 선언 마감 카운터(연속 미선언 스텝)
         self._t_shift = None; self._ws2 = None                # ★09-20 에피소드 중간 풍속 전환 (난수는 마지막에: 앞 스트림 불변)
         sh = getattr(self.wcfg, 'shift', None)
         if self.knn and sh and rng.random() < float(sh.get('p', 1.0)):
@@ -258,7 +259,15 @@ class SurrogateEnv:
         rv = c.knn_rho_atk if a else max(rho.get('rho_v_cln', 0.0), 0.0)
         self.sg = rg * self.sg + math.sqrt(1 - rg * rg) * rng.normal()
         self.sv = rv * self.sv + math.sqrt(1 - rv * rv) * rng.normal()
+        self._deadline(a, prev_action == 1)
         return _iq(nn[0], _phi(self.sv)), _iq(nn[1], _phi(self.sg)), a
+
+    def _deadline(self, a: bool, hov: bool):
+        """★09-21 선언 마감: 공격 활성 스텝에서 track 이면 연속 미선언 +1, hover 면 0; 비활성이면 0. L 에 이르면 종료(crashed 경로 재사용, 기본 L=0 끔)."""
+        L = int(getattr(self.acfg, 'deadline_steps', 0) or 0)
+        if L <= 0: return
+        self._undecl = (self._undecl + 1 if not hov else 0) if a else 0
+        if self._undecl >= L: self.crashed = True
 
     def nis(self, prev_action: int):
         """이번 스텝의 (원시 NIS vel, 원시 NIS gyro, 공격 여부). prev_action = 지금까지 실행 중인 행동."""
@@ -299,6 +308,7 @@ class SurrogateEnv:
         self.sg = rg * self.sg + math.sqrt(1 - rg * rg) * rng.normal()
         self.sv = rv * self.sv + math.sqrt(1 - rv * rv) * rng.normal()
         Sg, Sv = self.Q[self._key(key)]
+        self._deadline(a, hov)
         return _iq(Sv, _phi(self.sv)), _iq(Sg, _phi(self.sg)), a
 
     def step(self) -> bool:

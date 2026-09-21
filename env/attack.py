@@ -48,6 +48,7 @@ class AttackConfig:
     tail: List[float] = field(default_factory=lambda: [0.7, 0.35])              # burst 꼬리(d0 대비)
     classes: List[ProfileClass] = field(default_factory=list)
     events: Tuple[int, int] = (1, 1)    # profile: 공격 에피소드당 사건 수 범위 (사건마다 그룹 독립 추첨)
+    deadline_steps: int = 0             # ★09-21 선언 마감(0=끔): 사건 안에서 연속 미선언(track) 스텝이 이 값에 이르면 임무 실패로 에피소드 종료(terminated). 물리 근거: δ0.8 failsafe 생존 0.5 s 100%·1 s 85%
     event_gap: Tuple[int, int] = (30, 60)   # profile: 사건 끝 → 다음 온셋 간격(스텝)
     authority_nm: float = 4.36          # δ → N·m (Isaac 주입용)
 

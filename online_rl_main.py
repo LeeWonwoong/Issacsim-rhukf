@@ -1004,6 +1004,7 @@ class OnlineRLNode(Node):
         try: self.agent.buffer.reset_n_step_cache()
         except Exception: pass
         self.step_count = 0; self.tick_count = 0; self.stable_counter = 0; self.theta = 0.0
+        self._undecl_run = 0   # ★09-21 선언 마감 카운터
         self._traj_t = 0.0   # 속도변조 워프시간 리셋
         self._sim_flight_t = 0.0; self._prev_gt_sim_time = None   # ★sim 시간축 리셋(2026-08-27)
         self._wp_s = 0.0   # waypoint 호길이 상태 리셋 (코너감속 프로파일)
@@ -1684,6 +1685,13 @@ class OnlineRLNode(Node):
                 else:
                     self.continuous_fp_count = 0
 
+        # ★09-21 선언 마감(scenario.attack.deadline_steps, 기본 0=끔): 사건 안 연속 미선언 스텝이 L 에 이르면 임무 실패 종료(terminated) — surrogate 와 동일 규칙
+        _L = int(getattr(getattr(self.scen_cfg, 'attack', None), 'deadline_steps', 0) or 0)
+        if _L > 0:
+            _a0 = self.prev_action if self.prev_action is not None else 0
+            self._undecl_run = (self._undecl_run + 1 if _a0 == 0 else 0) if self.attack_active_flag else 0
+            if self._undecl_run >= _L and not done:
+                done = True; term_reason = 'deadline'; _terminated_phys = True
         # ── 2. 퓨어한 보상 계산 ──
         # FP 인자: 공격직후 recovery는 recovery_delay(offset grace); 순수오탐은 연속 hover 카운트(첫스텝 -1 점증).
         fp_rec_arg = (min(recovery_delay, 5) if self._last_burst_end is not None
@@ -1719,7 +1727,7 @@ class OnlineRLNode(Node):
                 done = True; term_reason = 'excessive_fp'
 
         # ── 부트스트랩용 terminal: 물리적 crash만 True (timeout·논리종료는 truncation) ──
-        terminated = term_reason in PHYSICAL_TERMINALS
+        terminated = term_reason in PHYSICAL_TERMINALS or term_reason == 'deadline'   # ★09-21 선언 마감도 진짜 terminal
         # (추락 벌점은 RewardTracker 가 terminated 로 처리 — 09-18)
         # ★2026-09-11 추락 벌점 없음(사용자 확정): 절벽 = terminated 부트스트랩 절단만. (잠시 넣었던 track-only −5 규칙 제거)
 

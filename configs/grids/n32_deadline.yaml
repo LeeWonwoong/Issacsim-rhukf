@@ -1,0 +1,8 @@
+# 사용자 09-21: done 을 실제로 발화시키는 '선언 마감' — 사건 안 연속 미선언 ≥ L 스텝이면 임무 실패 종료(terminated, 남은 R₀ 상실). L {5, 8} (0.5·0.8 s; δ0.8 failsafe 생존 0.5 s 100%·1 s 85%). SWIRL B · Adam 3e-4, 5시드 probe16, v3·현행 보상. 기준(L=0) = n23 sB / n26 3e-4
+base: [configs/newenv_v3.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n32_deadline
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7}, axes: {scenario.attack.deadline_steps: [5, 8]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, reward.scale: 5.0, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7}, axes: {scenario.attack.deadline_steps: [5, 8]}}
