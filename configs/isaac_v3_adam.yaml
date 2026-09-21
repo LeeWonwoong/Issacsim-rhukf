@@ -1,4 +1,4 @@
-# configs/isaac_v3_adam.yaml — Isaac 본선 v3 Adam: 같은 보상 c5(β5·clip10 = TD 1 보상단위 기준)·c_fa0.7·c_d0.7, lr1e-3·B256·[24,24]
+# configs/isaac_v3_adam.yaml — Isaac 본선 v3 Adam(표준): 같은 보상 c5(β5·clip10 = TD 1 보상단위 기준)·c_fa0.7·c_d0.7, lr3e-4·B256·[24,24]
 extends: newenv_v2.yaml
 run: {name: isaac_v3_adam, outdir: results/claudecodefortest/isaac_v3/adam_s42, seed: 42, episodes: 200, ep_steps: 300, device: cpu}
 reward: {scale: 5.0, c_fa: 0.7, c_d: 0.7}
@@ -6,5 +6,5 @@ agent:
   type: adam
   batch: 256
   hidden: [24, 24]
-  adam: {lr: 1.0e-3, huber_beta: 5.0, grad_clip: 10.0}
+  adam: {lr: 3.0e-4, huber_beta: 5.0, grad_clip: 10.0}   # 09-21 교수님 방침: 베이스라인은 관례 표준(lr 3e-4), lr 1e-3(튜닝 최선)은 ablation
 log: {steps: true, eval_n: 0}
