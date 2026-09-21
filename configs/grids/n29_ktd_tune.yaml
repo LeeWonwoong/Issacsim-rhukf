@@ -1,8 +1,7 @@
-# 사용자 09-21: 칼만-TD(EKF/UKF, 표준판 act=active·P 지속·N1)도 R 은 SWIRL 과 같게(1.0) 두고 q·p_init 을 튜닝 — 전 학습기 ui1·τ0.005·c5·c_d0.7. q {1e-4, 1e-2}(현 1e-3 은 n23 재사용) · p_init {0.2}(현 0.05, 상한 p_init×100). 5시드 probe16
-base: [configs/newenv_v2.yaml, configs/overlays/surrogate_knn.yaml]
+# 칼만-TD(EKF/UKF 표준판 act=active·P 지속·N1) 튜닝 — R 1 공유, q {1e-4,1e-3,1e-2} × p_init {0.05,0.2}, 새 보상(1,2,3,10)·ui1·τ0.005, 3시드 probe16
+base: [configs/newenv_v3.yaml, configs/overlays/surrogate_knn.yaml]
 outdir: results/claudecodefortest/n29_ktd_tune
 seeds: [42, 43, 44]
 stages: {a: {}}
 learners:
-  kq: {device: gpu, set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7}, axes: {agent.type: [ekf, ukf], agent.swirl.q: [1.0e-4, 1.0e-2]}}
-  kp: {device: gpu, set: {run.device: cuda, log.eval_n: 100, reward.scale: 5.0, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active, log.probe_every: 5, log.probe_n: 16, reward.c_d: 0.7, agent.swirl.p_init: 0.2}, axes: {agent.type: [ekf, ukf]}}
+  k: {device: gpu, set: {run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.act: active, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.type: [ekf, ukf], agent.swirl.q: [1.0e-4, 1.0e-3, 1.0e-2], agent.swirl.p_init: [0.05, 0.2]}}

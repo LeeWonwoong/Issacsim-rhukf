@@ -1,0 +1,8 @@
+# 사용자 09-21 확정 후보 보상 (R₀,C_FP,C_FN,R_d)=(1,2,3,10), scale 1, 종료벌점 0 → 순값 TN+1·FP−1·FN−2·선언+11, 플래토 300. SWIRL B(pΔ0.1·α0.05·ui1·τ0.005·R1)·Adam 3e-4(β5·clip10) 3시드 probe16, v3 무대
+base: [configs/newenv_v3.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n33_reward1231
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.buffer: [50000]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.buffer: [50000]}}
