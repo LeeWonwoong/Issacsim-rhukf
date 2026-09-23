@@ -1,0 +1,10 @@
+# configs/overlays/surrogate_knn_v4clean.yaml — ★09-24 v3clean 과 같은 NIS 재생 + θ 채널(P2′ 자세 퍼텐셜 성형용).
+#   풀 pool_knn_v4clean = v2clean 과 같은 원본 11폴더(1,599 에피 · 438,734 행)에 roll·pitch·θ 열을 붙인 knn_v4.
+#   θ 코퓰러는 타이밍 수정 뒤 Isaac 1316 짝(isaac_v12_simclock/main_1316_{adam,swirl}_s42, 347에피)을 홀드아웃으로
+#   scripts/fit_theta_copula.py fit --write 로 적합해 풀에 저장했다(ACF lag1–40 최대 오차 0.009). load_pool 이 읽는다.
+#   θ 를 켜도 NIS·라벨·추락은 v3clean 과 비트 동일(θ 난수는 별도 스트림) → shape_tilt=0 이면 v3clean 과 같은 학습.
+extends: surrogate_knn_v3clean.yaml
+env:
+  surrogate:
+    pool: results/claudecodefortest/pools/pool_knn_v4clean.npz
+    theta: true

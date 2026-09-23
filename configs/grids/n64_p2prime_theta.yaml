@@ -1,0 +1,20 @@
+# n64 — 09-24 밤샘(사용자: "surrogate 도 밤새 돌려볼 거 생각해"). P2′ 자세 퍼텐셜 성형(PBRS, 정책 불변)의 격차 용량반응.
+#   F = γΦ(s′) − Φ(s),  Φ = −λ·θ̂/0.1,  모드 전환 뒤 3행 θ̂ 동결 (env/reward.py). 지표 reward 열은 성형 전 r^G.
+#   정책 불변이라 최적 정책은 λ 와 무관 → 격차가 난다면 '성형이 만든 가치 회귀 잡음을 어느 업데이트 규칙이 더 견디나' 에서만.
+#   무대 v5 · 보상 v5 (1,1.5,1.5,4) · θ 채널 풀 v4clean · 200 에피 · 10 시드.
+#   SWIRL-B = n62/n63 과 같은 설정(pΔ0.01·α0.1·R1·N6·ui4·τ0.02·B256·act=target). Adam = 표준 B128(사용자 지정).
+#   λ0 칸은 n63 c_sw0 과 같은 학습(θ 는 NIS 에 영향 없음) → 재현 확인용.
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n64_p2prime_theta
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.02, agent.update_interval: 4, agent.buffer: 50000,
+                         agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0, agent.swirl.N: 6, agent.swirl.q: 1.0e-3,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {reward.shape_tilt: [0.0, 2.0, 4.0, 8.0]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {reward.shape_tilt: [0.0, 2.0, 4.0, 8.0]}}

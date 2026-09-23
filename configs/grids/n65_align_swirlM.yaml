@@ -1,0 +1,21 @@
+# n65 — 09-24 밤샘. surrogate ↔ Isaac 정합 점검(사용자: "surrogate 를 그냥 아이작심처럼").
+#   Isaac 타이밍 수정 뒤 본선 설정(SWIRL-M = pΔ0.01·α0.1·R0.5·N5·ui1·τ0.005·B256)을 surrogate 에 그대로 옮겨
+#   Isaac v12 짝 결과를 재현하는지 본다:
+#     1316 보상(c_fa3·c_d1·bonus6): Isaac s42 에서 SWIRL-M 이 크게 앞섬 (ep100–149 F1 0.809 vs 0.540, 20에피 창 F1≥0.8 ep115 vs ep180)
+#     v5 보상(1,1.5,1.5,4): Isaac s42 짝 main_v5_* (09-24 새벽 진행 중)
+#   정합 판정 = 격차 부호·크기와 도달 에피(속도) 재현. 이 격자로 튜닝은 하지 않는다(정합 전 튜닝 금지).
+#   8 시드 × 2 보상 × {SWIRL-M, Adam B128}. SWIRL-M 은 ui1 이라 SWIRL-B 보다 학습 호출이 4배 → 런당 ~2 h (GPU 8 동시).
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n65_align_swirlM
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 0.5, agent.swirl.N: 5, agent.swirl.q: 1.0e-3,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {rw: [{_name: r1316, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}, {_name: v5}]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {rw: [{_name: r1316, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}, {_name: v5}]}}
