@@ -13,9 +13,18 @@
              · bonus: 사건(버스트)마다 처음 hover 가 켜진 스텝 1회(이미 hover 중에 온셋이어도 지급) — 모든 공격을 잡는 감지기
              · alive: 모든 스텝 공통 상수(정책 불변, 종료 시에만 효과 = 추락 비용)
 공통: 추락(terminated)이면 −terminal_penalty 추가.  마지막에 전체 × scale.
+
+★09-23 P2′ 자세 퍼텐셜 성형 (shape_tilt=λ>0 일 때만; 기본 0 = 끔·비트 동일)
+  r_t = r^G_t + F_t,  F_t = γ·Φ_t − Φ_{t−1},  Φ_t = −λ·θ̂_t/θ0 (θ0 = tilt_ref),  θ̂ = √(roll²+pitch²)
+  · 동결: prev_action 이 바뀐 행부터 shape_freeze 행은 θ̂ = 직전 행의 유효 θ̂ (명령 과도 제거)
+  · 시작: reset() 뒤 첫 호출 행은 Φ_prev 를 그 행 Φ 로 초기화하고 F=0 (그 행은 전이를 만들지 않는다 — prev_state 없음)
+  · 종료: terminated 면 흡수상태 Φ=0 → F = −Φ_{T−1}.  timeout(절단)은 정상 계산
+  · γ = shape_gamma (cfgload 가 agent.gamma 로 채우고 다르면 거부) → n-step 합이 γⁿΦ_{t+n} − Φ_t 로 망원
+  · 정책 불변(Ng·Harada·Russell 1999). 지표·보고는 r^G 만(last_rG) — 반환값은 학습 보상(r^G+F)
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -40,11 +49,19 @@ class RewardConfig:
     c_d: float = 0.3
     bonus: float = 1.0
     alive: float = 0.0
+    # ── ★09-23 P2′ 자세 퍼텐셜 성형 (0 = 끔) ──
+    shape_tilt: float = 0.0        # λ
+    tilt_ref: float = 0.1          # θ0 [rad]
+    shape_freeze: int = 3          # 모드 전환 행부터 θ̂ 동결 행 수
+    shape_gamma: float = 0.0       # F 의 γ. 0 = agent.gamma 를 cfgload 가 채움(다르면 오류)
 
     def __post_init__(self):
         if self.mode not in ('label4', 'cost'):
             raise ValueError(f'reward.mode={self.mode!r} (label4|cost)')
         self.terminal_penalty = abs(float(self.terminal_penalty))   # 옛 설정은 음수로 적었다 → 크기로 정규화
+        if float(self.shape_tilt) < 0 or float(self.tilt_ref) <= 0 or int(self.shape_freeze) < 0:
+            raise ValueError(f'reward.shape_tilt={self.shape_tilt} (≥0) · tilt_ref={self.tilt_ref} (>0) · '
+                             f'shape_freeze={self.shape_freeze} (≥0)')
 
 
 def label4_reward(rc: RewardConfig, prev_action: int, attack: bool, attack_delay: int,
@@ -80,8 +97,41 @@ class RewardTracker:
         self._paid = False
         self._pprev_action = 0
         self._fp_run = 0
+        # P2′ 성형 상태 (에피소드 시작: Φ_prev 미정 → 첫 호출 행에서 초기화)
+        self._phi_prev = None
+        self._th_prev = None
+        self._frz_left = 0
+        self._frz_val = 0.0
+        self.last_rG = 0.0; self.last_F = 0.0; self.last_phi = 0.0; self.last_theta = float('nan')
 
-    def step(self, prev_action: int, attack: bool, attack_delay: int, terminated: bool = False) -> float:
+    @property
+    def shaping(self) -> bool:
+        return float(self.rc.shape_tilt) > 0.0
+
+    def _shape(self, prev_action: int, terminated: bool, roll, pitch) -> float:
+        """F_t (배율 전). 호출 전 self._pprev_action = 직전 행의 prev_action."""
+        rc = self.rc
+        if roll is None:
+            raise ValueError('reward.shape_tilt>0 인데 roll/pitch(θ) 입력이 없다 — Isaac 은 cur_euler, surrogate 는 env.surrogate.theta=true')
+        th = math.hypot(float(roll), float(pitch or 0.0))
+        if (self._th_prev is not None and prev_action != self._pprev_action and int(rc.shape_freeze) > 0):
+            self._frz_left = int(rc.shape_freeze); self._frz_val = self._th_prev    # 전환 행 s: θ̂_{s−1}(유효값) 로 동결 시작
+        if self._frz_left > 0:
+            th_eff = self._frz_val; self._frz_left -= 1
+        else:
+            th_eff = th
+        phi = 0.0 if terminated else -float(rc.shape_tilt) * th_eff / float(rc.tilt_ref)
+        g = float(rc.shape_gamma)
+        if not 0.0 < g <= 1.0:
+            raise ValueError(f'reward.shape_gamma={g} — cfgload 가 agent.gamma 로 채운다(직접 쓸 때는 γ 를 넣을 것)')
+        F = 0.0 if self._phi_prev is None else g * phi - self._phi_prev
+        self._phi_prev = phi; self._th_prev = th_eff
+        self.last_phi = phi; self.last_theta = th_eff
+        return F
+
+    def step(self, prev_action: int, attack: bool, attack_delay: int, terminated: bool = False,
+             roll=None, pitch=None) -> float:
+        """반환 = 학습 보상(배율 적용). 성형 끔이면 r^G 그대로(구 코드와 비트 동일). 성분은 last_rG·last_F."""
         rc = self.rc
         if attack and not self._prev_atk:
             self._paid = False                     # 새 버스트
@@ -103,8 +153,16 @@ class RewardTracker:
         if terminated:
             r -= rc.terminal_penalty
         self._prev_atk = attack
+        if not self.shaping:
+            self._pprev_action = prev_action
+            out = r * rc.scale
+            self.last_rG = out
+            return out
+        F = self._shape(prev_action, terminated, roll, pitch)
         self._pprev_action = prev_action
-        return r * rc.scale
+        self.last_rG = r * rc.scale
+        self.last_F = F * rc.scale
+        return self.last_rG + self.last_F
 
 
 # ── 구 호출부 호환 (분석 스크립트용; 새 코드는 RewardTracker) ─────────────────────

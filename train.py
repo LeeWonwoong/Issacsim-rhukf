@@ -132,7 +132,7 @@ def run_surrogate(exp, log=print):
         genv.reset(); ob.reset(); tracker.reset()
         prev_s = None; prev_a = 0; dw_left = 0
         tp = fp = fn = tn = 0; wtp = wfn = stp = sfn = 0
-        epr = 0.0; losses = []; qs = []; tv = []; innov = []; adapt = []; nisf = []; flip = []; n_r = 0; by_cls = {}
+        epr = 0.0; epr_train = 0.0; epF = 0.0; ths = []; losses = []; qs = []; tv = []; innov = []; adapt = []; nisf = []; flip = []; n_r = 0; by_cls = {}
         det_delay = None; t = 0
         for t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
@@ -141,8 +141,12 @@ def run_surrogate(exp, log=print):
                 if genv.step(): break
                 continue
             adly = genv.attack_delay()
-            r = tracker.step(prev_a, atk, adly, terminated=genv.crashed)
+            # ★09-23 P2′: surrogate θ 채널(env.surrogate.theta)을 Isaac 과 같은 코드·같은 동결 규칙으로 (roll=θ, pitch=0)
+            r = tracker.step(prev_a, atk, adly, terminated=genv.crashed,
+                             roll=genv.theta, pitch=(0.0 if genv.theta is not None else None))
             n_r += 1
+            if genv.theta is not None: ths.append(genv.theta)
+            if tracker.shaping: epr_train += r; epF += tracker.last_F
             if atk:
                 _c = genv.plan.cls_at(max(genv.t - (1 if genv.knn else 0), 0)); _b = by_cls.setdefault(_c, [0, 0])
                 _b[0 if prev_a == 1 else 1] += 1                       # 그룹별 [TP, FN]
@@ -155,7 +159,7 @@ def run_surrogate(exp, log=print):
             else:
                 if prev_a == 1: fp += 1
                 else: tn += 1
-            epr += r
+            epr += tracker.last_rG                     # 보고용 = r^G (성형 끔이면 r 과 같다)
             if prev_s is not None:
                 agent.push(prev_s, prev_a, r, s, bool(genv.crashed))
                 out = agent.learn()
@@ -189,6 +193,10 @@ def run_surrogate(exp, log=print):
                    rec_by_cls={k: (v[0] / (v[0] + v[1]) if v[0] + v[1] else None) for k, v in by_cls.items()},
                    wrec=(wtp / (wtp + wfn) if wtp + wfn else float('nan')), srec=(stp / (stp + sfn) if stp + sfn else float('nan')),
                    sec=time.time() - t0)
+        if tracker.shaping:                             # ★09-23 P2′: 학습 보상 합·성형항 합(지표는 r^G 인 'reward')
+            row.update(reward_train=epr_train, shape_F=epF)
+        if ths:
+            row.update(theta_mean=float(np.mean(ths)))
         if pe > 0 and ep % pe == 0:
             row.update(probe(agent, exp, ob, pn, episode=ep))
         hist.append(row)
@@ -221,6 +229,8 @@ def main(argv=None):
     log(f"[train] env={exp.env_kind} agent={exp.agent_type} γ={c.gamma} n={c.n_step_size if c.use_n_step else 1} "
         f"reward={exp.reward.mode}×{exp.reward.scale} obs={exp.obs.compress}/clip{exp.obs.clip}/div{exp.obs.div}/W{exp.obs.window} "
         f"attack={exp.scenario.attack.family} wind={exp.scenario.wind.mode} seed={c.seed} ep={c.max_episodes}×{c.episode_max_steps}")
+    if float(exp.reward.shape_tilt) > 0:
+        log(f"[train] P2′ 성형 λ={exp.reward.shape_tilt} θ0={exp.reward.tilt_ref} 동결={exp.reward.shape_freeze} γ={exp.reward.shape_gamma}")
     if exp.agent_type != 'adam':
         log(f"[train] SWIRL form={c.state_form} anchor={c.anchor_type} argmax={c.ddqn_argmax}/{c.h0_online_moving_init} "
             f"pΔ={c.p_delta_init} huber={c.huber_c} N={c.N_horizon} R={c.r_init} q={c.q_init} α={c.alpha} τ={c.tau_srrhuif} ui={c.update_interval}")

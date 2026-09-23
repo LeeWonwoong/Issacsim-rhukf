@@ -83,6 +83,16 @@ class SurrogateConfig:
     #   모든 가중이 0 이면 구 단일 AR(1) 경로(비트 동일)를 쓴다.
     knn_c2_g: Tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)   # (nugget, w1, rho1, w2, rho2)
     knn_c2_v: Tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)
+    # ★09-23 θ 채널(P2′ 자세 퍼텐셜 성형용, 기본 끔). 참조 = P2S p6_joint.py 인자 32a (Isaac 홀드아웃 관문 통과판).
+    #   1단: 조건 특징(_feat) + 직전 6 행동 비트×theta_abits_w 로 별도 KD-트리에서 theta_k1 행
+    #   2단: 그 행들의 풀 NIS 창(압축 vel·gyro 4스텝)이 **생성된** NIS 창과 가까운 theta_m 행 → θ 경험분위
+    #   코퓰러 z = 에피 효과 + AR(ρ1) + AR(ρ2) + 너겟 (s_m, w1, ρ1, w2, ρ2 — 분산 비중, 너겟 = 1−합), 전용 난수 스트림
+    #   → θ 를 켜도 NIS 는 비트 동일. 풀에 'theta' 열이 있어야 한다(scripts/build_pool_knn.py → knn_v4).
+    theta: bool = False
+    theta_k1: int = 1024
+    theta_m: int = 32
+    theta_abits_w: float = 4.0         # 행동 비트 1개 불일치 = 거리 4 (δ 0.2 차와 같음). 0 = 비트 조건 끔
+    theta_copula: Tuple[float, float, float, float, float] = (0.054, 0.159, 0.201, 0.787, 0.868)   # P2S J32a 적합값
     crash: CrashConfig = field(default_factory=CrashConfig)
 
     def __post_init__(self):
@@ -111,9 +121,14 @@ def load_pool(cfg: SurrogateConfig) -> dict:
     if key in _POOL_CACHE:
         return _POOL_CACHE[key]
     d = np.load(cfg.pool)
-    if 'format' in d.files and str(d['format']) in ('knn_v2', 'knn_v3'):      # Isaac 실측 k-NN 풀 (v3 = +패턴 열)
+    if 'format' in d.files and str(d['format']) in ('knn_v2', 'knn_v3', 'knn_v4'):   # Isaac 실측 k-NN 풀 (v3 = +패턴 열, v4 = +θ·roll·pitch 열)
         X = np.asarray(d['X'], float); rho = json.loads(str(d['rho']))
-        Q = dict(_knn=True, X=X, rho=rho, _tiers=[], _has_s=False, _format=str(d['format']), _has_pat=(str(d['format']) == 'knn_v3' and X.shape[1] >= 12))
+        Q = dict(_knn=True, X=X, rho=rho, _tiers=[], _has_s=False, _format=str(d['format']),
+                 _has_pat=(str(d['format']) in ('knn_v3', 'knn_v4') and X.shape[1] >= 12))
+        names = [str(n) for n in d['names']] if 'names' in d.files else []
+        if 'theta' in names:                                   # ★09-23 θ 열(knn_v4, 또는 P2S 스크래치 knn_v3+theta)
+            Q['_theta_col'] = X[:, names.index('theta')].copy()
+            Q['_ep'] = np.asarray(d['ep']) if 'ep' in d.files else None
         _POOL_CACHE[key] = Q
         return Q
     fmt = cfg.pool_format
@@ -181,6 +196,31 @@ def _iq(S, u):
     return float(np.interp(u, g, S))
 
 
+def _comp_theta(x):
+    """θ 2단 조건용 NIS 압축 (P2S p6 와 동일): min(log1p√x, 4)/4."""
+    return np.minimum(np.log1p(np.sqrt(np.maximum(x, 0.0))), 4.0) / 4.0
+
+
+def _pool_windows(v, g, ep):
+    """풀 행별 NIS 창 [c(v)_{t−3..t}, c(g)_{t−3..t}] — 에피 시작부는 그 에피 첫 값으로 채운다."""
+    cv, cg = _comp_theta(v), _comp_theta(g); n = len(v); W = np.zeros((n, 8))
+    start = np.r_[0, np.flatnonzero(ep[1:] != ep[:-1]) + 1]
+    first = np.repeat(start, np.diff(np.r_[start, n]))
+    for j in range(4):
+        idx = np.maximum(np.arange(n) - (3 - j), first)
+        W[:, j] = cv[idx]; W[:, 4 + j] = cg[idx]
+    return W
+
+
+def _pool_abits(act, ep, n_bits=6):
+    """풀 행별 직전 n 행의 행동(같은 에피 안, 밖이면 0). 열 0 = 1 행 전."""
+    B = np.zeros((len(act), n_bits))
+    for L in range(1, n_bits + 1):
+        sh = np.r_[np.zeros(L), act[:-L]]; ok = np.r_[np.zeros(L, bool), ep[L:] == ep[:-L]]
+        B[:, L - 1] = np.where(ok, sh, 0.0)
+    return B
+
+
 def _tier_curve(tiers: Dict[int, List[float]], ws: int, outer: bool):
     if ws <= 0 or ws not in tiers:
         return None
@@ -217,6 +257,65 @@ class SurrogateEnv:
                     self._kdt = cKDTree(np.ascontiguousarray(self._F), balanced_tree=False, compact_nodes=False)
                 except Exception:
                     self._kdt = None
+        self.theta = None
+        if cfg.theta:
+            self._theta_setup()
+
+    def _theta_setup(self):
+        """θ 채널 자료(풀마다 1회, 풀 캐시에 보관): θ 전용 KD-트리 · 풀 NIS 창 · 정규화 척도."""
+        if not self.knn or '_theta_col' not in self.Q:
+            raise ValueError('env.surrogate.theta=true 는 θ 열이 있는 k-NN 풀(knn_v4)이 필요하다 — scripts/build_pool_knn.py 로 다시 만들 것')
+        if self.Q.get('_ep') is None:
+            raise ValueError('θ 채널: 풀에 ep 배열이 없다(창·행동 비트를 만들 수 없음)')
+        T = self.Q.get('_theta')
+        key = float(self.cfg.theta_abits_w)
+        if T is None or T['abw'] != key:
+            from scipy.spatial import cKDTree
+            X, ep = self.Q['X'], self.Q['_ep']
+            F = self._F
+            if key > 0:
+                F = np.c_[F, _pool_abits(X[:, 5], ep) * key]
+            WP = _pool_windows(X[:, 9], X[:, 10], ep)
+            T = dict(abw=key, tree=cKDTree(np.ascontiguousarray(F), balanced_tree=False, compact_nodes=False),
+                     WP=WP, WS=WP.std(0) + 1e-9, TH=self.Q['_theta_col'], c1={})
+            self.Q['_theta'] = T
+        self._TH = T
+
+    def _theta_reset(self):
+        """θ 전용 난수 스트림(주 rng 는 건드리지 않는다 → NIS 비트 동일)과 에피 상태."""
+        self._rt = np.random.default_rng([self.seed0 & 0xFFFFFFFF, self.ep_idx + 1, 0x7E7A])
+        sm2 = float(self.cfg.theta_copula[0])
+        self._tm = math.sqrt(max(sm2, 0.0)) * self._rt.normal(); self._t1 = self._rt.normal(); self._t2 = self._rt.normal()
+        self._twv = []; self._twg = []; self._tah = [0] * 6
+        self.theta = None
+
+    def _theta_step(self, q, prev_action, v, g):
+        """이번 스텝 θ (rad). q = NIS 조건 특징(_feat 한 행). v, g = 방금 생성한 원시 NIS."""
+        c, T = self.cfg, self._TH
+        if c.theta_abits_w > 0:
+            q = np.r_[q, np.array(self._tah[::-1], float) * float(c.theta_abits_w)]
+        self._tah = self._tah[1:] + [int(prev_action)]
+        key = tuple(np.round(q, 1))
+        nb = T['c1'].get(key)
+        if nb is None:
+            nb = T['tree'].query(q, k=min(int(c.theta_k1), len(T['TH'])), workers=1)[1]
+            if len(T['c1']) < 20000: T['c1'][key] = nb
+        self._twv.append(float(_comp_theta(v))); self._twg.append(float(_comp_theta(g)))
+        self._twv = self._twv[-4:]; self._twg = self._twg[-4:]
+        pad = lambda L: [L[0]] * (4 - len(L)) + L
+        w = np.array(pad(self._twv) + pad(self._twg))
+        d = (((T['WP'][nb] - w) / T['WS']) ** 2).sum(1)
+        M = int(c.theta_m)
+        sel = nb[np.argpartition(d, M)[:M]] if M < len(nb) else nb
+        S = np.sort(T['TH'][sel])
+        sm2, w1, r1, w2, r2 = (float(x) for x in c.theta_copula)
+        nug2 = max(0.0, 1.0 - sm2 - w1 - w2)
+        rt = self._rt
+        self._t1 = r1 * self._t1 + math.sqrt(1 - r1 * r1) * rt.normal()
+        self._t2 = r2 * self._t2 + math.sqrt(1 - r2 * r2) * rt.normal()
+        z = self._tm + math.sqrt(nug2) * rt.normal() + math.sqrt(w1) * self._t1 + math.sqrt(w2) * self._t2
+        self.theta = _iq(S, _phi(z))
+        return self.theta
 
     @staticmethod
     def _feat(d0, d1, d3, d6, since, act, dwell, ws, dlast, pat=None):
@@ -286,6 +385,8 @@ class SurrogateEnv:
             self._t_shift = int(rng.integers(int(sh['t'][0]), int(sh['t'][1]) + 1)); self._ws2 = float(rng.uniform(*sh['range']))
         if self.knn and getattr(self, '_has_pat', False):   # ★09-22 v3 풀: 에피마다 기동 패턴 추첨(Isaac 과 같이 5패턴 균등) — 맨 끝이라 앞 난수 불변
             self.pat = int(rng.integers(0, 5))
+        if self.cfg.theta:                                   # ★09-23 θ 채널: 전용 스트림(주 rng 소비 없음)
+            self._theta_reset()
         return self
 
     def _bin(self, d): return min(7, max(0, int((d - 0.1) / 0.1)))
@@ -376,8 +477,11 @@ class SurrogateEnv:
             zv = self.sv
         self._deadline(a, prev_action == 1)
         # ★09-23 F3/F7: 코퓰러 위치 = 에피 오프셋 + 사건 효과 + AR(1) 잔차
-        return (_iq(nn[0], _phi(zv + getattr(self, 'mv', 0.0) + getattr(self, '_evv', 0.0))),
-                _iq(nn[1], _phi(zg + getattr(self, 'mg', 0.0) + getattr(self, '_evg', 0.0))), a)
+        out = (_iq(nn[0], _phi(zv + getattr(self, 'mv', 0.0) + getattr(self, '_evv', 0.0))),
+               _iq(nn[1], _phi(zg + getattr(self, 'mg', 0.0) + getattr(self, '_evg', 0.0))), a)
+        if c.theta:                                             # ★09-23 θ 채널(전용 난수, NIS 뒤) → self.theta
+            self._theta_step(q, prev_action, out[0], out[1])
+        return out
 
     def _deadline(self, a: bool, hov: bool):
         """★09-21 선언 마감: 공격 활성 스텝에서 track 이면 연속 미선언 +1, hover 면 0; 비활성이면 0. L 에 이르면 종료(crashed 경로 재사용, 기본 L=0 끔)."""

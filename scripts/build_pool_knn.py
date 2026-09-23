@@ -12,6 +12,9 @@
   dlast            현재/직전 공격 사건의 최대 세기 (vel 은 지연이 길어 공격이 끝난 뒤에도 사건 크기에 따라 응답이 다르다)
   nis_v, nis_g     원시 NIS (ε = rᵀS⁻¹r/n_z)
   ep               에피소드 번호(풀 안 고유) — 시간 상관 추정·검증 분할용
+  theta, roll, pitch  ★09-23 knn_v4: 기체 기울기 θ=√(roll²+pitch²) [rad] (surrogate θ 채널 = P2′ 자세 퍼텐셜 성형용).
+                   원본 전부에 roll·pitch 열이 있으면 12열 뒤에 붙이고 format=knn_v4, 하나라도 없으면 종전 knn_v3.
+                   로더는 NIS 에 X[:, :12] 만 쓰므로 v4 는 하위 호환(θ 를 안 켜면 v3 와 같은 재생).
 Isaac 규약: 주입은 스텝 끝 발행 → 스텝 t NIS 는 δ[t−1] 을 반영 = delta_eff 열(캡처 기록).
 """
 import glob
@@ -45,22 +48,36 @@ def episode_rows(z):
         dwell[i] = dwell[i - 1] + 1 if a[i] == a[i - 1] else 0
     ws = np.full(n, float(z['wind_speed']))
     pat = np.full(n, float(PATS.index(str(z['pattern'])) if ('pattern' in z.files and str(z['pattern']) in PATS) else -1))   # ★09-22 v3: 기동 패턴 조건
-    return np.c_[de, lag(1), lag(3), lag(6), since, a, dwell, ws, dlast, C['nis_v_raw'], C['nis_g_raw'], pat]
+    X = np.c_[de, lag(1), lag(3), lag(6), since, a, dwell, ws, dlast, C['nis_v_raw'], C['nis_g_raw'], pat]
+    if 'roll' in C and 'pitch' in C:                     # ★09-23 knn_v4 θ 열
+        X = np.c_[X, np.hypot(C['roll'], C['pitch']), C['roll'], C['pitch']]
+    return X
 
 
 def main():
     out, dirs = sys.argv[1], sys.argv[2:]
+    files = [f for d in dirs for sub in ('capture', 'steps') for f in sorted(glob.glob(os.path.join(d, sub, 'ep*.npz')))]
+    build(out, files)
+
+
+def build(out, files):
+    """에피소드 npz 목록 → 풀 파일. (★09-23 main 에서 분리: 시험·부분 재생성용)"""
     blocks, eps, srcs = [], [], []
     k = 0
-    for d in dirs:
-        for sub in ('capture', 'steps'):
-            for f in sorted(glob.glob(os.path.join(d, sub, 'ep*.npz'))):
-                X = episode_rows(np.load(f, allow_pickle=False))
-                if X is None:
-                    continue
-                blocks.append(X); eps.append(np.full(len(X), k)); srcs.append(f); k += 1
-    X = np.concatenate(blocks); ep = np.concatenate(eps)
+    for f in files:
+        X = episode_rows(np.load(f, allow_pickle=False))
+        if X is None:
+            continue
+        blocks.append(X); eps.append(np.full(len(X), k)); srcs.append(f); k += 1
     names = ['d0', 'd1', 'd3', 'd6', 'since_end', 'act', 'dwell', 'ws', 'dlast', 'nis_v', 'nis_g', 'pat']
+    fmt = 'knn_v3'
+    if all(b.shape[1] >= 15 for b in blocks):
+        names += ['theta', 'roll', 'pitch']; fmt = 'knn_v4'
+    else:
+        if any(b.shape[1] >= 15 for b in blocks):
+            print(f'  ⚠ roll·pitch 없는 원본이 있어 θ 열을 뺀다(knn_v3): {sum(b.shape[1] < 15 for b in blocks)}/{len(blocks)} 에피')
+        blocks = [b[:, :12] for b in blocks]
+    X = np.concatenate(blocks); ep = np.concatenate(eps)
     # 시간 상관(코퓰러 ρ): 조건을 만족하는 연속 두 스텝 쌍에서 log NIS 의 lag-1 상관
     def rho(mask_fn, col):
         xs, ys = [], []
@@ -73,9 +90,10 @@ def main():
     clean = lambda A: (A[:, 0] == 0) & (A[:, 4] == 99) & (A[:, 5] == 0)
     atk = lambda A: A[:, 0] > 0
     rh = dict(rho_g_cln=rho(clean, 10), rho_v_cln=rho(clean, 9), rho_g_atk=rho(atk, 10), rho_v_atk=rho(atk, 9))
-    np.savez(out, format='knn_v3', X=X, names=np.array(names), ep=ep, sources=np.array(srcs), rho=json.dumps(rh))
+    np.savez(out, format=fmt, X=X, names=np.array(names), ep=ep, sources=np.array(srcs), rho=json.dumps(rh))
     import collections; pc = collections.Counter(X[:, 11].astype(int))
-    print(f'{out}: 행 {len(X)} · 에피소드 {k} · 공격 행 {(X[:, 0] > 0).sum()} · hover 행 {(X[:, 5] == 1).sum()} · 패턴 행수 {dict(sorted(pc.items()))} · 시간상관 {rh}')
+    print(f'{out} [{fmt}]: 행 {len(X)} · 에피소드 {k} · 공격 행 {(X[:, 0] > 0).sum()} · hover 행 {(X[:, 5] == 1).sum()} · 패턴 행수 {dict(sorted(pc.items()))} · 시간상관 {rh}')
+    return out
 
 
 if __name__ == '__main__':

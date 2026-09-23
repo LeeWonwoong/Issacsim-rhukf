@@ -173,6 +173,11 @@ class OnlineRLNode(Node):
         self._lp = _on('LEARNER_PROC')
         self._act_lat = float(knob('ACT_LAT_SIM', '0') or 0.0)
         self._timing_log = _on('TIMING_LOG')
+        # ★09-23 REENGAGE_FIX=1 (기본 0 = 구 동작 비트 동일): hover 이력 은닉 상태 수정 — 설계 wf_impl2/DESIGN.md §1
+        #   ① 판정용 최근접 계산은 궤적 시계를 바꾸지 않는다(복원만). 재동기는 재접근 도달 틱 1회
+        #   ② hover 해제 뒤 첫 track 틱에 궤적 2 m(REENGAGE_R) 안이면 _did_hover=False (재접근 생략, 시계 그대로 전진)
+        #   ③ hover·재접근 틱에도 track_dt() 를 소비 = 궤적 시계 정지(구 경로가 해제 첫 틱에 hover 길이만큼 뛰던 것 교정)
+        self._reengage_fix = _on('REENGAGE_FIX')
         if (self._lp or self._act_lat > 0 or self._timing_log) and not self._sc:
             raise ValueError('LEARNER_PROC / ACT_LAT_SIM / TIMING_LOG 는 SIMCLOCK_UKF=1 에서만 쓴다 (구 벽시계 틱 경로에는 없음)')
         self._fatal = None   # ★09-23 치명 상태(학습기 사망·노드 지연 폭주·SIMCLOCK 불일치) → run_isaac 이 rc≠0 으로 끝낸다
@@ -800,10 +805,11 @@ class OnlineRLNode(Node):
         msg = String(); msg.data = 'reset'; self.pub_sim_ctrl.publish(msg)
 
 
-    def _reengage_nearest(self):
+    def _reengage_nearest(self, resync=True):
         """현재 위치에서 궤적의 최근접점(x,y)과 그 phase 상태를 찾는다 — 재접근용.
            _compute_setpoint 를 phase 후보들로 프로브(상태 저장·복원). 찾은 phase 로 시계를 재동기.
-           반환: (x, y, z) 최근접점. 부수효과: _sim_flight_t / _wp_s 를 최근접 phase 로 세팅."""
+           반환: (x, y, z) 최근접점. 부수효과: _sim_flight_t / _wp_s 를 최근접 phase 로 세팅(resync=True 일 때만).
+           ★09-23 resync=False: 시계는 복원만 하고 최근접 phase 를 _nearest_phase=(usewp, phase) 로 남긴다(REENGAGE_FIX)."""
         import numpy as _np
         # 상태 스냅샷
         snap = (self._sim_flight_t, getattr(self,'_wp_s',0.0), self._traj_t, self.theta,
@@ -836,9 +842,18 @@ class OnlineRLNode(Node):
         # 상태 복원 후, 최근접 phase 로 시계 재동기
         (self._sim_flight_t, self._wp_s, self._traj_t, self.theta,
          self.tick_count, self._dt_sim_last) = snap
-        if usewp: self._wp_s = best[2]
-        else: self._sim_flight_t = best[2]
+        self._nearest_phase = (usewp, best[2])
+        if resync:
+            if usewp: self._wp_s = best[2]
+            else: self._sim_flight_t = best[2]
         return best[1]
+
+    def _apply_nearest_phase(self):
+        """★09-23 REENGAGE_FIX: 재접근 도달 틱에 마지막 최근접 phase 로 시계 재동기(1회)."""
+        usewp, ph = self._nearest_phase
+        if usewp: self._wp_s = ph
+        else: self._sim_flight_t = ph
+        self._n_resync = getattr(self, '_n_resync', 0) + 1
 
 
     def _nearest_xy(self):
@@ -846,7 +861,7 @@ class OnlineRLNode(Node):
         c = getattr(self, '_nearest_cache', None)
         if c is not None and c[0] == self.tick_count:
             return c[1]
-        xy = self._reengage_nearest()
+        xy = self._reengage_nearest(resync=not self._reengage_fix)   # ★09-23 FIX: 판정은 시계를 안 바꾼다
         self._nearest_cache = (self.tick_count, xy)
         return xy
 
@@ -1097,6 +1112,7 @@ class OnlineRLNode(Node):
         self._yaw_cmd_prev = None; self._vel_cmd_prev = None   # 궤적 후처리 상태 리셋(2026-08-13)
         self.prev_state = None; self.prev_action = None
         self.episode_reward = 0.0; self.episode_losses = []; self.attack_active_flag = False
+        self.episode_reward_train = 0.0; self.episode_shape_F = 0.0   # ★09-23 P2′ 성형 켰을 때만 기록
         self.obs.reset(); self.rtrack.reset(); self.gps_updated = False
         self.first_hover_step = None; self.hover_before_attack_count = 0
         self._hover_latched = False; self._ep_relapse = 0; self._ep_min_alt = 999.0; self._pprev_action = None
@@ -1221,7 +1237,9 @@ class OnlineRLNode(Node):
                                int(done), float(reward), *[float(x) for x in state],
                                self._cap_gt_err(),    # ★09-20 추종오차(임무 실패 종료 설계용) — 열 끝에 추가(이름 기반 판독)
                                *(self._sc_trow if (self._timing_log and self._sc_trow is not None) else []),   # ★09-23 TIMING_LOG 열
-                               *(list(self.obs.last_noise) if float(getattr(self.obs_spec, 'noise_std', 0.0)) > 0 else [])])   # ★09-23 입력잡음 nz_v·nz_g
+                               *(list(self.obs.last_noise) if float(getattr(self.obs_spec, 'noise_std', 0.0)) > 0 else []),   # ★09-23 입력잡음 nz_v·nz_g
+                               *([float(reward) + float(self.rtrack.last_F), float(self.rtrack.last_theta), float(self.rtrack.last_phi)]
+                                 if self.rtrack.shaping else [])])   # ★09-23 P2′: reward_train(학습 보상)·theta_eff(동결 적용)·phi
 
     def _cap_gt_err(self):
         """현재 궤적 설정점(hover 중엔 앵커) 대비 수평 GT 오차 [m]. 설정점 미정이면 −1."""
@@ -1236,7 +1254,8 @@ class OnlineRLNode(Node):
         m = self.scenario.get('capture_meta', {})
         cols = ['step', 'delta', 'delta_eff', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done', 'reward'] + \
                [f's{i}' for i in range(self.obs_spec.dim)] + ['gt_err'] + (list(_SC_TIMING_COLS) if self._timing_log else []) + \
-               (['nz_v', 'nz_g'] if float(getattr(self.obs_spec, 'noise_std', 0.0)) > 0 else [])
+               (['nz_v', 'nz_g'] if float(getattr(self.obs_spec, 'noise_std', 0.0)) > 0 else []) + \
+               (['reward_train', 'theta_eff', 'phi'] if self.rtrack.shaping else [])   # ★09-23 P2′ ('reward' = r^G)
         _cls = str(self.scenario.get('attack_class', 'none'))
         np.savez(os.path.join(self._step_dir, f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
                  cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', _cls.split('_')[0]), kind=m.get('kind', _cls),
@@ -1579,7 +1598,18 @@ class OnlineRLNode(Node):
     # ══════════════════════════════════════════════════════════
     def _learning_setpoint(self, hover, track_dt):
         """(control_sp, trajectory_sp). hover=현재 적용 행동이 hover.
-        track_dt(): track 분기에서만 불리며 궤적 전진 dt 를 돌려주고 기준 시각을 갱신한다."""
+        track_dt(): track 분기에서만 불리며 궤적 전진 dt 를 돌려주고 기준 시각을 갱신한다.
+        ★09-23 REENGAGE_FIX: hover·재접근 틱에서도 불러 결과를 버린다(궤적 시계 정지)."""
+        _fix = self._reengage_fix
+        _R_re = float(knob('REENGAGE_R', '2.0') or 2.0)
+        if _fix and (not hover) and (not knob('NAIVE_TRACK')) and getattr(self, '_did_hover', False) \
+                and not getattr(self, '_reengaging', False):
+            # ★09-23 FIX ②: hover 해제 뒤 첫 track 틱에서 한 번만 판정(시계 불변). 멀면 재접근, 가까우면 이력 해제.
+            _lt = getattr(self, '_last_traj_sp', None)
+            if _lt is not None and (lambda _n: math.hypot(self.cur_pos[0] - _n[0], self.cur_pos[1] - _n[1]) > _R_re)(self._nearest_xy()):
+                self._reengaging = True
+            else:
+                self._did_hover = False          # 재접근 생략 — 멈춰 있던 시계에서 그대로 전진(설정점 연속)
         if hover:
             # ★2026-08-27 누수 홀드(leaky hold) — env HOVER_EMAX[m] 로 3모드:
             #     0      = 구 soft-hold (매 스텝 현재위치 = 복원력 0 → δ0.8 온셋분출 42m 활강)
@@ -1621,7 +1651,19 @@ class OnlineRLNode(Node):
                 trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
                                  float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
             self._did_hover = True   # ★재접근은 '호버 후 복귀'에서만 — 무대응 track 은 재접근 안함(hijack 노출)
-        elif (not knob('NAIVE_TRACK')) and getattr(self, '_did_hover', False) and (getattr(self, '_reengaging', False) or (
+            if _fix:
+                track_dt()                # ★09-23 FIX ③: 궤적 시계 정지(구 경로 기준 스탬프 갱신)
+        elif _fix and getattr(self, '_reengaging', False) and getattr(self, '_did_hover', False):
+            # ★09-23 FIX ①: 재접근 — 목표는 최근접점, 시계는 도달 틱에서만 1회 재동기
+            track_dt()
+            _tgt = self._reengage_nearest(resync=False)
+            _dx, _dy = float(_tgt[0]) - float(self.cur_pos[0]), float(_tgt[1]) - float(self.cur_pos[1])
+            _dd = math.hypot(_dx, _dy)
+            if _dd <= _R_re:
+                self._apply_nearest_phase()
+                self._reengaging = False; self._did_hover = False
+            control_sp, trajectory_sp = self._reengage_cmd(_tgt, _dx, _dy, _dd)
+        elif (not _fix) and (not knob('NAIVE_TRACK')) and getattr(self, '_did_hover', False) and (getattr(self, '_reengaging', False) or (
              getattr(self, '_last_traj_sp', None) is not None and
              (lambda _n: math.hypot(self.cur_pos[0]-_n[0], self.cur_pos[1]-_n[1])
                  > float(knob('REENGAGE_R', '2.0') or 2.0))(self._nearest_xy()))):
@@ -1635,18 +1677,7 @@ class OnlineRLNode(Node):
             _dd = math.hypot(_dx, _dy)
             if _dd <= float(knob('REENGAGE_R', '2.0') or 2.0):
                 self._reengaging = False; self._did_hover = False   # 도달 → 순수 track 재개
-            _vap = min(self.cfg.flight_radius * self.cfg.flight_omega * 1.4,
-                       math.sqrt(max(2.0 * 2.0 * (_dd - 0.5), 0.01)))
-            _ux, _uy = (_dx/_dd, _dy/_dd) if _dd > 1e-6 else (0.0, 0.0)
-            control_sp = (_tx, _ty, float(_tgt[2]),
-                          math.atan2(_dy, _dx), _vap*_ux, _vap*_uy, 0.0)
-            # 판정 유예: 재접근 중 trajectory_sp=현재위치 (hover 와 동일 의미론).
-            #   안전망: 원점 기준 60 m 초과는 진짜 통제상실로 간주(기존 drift 목적 유지).
-            if math.hypot(self.cur_pos[0], self.cur_pos[1]) > 60.0:
-                trajectory_sp = control_sp   # → gt_err 커져 drift 판정 작동(안전망)
-            else:
-                trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
-                                 float(self._last_traj_sp[2]), 0.0, 0.0, 0.0, 0.0)
+            control_sp, trajectory_sp = self._reengage_cmd(_tgt, _dx, _dy, _dd)
         else:
             # ★2026-08-27 궤적 전진을 sim-dt 로 (wall 50Hz 타이머 × sim speed N 불일치 수정).
             #   구 구현: 매 틱 고정 0.02s 전진 → speed10·RTF10 이면 sim 기준 1/10 속도로
@@ -1658,6 +1689,23 @@ class OnlineRLNode(Node):
             control_sp = trajectory_sp
             self._last_traj_sp = trajectory_sp   # 재접근용 동결점 (hover/재접근 동안 유지)
             self.tick_count += 1
+        return control_sp, trajectory_sp
+
+    def _reengage_cmd(self, _tgt, _dx, _dy, _dd):
+        """재접근 명령·판정 설정점 (★09-23 _learning_setpoint 에서 추출 — 구 연산 그대로)."""
+        _tx, _ty = float(_tgt[0]), float(_tgt[1])
+        _vap = min(self.cfg.flight_radius * self.cfg.flight_omega * 1.4,
+                   math.sqrt(max(2.0 * 2.0 * (_dd - 0.5), 0.01)))
+        _ux, _uy = (_dx/_dd, _dy/_dd) if _dd > 1e-6 else (0.0, 0.0)
+        control_sp = (_tx, _ty, float(_tgt[2]),
+                      math.atan2(_dy, _dx), _vap*_ux, _vap*_uy, 0.0)
+        # 판정 유예: 재접근 중 trajectory_sp=현재위치 (hover 와 동일 의미론).
+        #   안전망: 원점 기준 60 m 초과는 진짜 통제상실로 간주(기존 drift 목적 유지).
+        if math.hypot(self.cur_pos[0], self.cur_pos[1]) > 60.0:
+            trajectory_sp = control_sp   # → gt_err 커져 drift 판정 작동(안전망)
+        else:
+            trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
+                             float(self._last_traj_sp[2]), 0.0, 0.0, 0.0, 0.0)
         return control_sp, trajectory_sp
 
     def _legacy_track_dt(self):
@@ -1888,7 +1936,9 @@ class OnlineRLNode(Node):
 
     # ── 계측 ────────────────────────────────────────────────────────────
     def _sc_row_set(self, row, name, val):
-        row[len(row) - len(_SC_TIMING_COLS) + _SC_TI[name]] = val
+        # ★09-23 타이밍 열 위치 = 고정 앞 14열 + 관측 dim + gt_err 다음. (구: 행 끝 기준 — 뒤에 입력잡음 nz_v·nz_g 나
+        #   P2′ 성형 열이 붙으면 엉뚱한 열에 썼다. 그 열들이 없으면 구 식과 같은 위치 = 비트 동일)
+        row[15 + int(self.obs_spec.dim) + _SC_TI[name]] = val
 
     def _sc_step_timing(self, it, defer):
         e = self._sc_ep
@@ -2350,9 +2400,14 @@ class OnlineRLNode(Node):
         fp_rec_arg = (min(recovery_delay, 5) if self._last_burst_end is not None
                       else min(self.continuous_fp_count, 5))
         # ★09-18 보상 = env/reward.RewardTracker (label4|cost, 추락 벌점·배율 포함; surrogate 와 같은 코드)
+        # ★09-23 P2′ 성형(reward.shape_tilt>0): roll·pitch = 이 격자의 GT 자세(SIMCLOCK 은 스냅샷). reward = 학습 보상(r^G+F),
+        #   episode_reward·steps 'reward' 열은 r^G(무대 보상, 의미 유지). 성형 끔이면 reward == r^G (비트 동일).
         reward = self.rtrack.step(self.prev_action if self.prev_action is not None else 0,
-                                  self.attack_active_flag, attack_delay, terminated=_terminated_phys)
-        self.episode_reward += reward
+                                  self.attack_active_flag, attack_delay, terminated=_terminated_phys,
+                                  roll=float(self.cur_euler[0]), pitch=float(self.cur_euler[1]))
+        self.episode_reward += self.rtrack.last_rG
+        if self.rtrack.shaping:
+            self.episode_reward_train += reward; self.episode_shape_F += self.rtrack.last_F
 
         # ── confusion/지연 메트릭 누적 (prev_action vs 공격상태) ──
         _a = self.prev_action if self.prev_action is not None else 0
@@ -2385,7 +2440,7 @@ class OnlineRLNode(Node):
         # ★2026-09-11 추락 벌점 없음(사용자 확정): 절벽 = terminated 부트스트랩 절단만. (잠시 넣었던 track-only −5 규칙 제거)
 
         if self._log_steps and not self.eval_mode:       # ★09-18 캡처(학습 없음) · 학습 중 스텝 기록
-            self._capture_log(state, nis_v_raw, nis_g_raw, done, term_reason, reward)
+            self._capture_log(state, nis_v_raw, nis_g_raw, done, term_reason, self.rtrack.last_rG)
         return state, reward, done, term_reason, terminated, nis_vel, nis_gyr, nis_v_raw, nis_g_raw
 
     def _rl_step_10hz(self, trajectory_sp):
@@ -2593,6 +2648,8 @@ class OnlineRLNode(Node):
             'min_alt': round(R['min_alt'], 2) if R['min_alt'] < 999 else -1,  # 공격중 최저고도(m)
             'bias_scale': round(float(R['scenario'].get('bias_scale', 0.0)), 4) if R['scenario'] else 0.0,  # s별 delay 분석용
         }
+        if self.rtrack.shaping:                            # ★09-23 P2′: 'reward' = r^G 합(보고용), 학습 보상 합·성형항 합은 따로
+            row.update(reward_train=round(R['reward_train'], 3), shape_F=round(R['shape_F'], 3))
         if R.get('sc') is not None and self._timing_log:   # ★09-23 SIMCLOCK+TIMING_LOG: 에피 overrun·지연(열 끝, 이름 기반)
             _ov, _na, _lag, _alag, _eff = R['sc']
             row.update(overrun=_ov, n_apply=_na, overrun_frac=round(_ov / max(_na, 1), 4), node_lag_max=round(_lag, 4),
@@ -2654,6 +2711,7 @@ class OnlineRLNode(Node):
         """에피소드 끝 시점 값(★09-23: 요약·metrics 행을 나중에 써도 같은 값이 되게 묶어 둔다)."""
         e = self._sc_ep if self._sc else None
         return dict(reason=reason, episode=self.episode, reward=self.episode_reward, steps=self.step_count,
+                    reward_train=self.episode_reward_train, shape_F=self.episode_shape_F,
                     losses=list(self.episode_losses), learn_dts=list(self._ep_learn_dts),
                     eps=self.agent.get_epsilon(), p_init=self.agent._compute_adaptive_p(),
                     conf=(self._ep_tp, self._ep_fp, self._ep_fn, self._ep_tn), det_delay=self._ep_det_delay,
