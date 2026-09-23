@@ -150,6 +150,7 @@ class PegasusApp:
         self.args = args
         self.sim_time = 0.0
         self.physics_dt = 1.0 / 250.0
+        self._step_us = int(round(self.physics_dt * 1e6))   # 4000 µs — SIMCLOCK_UKF 정수 스탬프 단위
 
         self.attack_active = False
         self.attack_type = 'none'
@@ -183,10 +184,21 @@ class PegasusApp:
 
         rclpy.init()
         self.ros_node = Node('sim_engine')
-        self.gt_pub = self.ros_node.create_publisher(
-            Odometry, '/gt/odometry', 10)
-        self.pub_gps = self.ros_node.create_publisher(
-            SensorGps, '/sim/sensor_gps', 10)
+        # ★2026-09-23 SIMCLOCK_UKF=1 (노드 knob 이 sim_env 로 복사됨): GT·GPS 스탬프를 정수 step_counter×4000 µs 로,
+        #   GPS 를 정수 게이트(step_counter%25==0, GT 블록 안·같은 state)로, 두 토픽을 RELIABLE·KEEP_LAST 50 으로.
+        #   노드가 스탬프 순서대로 UKF 를 드레인한다(GPS 당 예측 5·RL 간격 sim 0.100 s 고정). 0 이면 구 동작 그대로.
+        self._simclock = os.environ.get('SIMCLOCK_UKF', '0') not in ('', '0')
+        if self._simclock:
+            _sc_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE,
+                                 history=HistoryPolicy.KEEP_LAST, depth=50)
+            self.gt_pub = self.ros_node.create_publisher(Odometry, '/gt/odometry', _sc_qos)
+            self.pub_gps = self.ros_node.create_publisher(SensorGps, '/sim/sensor_gps', _sc_qos)
+            carb.log_warn("[run_sim] SIMCLOCK_UKF=1: GT/GPS 정수 스탬프(step×4000µs)·GPS step%25·RELIABLE/50")
+        else:
+            self.gt_pub = self.ros_node.create_publisher(
+                Odometry, '/gt/odometry', 10)
+            self.pub_gps = self.ros_node.create_publisher(
+                SensorGps, '/sim/sensor_gps', 10)
 
         self.ros_node.create_subscription(
             String, '/attack_config', self._cb_attack_config, 10)
@@ -848,8 +860,13 @@ class PegasusApp:
                 msg = Odometry()
                 # ★2026-08-27 sim 시간 스탬프: 제어노드가 궤적 전진을 sim-dt 로 하도록.
                 #   (구: wall clock → speed N 에서 궤적이 sim 기준 1/RTF 로 기어가는 버그의 반쪽)
-                msg.header.stamp.sec = int(self.sim_time)
-                msg.header.stamp.nanosec = int((self.sim_time - int(self.sim_time)) * 1e9)
+                if self._simclock:          # 정수 스탬프(step_counter 하나로 통일, float sim_time 과 섞지 않음)
+                    _us = step_counter * self._step_us
+                    msg.header.stamp.sec = _us // 1_000_000
+                    msg.header.stamp.nanosec = (_us % 1_000_000) * 1000
+                else:
+                    msg.header.stamp.sec = int(self.sim_time)
+                    msg.header.stamp.nanosec = int((self.sim_time - int(self.sim_time)) * 1e9)
                 msg.header.frame_id = "world"
                 msg.pose.pose.position.x = float(state.position[0])
                 msg.pose.pose.position.y = float(state.position[1])
@@ -864,54 +881,15 @@ class PegasusApp:
                 msg.twist.twist.angular.x = float(state.angular_velocity[0])
                 msg.twist.twist.angular.y = float(state.angular_velocity[1])
                 msg.twist.twist.angular.z = float(state.angular_velocity[2])
+                if self._simclock:          # 발행 벽시계(epoch s) — 노드가 GT 전달 지연·IMU/u 짝 어긋남을 계측(TIMING_LOG gt_rx_lag_ms). 공분산은 쓰는 곳 없음
+                    msg.pose.covariance[0] = time.time()
                 self.gt_pub.publish(msg)
+                if self._simclock and step_counter % 25 == 0:   # GPS 10 Hz = GT 5개마다, 같은 state·같은 스탬프
+                    self._publish_gps(state, step_counter * self._step_us)
+                    self.last_gps_time = self.sim_time
 
-            if self.sim_time - self.last_gps_time >= 0.1:
-                timestamp_us = int(self.sim_time * 1e6)
-                dp = state.position
-
-                msg_gps = SensorGps()
-                msg_gps.timestamp = timestamp_us
-
-                raw_noise = np.random.normal(0, 1.0, 3)
-                self.gps_noise_state = 0.9 * self.gps_noise_state + 0.1 * raw_noise
-
-                # ★2026-08-20 센서 σ 정합: 실기 GPS × 0.9(10% 약하게), SENSOR_NOISE_SCALE 로 스윕.
-                _sns = float(os.environ.get('SENSOR_NOISE_SCALE', '1.0'))
-                gps_noise_n = self.gps_noise_state[0] * 0.27 * _sns   # 0.30→0.27 (×0.9)
-                gps_noise_e = self.gps_noise_state[1] * 0.27 * _sns
-                gps_noise_alt = self.gps_noise_state[2] * 0.49 * _sns  # raw GPS 수직 ×0.9 (융합 안 씀, raw 센서 일관)
-
-                lat_rad = math.radians(self.home_lat)
-                lat_offset = math.degrees(
-                    (float(dp[1]) + gps_noise_n) / self.earth_radius)
-                lon_offset = math.degrees(
-                    (float(dp[0]) + gps_noise_e) /
-                    (self.earth_radius * math.cos(lat_rad)))
-
-                msg_gps.latitude_deg = float(self.home_lat + lat_offset)
-                msg_gps.longitude_deg = float(self.home_lon + lon_offset)
-                msg_gps.altitude_msl_m = float(
-                    self.home_alt + float(dp[2]) + gps_noise_alt)
-
-                # ★2026-08-20 GPS vel σ: 실측 field [.088,.077,.243]×0.9. 단 수직(D)은 실기가
-                #   RNG(EKF2_RNG_CTRL=2)로 고도 잡고 GPS 수직 안 씀 → .219 대신 RNG-clean 0.06.
-                msg_gps.vel_n_m_s = float(
-                    state.linear_velocity[1] + np.random.normal(0, 0.079 * _sns))  # 실기.088×0.9
-                msg_gps.vel_e_m_s = float(
-                    state.linear_velocity[0] + np.random.normal(0, 0.069 * _sns))  # 실기.077×0.9
-                msg_gps.vel_d_m_s = float(
-                    -state.linear_velocity[2] + np.random.normal(0, 0.219 * _sns))  # 실기 raw GPS .243×0.9 (융합X, raw 일관)
-                msg_gps.vel_m_s = math.sqrt(
-                    msg_gps.vel_n_m_s**2 + msg_gps.vel_e_m_s**2 +
-                    msg_gps.vel_d_m_s**2)
-
-                msg_gps.eph = 0.5
-                msg_gps.epv = 0.8
-                msg_gps.satellites_used = 12
-                msg_gps.fix_type = 3
-
-                self.pub_gps.publish(msg_gps)
+            if (not self._simclock) and self.sim_time - self.last_gps_time >= 0.1:
+                self._publish_gps(state, int(self.sim_time * 1e6))
                 self.last_gps_time = self.sim_time
 
             rclpy.spin_once(self.ros_node, timeout_sec=0)
@@ -927,6 +905,53 @@ class PegasusApp:
         self.timeline.stop()
         simulation_app.close()
         rclpy.shutdown()
+
+    def _publish_gps(self, state, timestamp_us):
+        """/sim/sensor_gps 1회 발행 (구 run() 인라인 블록을 그대로 옮김 — 난수 소비 순서 동일)."""
+        dp = state.position
+
+        msg_gps = SensorGps()
+        msg_gps.timestamp = timestamp_us
+
+        raw_noise = np.random.normal(0, 1.0, 3)
+        self.gps_noise_state = 0.9 * self.gps_noise_state + 0.1 * raw_noise
+
+        # ★2026-08-20 센서 σ 정합: 실기 GPS × 0.9(10% 약하게), SENSOR_NOISE_SCALE 로 스윕.
+        _sns = float(os.environ.get('SENSOR_NOISE_SCALE', '1.0'))
+        gps_noise_n = self.gps_noise_state[0] * 0.27 * _sns   # 0.30→0.27 (×0.9)
+        gps_noise_e = self.gps_noise_state[1] * 0.27 * _sns
+        gps_noise_alt = self.gps_noise_state[2] * 0.49 * _sns  # raw GPS 수직 ×0.9 (융합 안 씀, raw 센서 일관)
+
+        lat_rad = math.radians(self.home_lat)
+        lat_offset = math.degrees(
+            (float(dp[1]) + gps_noise_n) / self.earth_radius)
+        lon_offset = math.degrees(
+            (float(dp[0]) + gps_noise_e) /
+            (self.earth_radius * math.cos(lat_rad)))
+
+        msg_gps.latitude_deg = float(self.home_lat + lat_offset)
+        msg_gps.longitude_deg = float(self.home_lon + lon_offset)
+        msg_gps.altitude_msl_m = float(
+            self.home_alt + float(dp[2]) + gps_noise_alt)
+
+        # ★2026-08-20 GPS vel σ: 실측 field [.088,.077,.243]×0.9. 단 수직(D)은 실기가
+        #   RNG(EKF2_RNG_CTRL=2)로 고도 잡고 GPS 수직 안 씀 → .219 대신 RNG-clean 0.06.
+        msg_gps.vel_n_m_s = float(
+            state.linear_velocity[1] + np.random.normal(0, 0.079 * _sns))  # 실기.088×0.9
+        msg_gps.vel_e_m_s = float(
+            state.linear_velocity[0] + np.random.normal(0, 0.069 * _sns))  # 실기.077×0.9
+        msg_gps.vel_d_m_s = float(
+            -state.linear_velocity[2] + np.random.normal(0, 0.219 * _sns))  # 실기 raw GPS .243×0.9 (융합X, raw 일관)
+        msg_gps.vel_m_s = math.sqrt(
+            msg_gps.vel_n_m_s**2 + msg_gps.vel_e_m_s**2 +
+            msg_gps.vel_d_m_s**2)
+
+        msg_gps.eph = 0.5
+        msg_gps.epv = 0.8
+        msg_gps.satellites_used = 12
+        msg_gps.fix_type = 3
+
+        self.pub_gps.publish(msg_gps)
 
 
 def main():

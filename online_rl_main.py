@@ -49,6 +49,7 @@ from env.reward import RewardTracker
 from env.observation import ObsBuilder, ObsSpec
 from env.scenario import ScenarioConfig, sample_isaac_scenario
 from env.capture import build_capture_list, capture_action, draw_policy
+from env.simclock import stamp_us as _sc_stamp_us
 from rl.agent import OnlineRHUKFAgent
 
 
@@ -59,6 +60,18 @@ from rl.agent import OnlineRHUKFAgent
 #   Q 부트스트랩에 반영되지 않던 상태였다. v3.1(ramp 결과성 복원)의 전제라 반드시 채운다.
 #   timeout·논리종료는 여기 넣지 않는다(truncation — 부트스트랩 유지).
 PHYSICAL_TERMINALS = ('crash_drift', 'crash_altitude', 'crash_flip')
+
+# ★2026-09-23 TIMING_LOG=1 (SIMCLOCK_UKF 전용): steps npz 끝에 붙는 열. 앞 7개는 RL 스텝 때, 뒤 4개는 결정·적용 때 같은 행에 채운다.
+#   rev2: act_eff_lat(적용 스탬프 지연 + 그 순간 드레인 적체 = 적용 setpoint 가 실제로 나간 sim 지연) · deferred(a_{k−1} 결정 전에 온 격자)
+#         · gt_rx_lag_ms / imu_age_ms / u_age_ms (벽시계 ms — GT 전달 지연, 스냅샷에 짝지은 IMU·u 의 나이 → 짝 어긋남 추정 = (gt_rx_lag − age)·speed)
+_SC_TIMING_COLS = ('t_gps_us', 'dt_gps_us', 'n_pred', 'sum_dt_pred', 'gps_gap', 'gt_gap', 'node_lag_sim',
+                   'act_wait_ms', 'learn_ms', 'act_applied_sim_lat', 'overrun',
+                   'act_eff_lat', 'deferred', 'gt_rx_lag_ms', 'imu_age_ms', 'u_age_ms')
+_SC_TI = {n: i for i, n in enumerate(_SC_TIMING_COLS)}
+# SIMCLOCK_UKF: GT 도착 순간의 UKF·RL 입력 스냅샷(드레인이 그 스탬프를 처리할 때 이 값으로 되돌려 쓴다)
+_SC_SNAP = ('gt_pos', 'gt_vel', 'cur_euler', 'cur_gyro', 'cur_accel', 'cur_thrust', 'cur_torque', 'cur_pos', 'cur_vel')
+_SC_STAT_KEYS = (('kgain', '_last_kgain'), ('pmax', '_last_pmax'), ('innov', '_last_innov'),
+                 ('flip', '_last_argmax_flip'), ('qmax', '_last_qmax'), ('nis', '_last_nis'))
 
 # ★2026-09-18 관측 정의(압축·클립·정규화·창)는 env/observation.ObsSpec(YAML obs) 한 곳. 구 OBS_NORM/OBS_CLIP 폐기.
 # POMDP 노브(에피별 COM 토크바이어스 · GPS vel 노이즈)는 설정 로드 후 _apply_module_knobs() 로 갱신한다.
@@ -150,10 +163,57 @@ class OnlineRLNode(Node):
         self.exp = exp   # ★09-18 cfgload 실험 설정(관측·보상·시나리오 공용 모듈)
         self.step_dt = 0.02  # 50Hz
 
+        # ★2026-09-23 sim 클럭 드라이버 노브 (전부 기본 0 = 구 경로 비트 동일). 설계: env/simclock.py · rl/learner_proc.py
+        #   SIMCLOCK_UKF=1 : GT 스탬프 1개 = UKF 예측 1회(dt 0.02), 같은 스탬프 GPS 로 업데이트 + RL 스텝 (run_sim 도 같은 노브)
+        #   LEARNER_PROC=1 : 학습기를 spawn 프로세스로 (θ_k 수신 후 행동, 대기 중에도 드레인·틱은 돈다)
+        #   ACT_LAT_SIM=L  : RL 스텝 k 의 행동을 sim t_k+L 스탬프 드레인 때 적용 (0<L<0.1, GT 격자로 올림)
+        #   TIMING_LOG=1   : steps npz 끝에 타이밍 11열 + 에피 요약에 n_pred 분포·overrun
+        _on = lambda n: knob(n, '0') not in ('', '0')
+        self._sc = _on('SIMCLOCK_UKF')
+        self._lp = _on('LEARNER_PROC')
+        self._act_lat = float(knob('ACT_LAT_SIM', '0') or 0.0)
+        self._timing_log = _on('TIMING_LOG')
+        if (self._lp or self._act_lat > 0 or self._timing_log) and not self._sc:
+            raise ValueError('LEARNER_PROC / ACT_LAT_SIM / TIMING_LOG 는 SIMCLOCK_UKF=1 에서만 쓴다 (구 벽시계 틱 경로에는 없음)')
+        self._fatal = None   # ★09-23 치명 상태(학습기 사망·노드 지연 폭주·SIMCLOCK 불일치) → run_isaac 이 rc≠0 으로 끝낸다
+        if self._sc:
+            from env.simclock import SimClockDrain
+            self._scq = SimClockDrain(gps_wait_gt=int(knob('SC_GPS_WAIT', '2') or 2), act_lat_s=self._act_lat)
+            self._sc_token = 0; self._sc_in_drain = False; self._sc_pub_mark = False
+            self._sc_ctx = None; self._sc_applied = None; self._sc_traj_prev = None
+            self._sc_trow = None; self._sc_warned = set()
+            self._sc_defq = collections.deque()     # 결정 대기 중 격자 → RL 앞부분 보류(δ·UKF·setpoint 는 이미 sim 시각에 처리)
+            self._sc_prev_snap = None               # 결번 GT 보간용 직전 스냅샷
+            self._sc_req_ep = {}                    # LEARNER_PROC learn 요청 번호 → 요청 에피소드(회신 통계 귀속)
+            self._sc_pend_ep = []                   # 회신 대기로 보류한 에피소드 요약·metrics 행
+            self._sc_bad_stamp = 0; self._sc_gap_run = 0; self._sc_stab_gt = 0
+            self._sc_lag_warn = float(knob('SC_LAG_WARN', '0.3') or 0.3)      # sim s: 넘으면 경고
+            self._sc_lag_max = float(knob('SC_LAG_MAX', '10') or 10)          # sim s: 넘으면 런 중단(rc≠0)
+            self._sc_drain_max = int(knob('SC_DRAIN_MAX', '8') or 8)          # 드레인 1회 처리 항목 상한(실행기 양보)
+            self._sc_run_ov = [0, 0]                # 런 누적 [overrun, 적용 수]
+            self._sc_deciding = False; self._sc_meta = (float('nan'),) * 3
+            self._sc_reset_ep_timing()
+
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST, depth=5)
+
+        # ★09-23 LEARNER_PROC: 학습기 프로세스를 Isaac 기동 **전에** 띄운다 — 초기화 실패·시간 초과가 나도 Isaac 이 고아로 남지 않는다.
+        self._lp_agent = None
+        if self._lp:
+            from rl.learner_proc import LearnerProxy
+            from env.knobs import knobs as _all_knobs
+
+            def _lplog(m, level='info'):
+                getattr(self.get_logger(), level if level in ('info', 'warn', 'error') else 'info')(m)
+            self._lp_agent = LearnerProxy(cfg, getattr(cfg, 'agent_type', 'rhukf'), knobs=_all_knobs(),
+                                          seed=int(cfg.seed), log=_lplog,
+                                          hang_timeout=float(knob('LEARNER_HANG_S', '120') or 120),
+                                          max_err=int(knob('LEARNER_MAX_ERR', '20') or 20))
+        if self._sc and not self._lp and float(getattr(cfg, 'sim_speed_factor', 1.0) or 1.0) > 1.0:
+            self.get_logger().warn('  [SIMCLOCK] 인라인 학습(LEARNER_PROC=0) + speed>1: 동기 learn 동안 노드가 멈춰 그 뒤 GT 스냅샷의 '
+                                   'gyro·u 짝이 learn×speed 만큼 어긋난다 — Isaac 본선은 LEARNER_PROC=1 로 (run_isaac 은 SC_INLINE_OK=1 없이는 거부)')
 
         # ── Simulator ──
         self.sim_mgr = SimProcessManager(
@@ -163,7 +223,12 @@ class OnlineRLNode(Node):
             kill_stale=getattr(cfg, 'kill_stale_px4_on_start', True),
             speed_factor=getattr(cfg, 'sim_speed_factor', 1.0),
             sim_env=getattr(cfg, 'isaac_sim_env', {}))
-        self.sim_mgr.start()
+        try:
+            self.sim_mgr.start()
+        except BaseException:
+            if self._lp_agent is not None:
+                self._lp_agent.close(timeout=10.0)
+            raise
         self.get_logger().info(
             '  Sim 기동 대기: 첫 GT(/gt/odometry) 수신까지 IDLE 유지 '
             '(헤드리스 콜드 로딩 몇 분 걸려도 죽이지 않음)')
@@ -184,8 +249,11 @@ class OnlineRLNode(Node):
         self.pub_attack = self.create_publisher(String, '/attack_config', 10)
         self.pub_scenario = self.create_publisher(String, '/scenario_config', 10)
         self.pub_sim_ctrl = self.create_publisher(String, '/sim_control', 10)
-        self.create_subscription(SensorGps, '/sim/sensor_gps', self._cb_gps, qos)
-        self.create_subscription(GroundTruthOdometry, '/gt/odometry', self._cb_gt, qos)
+        # SIMCLOCK_UKF: GT·GPS 는 RELIABLE·KEEP_LAST 50 (run_sim 발행과 짝) — 노드가 잠시 멈춰도 스탬프를 잃지 않는다
+        _gq = (QoSProfile(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE,
+                          history=HistoryPolicy.KEEP_LAST, depth=50) if self._sc else qos)
+        self.create_subscription(SensorGps, '/sim/sensor_gps', self._cb_gps, _gq)
+        self.create_subscription(GroundTruthOdometry, '/gt/odometry', self._cb_gt, _gq)
 
         # ── UKF + Agent ──
         self.calib = load_calibration('calibration.json')
@@ -229,7 +297,10 @@ class OnlineRLNode(Node):
         #   calibrate_sysld.py 가 기대하는 npz 포맷 그대로 저장한다.
         self._log_sysid = bool(getattr(cfg, 'log_sysid', False))
         self._sysid_rows = []
-        if getattr(cfg, 'agent_type', 'rhukf') == 'adam':
+        if self._lp:
+            # ★2026-09-23 학습기 별도 프로세스(위에서 Isaac 기동 전에 생성): 같은 인터페이스(act/push/end_episode/save/load/buffer…) + learn_async/poll
+            self.agent = self._lp_agent
+        elif getattr(cfg, 'agent_type', 'rhukf') == 'adam':
             from rl.agent_adam import OnlineAdamAgent
             self.agent = OnlineAdamAgent(cfg)
         else:
@@ -407,6 +478,8 @@ class OnlineRLNode(Node):
     #  Sensor Callbacks (★ 상태 갱신만, 제어 로직 없음)
     # ══════════════════════════════════════════════════════════
     def _cb_gps(self, msg):
+        if self._sc:
+            self._sc_on_gps(msg); return
         if self.home_lat is None:
             self.home_lat = msg.latitude_deg; self.home_lon = msg.longitude_deg; self.home_alt = msg.altitude_msl_m
         lat_rad = math.radians(self.home_lat)
@@ -419,6 +492,8 @@ class OnlineRLNode(Node):
 
     def _cb_sensor(self, msg):
         self.cur_accel[:] = msg.accelerometer_m_s2[:3]; self.cur_gyro[:] = msg.gyro_rad[:3]
+        if self._sc:
+            self._sc_t_imu = pytime.time()     # ★09-23 TIMING_LOG: GT 스냅샷의 IMU 짝 나이(벽시계) 추정용
         if self._log_sysid and self.gt_pos[2] > 1.0:      # 지상/이륙 과도 제외
             #  IMU 레이트(≈PX4 250Hz)로 기록 — 50Hz GT 콜백에 걸면 자세루프 토크명령이 앨리어싱된다.
             #  vel/euler 는 GT(50Hz, 저주파 성분만 쓰므로 무해), accel/gyro/명령은 PX4 고속.
@@ -434,7 +509,11 @@ class OnlineRLNode(Node):
         self.cur_pos[:] = msg.position[:3]; self.cur_vel[:] = msg.velocity[:3]
 
     def _cb_thrust(self, msg): self.cur_thrust[:] = msg.xyz[:3]
-    def _cb_torque(self, msg): self.cur_torque[:] = msg.xyz[:3]
+
+    def _cb_torque(self, msg):
+        self.cur_torque[:] = msg.xyz[:3]
+        if self._sc:
+            self._sc_t_u = pytime.time()       # ★09-23 TIMING_LOG: 제어입력 u 짝 나이(벽시계) 추정용
 
     def _cb_gt(self, msg):
         """★ 상태 갱신만 — _tick() 호출 안 함"""
@@ -448,6 +527,8 @@ class OnlineRLNode(Node):
         if not self._first_gt_received:
             self._first_gt_received = True
             self.get_logger().info('  ✅ 첫 GT 수신 — sim 기동 완료. /fmu IO 셋업 진행')
+        if self._sc:
+            self._sc_on_gt(msg)
 
     def _setup_fmu_io(self):
         """첫 GT 이후 호출: PX4 네임스페이스 확정(live publisher 기준) + /fmu pub/sub 생성."""
@@ -558,6 +639,7 @@ class OnlineRLNode(Node):
                     _f.write(f"{pytime.time():.3f},{x:.3f},{y:.3f},{z:.3f},{yaw:.3f},{vx:.3f},{vy:.3f},{vz:.3f}\n")
             except Exception:
                 pass
+        self._last_sp_pub = (self.pub_traj, msg)   # SIMCLOCK_UKF: 틱이 드레인 공백 때 재발행할 마지막 명령
         self.pub_traj.publish(msg)
 
     def _vehicle_cmd(self, command, p1, p2=0.0):
@@ -633,6 +715,7 @@ class OnlineRLNode(Node):
         thr = max(0.15, min(0.85, float(thr)))
         msg.thrust_body = [0.0, 0.0, -thr]
         msg.timestamp = 0
+        self._last_sp_pub = (self.pub_att, msg)
         self.pub_att.publish(msg)
 
     def _get_alloc_B(self):
@@ -1039,6 +1122,8 @@ class OnlineRLNode(Node):
         self._ep_tp = self._ep_fp = self._ep_fn = self._ep_tn = 0
         self._ep_det_delay = None
         self._ep_learn_dts = []   # 에피소드 내 learn-step 시간(ms) — speed 한계 판단용
+        if self._sc:
+            self._sc_reset()      # 드레인 큐·GPS·결정 대기·적용 행동·타이밍 카운터
 
     def _start_new_episode(self):
         if self.sweep_mode:
@@ -1134,7 +1219,9 @@ class OnlineRLNode(Node):
                                int(self.prev_action if self.prev_action is not None else 0), float(nis_v_raw), float(nis_g_raw),
                                *self.obs.last_scaled, float(-self.cur_pos[2]), float(self.cur_euler[0]), float(self.cur_euler[1]),
                                int(done), float(reward), *[float(x) for x in state],
-                               self._cap_gt_err()])   # ★09-20 추종오차(임무 실패 종료 설계용) — 열 끝에 추가(이름 기반 판독)
+                               self._cap_gt_err(),    # ★09-20 추종오차(임무 실패 종료 설계용) — 열 끝에 추가(이름 기반 판독)
+                               *(self._sc_trow if (self._timing_log and self._sc_trow is not None) else []),   # ★09-23 TIMING_LOG 열
+                               *(list(self.obs.last_noise) if float(getattr(self.obs_spec, 'noise_std', 0.0)) > 0 else [])])   # ★09-23 입력잡음 nz_v·nz_g
 
     def _cap_gt_err(self):
         """현재 궤적 설정점(hover 중엔 앵커) 대비 수평 GT 오차 [m]. 설정점 미정이면 −1."""
@@ -1148,7 +1235,8 @@ class OnlineRLNode(Node):
             self._cap_rows = []; return
         m = self.scenario.get('capture_meta', {})
         cols = ['step', 'delta', 'delta_eff', 'atk_flag', 'prev_action', 'nis_v_raw', 'nis_g_raw', 'v_obs', 'g_obs', 'alt', 'roll', 'pitch', 'done', 'reward'] + \
-               [f's{i}' for i in range(self.obs_spec.dim)] + ['gt_err']
+               [f's{i}' for i in range(self.obs_spec.dim)] + ['gt_err'] + (list(_SC_TIMING_COLS) if self._timing_log else []) + \
+               (['nz_v', 'nz_g'] if float(getattr(self.obs_spec, 'noise_std', 0.0)) > 0 else [])
         _cls = str(self.scenario.get('attack_class', 'none'))
         np.savez(os.path.join(self._step_dir, f'ep{self.episode:04d}.npz'), rows=np.asarray(self._cap_rows, float),
                  cols=np.array(cols), pair=m.get('pair', ''), grade=m.get('grade', _cls.split('_')[0]), kind=m.get('kind', _cls),
@@ -1201,6 +1289,8 @@ class OnlineRLNode(Node):
         total = pytime.time() - self.train_start_time
         self.get_logger().info(f'\n{"#"*60}\n  Training Complete | {total:.0f}s ({total/60:.1f}min)\n'
             f'  Episodes: {self.episode-1} | Hard Resets: {self.hard_reset_count}\n{"#"*60}')
+        if self._sc and self._lp:
+            self._sc_settle_learner(60.0)     # ★09-23 남은 learn 회신 → 보류 요약 기록 후 저장(FIFO 라 마지막 갱신 반영)
         self.agent.save(os.path.join(self.cfg.outdir, 'final_model.pt'))
         if self.eval_history:
             np.savez(os.path.join(self.cfg.outdir, 'eval_history.npz'),
@@ -1228,6 +1318,10 @@ class OnlineRLNode(Node):
             # ★09-18 검토: 에피소드 도중 리셋(heartbeat 등) → 이 에피소드 행을 버리고 같은 번호를 다시 돌린다(짝 보존)
             self.get_logger().warn(f'  [CAPTURE] 에피소드 {self.episode} 도중 HARD 리셋 — 행 {len(self._cap_rows)} 폐기, 다시 실행')
             self._cap_rows = []; self.episode -= 1
+        elif self._cap_rows:
+            # ★09-23 결함 수정: 학습 모드에서 에피소드 도중 HARD 리셋이면 중단된 행이 다음 에피 npz 앞에 붙었다(60 파일, 스텝 역행).
+            self.get_logger().warn(f'  [STEPS] 에피소드 {self.episode} 도중 HARD 리셋 — 기록 중이던 행 {len(self._cap_rows)} 폐기')
+            self._cap_rows = []
         self._reset_episode_state()
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
         self.home_lat = None; self.init_counter = 0; self.flight_state = 'HARD_RESET'
@@ -1309,13 +1403,21 @@ class OnlineRLNode(Node):
                 self.get_logger().error('  💀 Heartbeat lost → HARD_RESET')
                 self._trigger_hard_reset(); return
 
+        if self._lp:
+            self._sc_poll()   # ★09-23 학습기 회신·생존 감시 (모든 상태)
+        _sc_live = self._sc and self.flight_state in ('STABILIZE', 'LEARNING')
+
         # ── Offboard 유지 (★ 50Hz 규칙 발행 = PX4 안정) ──
         #   이번 틱 자세-수평 홀드 여부를 offboard 모드 발행 전에 확정(모드↔셋포인트 일치).
-        self._att_hold_active = bool(self.flight_state == 'LEARNING'
-                                     and getattr(self, 'prev_action', 0) == 1
-                                     and knob('HOVER_ATT'))
+        if not _sc_live:      # SIMCLOCK_UKF 의 STABILIZE/LEARNING 은 드레인이 적용 행동으로 정한다
+            self._att_hold_active = bool(self.flight_state == 'LEARNING'
+                                         and getattr(self, 'prev_action', 0) == 1
+                                         and knob('HOVER_ATT'))
         if self.flight_state in ('SOFT_RECOVERY', 'TAKEOFF', 'STABILIZE', 'LEARNING'):
             self._publish_offboard()
+
+        if _sc_live:          # ★09-23 sim 클럭: UKF·setpoint·RL 은 GT 스탬프 드레인에서. 틱은 드레인 재시도 + 공백 시 재발행만
+            self._sc_tick(); return
 
         # ── IDLE: sim이 GT를 흘릴 때까지 대기(헤드리스 콜드 로딩 ~수분) → 준비되면 시작 ──
         if self.flight_state == 'IDLE':
@@ -1346,6 +1448,7 @@ class OnlineRLNode(Node):
             if self.stable_counter >= int(self.cfg.warmup_seconds / self.step_dt):
                 self._start_new_episode()
                 self.flight_state = 'STABILIZE'; self.stable_counter = 0; self.init_counter = 0
+                if self._sc: self._sc_enter_stabilize()
                 self.get_logger().info('  → STABILIZE (soft)')
             elif self.init_counter >= int(self.cfg.soft_recovery_timeout / self.step_dt):
                 self.get_logger().warn('  [SOFT] 복구 시간 초과 → WARM_RESET 에스컬레이션')
@@ -1407,6 +1510,7 @@ class OnlineRLNode(Node):
 
             if self.stable_counter >= int(self.cfg.warmup_seconds / self.step_dt):
                 self.flight_state = 'STABILIZE'; self.stable_counter = 0
+                if self._sc: self._sc_enter_stabilize()
                 self._takeoff_fail_cnt = 0   # 이륙 성공 → 연속실패 카운터 리셋
                 self.get_logger().info('  → STABILIZE')
 
@@ -1455,90 +1559,7 @@ class OnlineRLNode(Node):
 
         # ── LEARNING (★ 핵심 수정) ──
         elif self.flight_state == 'LEARNING':
-            if self.prev_action == 1:
-                # ★2026-08-27 누수 홀드(leaky hold) — env HOVER_EMAX[m] 로 3모드:
-                #     0      = 구 soft-hold (매 스텝 현재위치 = 복원력 0 → δ0.8 온셋분출 42m 활강)
-                #     e>0    = 앵커가 현재위치에서 최대 e 까지만 뒤처짐 → 상시 e·P(≈e×0.95 m/s) 복원력,
-                #              포화 회피(구 사수-flip 진단은 구플랜트·구공격 산물 — 재검 대상)
-                #     매우 큼 = 사실상 좌표 사수
-                #   고도·yaw latch 유지, 속도목표 0. (soft hold 2026-07-23 주석은 이력으로 대체)
-                _emax = float(knob('HOVER_EMAX', '1e9') or 1e9)   # ★기본=강제 홀딩(사수). 07-23 flip 트레이드 부재 재검 완료(roll 47.6<60)
-                if _emax > 0.0:
-                    _anc = getattr(self, '_hover_anchor', None)
-                    if _anc is None:
-                        _anc = np.array([float(self.cur_pos[0]), float(self.cur_pos[1])])
-                    _err = np.array([float(self.cur_pos[0]), float(self.cur_pos[1])]) - _anc
-                    _d = float(np.linalg.norm(_err))
-                    if _d > _emax:
-                        _anc = _anc + _err * (1.0 - _emax / _d)   # 앵커가 e_max 밖으로는 끌려옴
-                    self._hover_anchor = _anc
-                    _hg = float(knob('HOVER_HARD_GAIN', '0') or 0)  # ★사수모드: 앵커 너머 가상타깃+속도FF
-                    if _hg > 0.0:
-                        _e = _anc - np.array([float(self.cur_pos[0]), float(self.cur_pos[1])])  # 앵커로의 오차
-                        _tgt = _anc + _hg * _e                                    # 앵커 너머로 목표 밀기(공격적 P)
-                        _vff = np.clip(2.0 * _e, -6.0, 6.0)                       # 앵커 향 속도 피드포워드
-                        control_sp = (float(_tgt[0]), float(_tgt[1]),
-                                      float(self._hover_alt), self._hover_yaw, float(_vff[0]), float(_vff[1]), 0.0)
-                    else:
-                        control_sp = (float(_anc[0]), float(_anc[1]),
-                                      float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
-                else:
-                    control_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
-                                  float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
-                # ★판정 분리(2026-08-27): drift 판정용 trajectory_sp 는 현재 위치 —
-                #   호버 중 drift 판정 비활성(구 soft-hold 의 의미론 복원). 명령(control_sp)은 앵커.
-                #   (이거 없으면 사수 홀드가 밀리는 과도 중에 crash_drift 로 잘림 — δ0.8 실측 +2.5s 절단)
-                # ★2026-09-12 종료 규칙 대칭(사용자 확정): hover 중에도 앵커 기준 10 m·1 s 지오펜스 적용 (HOVER_DRIFT_SYM=0 이면 구 면제)
-                if knob('HOVER_DRIFT_SYM', '1') not in ('', '0') and _emax > 0.0:
-                    trajectory_sp = (float(self._hover_anchor[0]), float(self._hover_anchor[1]),
-                                     float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
-                else:
-                    trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
-                                     float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
-                self._did_hover = True   # ★재접근은 '호버 후 복귀'에서만 — 무대응 track 은 재접근 안함(hijack 노출)
-            elif (not knob('NAIVE_TRACK')) and getattr(self, '_did_hover', False) and (getattr(self, '_reengaging', False) or (
-                 getattr(self, '_last_traj_sp', None) is not None and
-                 (lambda _n: math.hypot(self.cur_pos[0]-_n[0], self.cur_pos[1]-_n[1])
-                     > float(knob('REENGAGE_R', '2.0') or 2.0))(self._nearest_xy()))):
-                # ★2026-08-27 재접근 — "강제 홀딩 후 원궤적 복귀 기동". 목표 = 궤적 **최근접점**
-                #   (동결점 아님 → 지나온 경로 역주행 방지). 도달(REENGAGE_R 안)하면 시계가 그
-                #   phase 로 재동기된 채 정상 track 으로 넘어가 전진 재개. 판정은 유예(현재위치).
-                _tgt = self._reengage_nearest()   # 최근접점 + 시계 재동기(부수효과)
-                self._reengaging = True
-                _tx, _ty = float(_tgt[0]), float(_tgt[1])
-                _dx, _dy = _tx - float(self.cur_pos[0]), _ty - float(self.cur_pos[1])
-                _dd = math.hypot(_dx, _dy)
-                if _dd <= float(knob('REENGAGE_R', '2.0') or 2.0):
-                    self._reengaging = False; self._did_hover = False   # 도달 → 순수 track 재개
-                _vap = min(self.cfg.flight_radius * self.cfg.flight_omega * 1.4,
-                           math.sqrt(max(2.0 * 2.0 * (_dd - 0.5), 0.01)))
-                _ux, _uy = (_dx/_dd, _dy/_dd) if _dd > 1e-6 else (0.0, 0.0)
-                control_sp = (_tx, _ty, float(_tgt[2]),
-                              math.atan2(_dy, _dx), _vap*_ux, _vap*_uy, 0.0)
-                # 판정 유예: 재접근 중 trajectory_sp=현재위치 (hover 와 동일 의미론).
-                #   안전망: 원점 기준 60 m 초과는 진짜 통제상실로 간주(기존 drift 목적 유지).
-                if math.hypot(self.cur_pos[0], self.cur_pos[1]) > 60.0:
-                    trajectory_sp = control_sp   # → gt_err 커져 drift 판정 작동(안전망)
-                else:
-                    trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
-                                     float(self._last_traj_sp[2]), 0.0, 0.0, 0.0, 0.0)
-            else:
-                # ★2026-08-27 궤적 전진을 sim-dt 로 (wall 50Hz 타이머 × sim speed N 불일치 수정).
-                #   구 구현: 매 틱 고정 0.02s 전진 → speed10·RTF10 이면 sim 기준 1/10 속도로
-                #   위치목표가 기어가고 FF(1.2~1.8)와 싸워 사냥진동 발생 (실측: 명령 위치
-                #   진행속도 중앙 0.00, 실속도 0.7 진동. 과거 캡처 전부 RTF 의존 오염).
-                _gs = getattr(self, '_gt_sim_time', None)
-                _gp = getattr(self, '_prev_gt_sim_time', None)
-                if _gs is not None and _gp is not None and 0.0 < (_gs - _gp) <= 1.0:
-                    self._dt_sim_last = _gs - _gp
-                else:
-                    self._dt_sim_last = self.step_dt   # 폴백(스탬프 이상·첫 틱)
-                self._prev_gt_sim_time = _gs
-                self._sim_flight_t = getattr(self, '_sim_flight_t', 0.0) + self._dt_sim_last
-                trajectory_sp = self._compute_setpoint()
-                control_sp = trajectory_sp
-                self._last_traj_sp = trajectory_sp   # 재접근용 동결점 (hover/재접근 동안 유지)
-                self.tick_count += 1
+            control_sp, trajectory_sp = self._learning_setpoint(self.prev_action == 1, self._legacy_track_dt)
 
             if getattr(self, '_att_hold_active', False):
                 self._send_attitude_level()   # ★자세-수평 홀드 (position 대신 attitude offboard)
@@ -1552,6 +1573,630 @@ class OnlineRLNode(Node):
                     self._sweep_step_10hz(trajectory_sp)
                 else:
                     self._rl_step_10hz(trajectory_sp)
+
+    # ══════════════════════════════════════════════════════════
+    #  LEARNING setpoint (★09-23 _tick 에서 추출 — 구 경로와 연산 동일, SIMCLOCK_UKF 드레인과 공용)
+    # ══════════════════════════════════════════════════════════
+    def _learning_setpoint(self, hover, track_dt):
+        """(control_sp, trajectory_sp). hover=현재 적용 행동이 hover.
+        track_dt(): track 분기에서만 불리며 궤적 전진 dt 를 돌려주고 기준 시각을 갱신한다."""
+        if hover:
+            # ★2026-08-27 누수 홀드(leaky hold) — env HOVER_EMAX[m] 로 3모드:
+            #     0      = 구 soft-hold (매 스텝 현재위치 = 복원력 0 → δ0.8 온셋분출 42m 활강)
+            #     e>0    = 앵커가 현재위치에서 최대 e 까지만 뒤처짐 → 상시 e·P(≈e×0.95 m/s) 복원력,
+            #              포화 회피(구 사수-flip 진단은 구플랜트·구공격 산물 — 재검 대상)
+            #     매우 큼 = 사실상 좌표 사수
+            #   고도·yaw latch 유지, 속도목표 0. (soft hold 2026-07-23 주석은 이력으로 대체)
+            _emax = float(knob('HOVER_EMAX', '1e9') or 1e9)   # ★기본=강제 홀딩(사수). 07-23 flip 트레이드 부재 재검 완료(roll 47.6<60)
+            if _emax > 0.0:
+                _anc = getattr(self, '_hover_anchor', None)
+                if _anc is None:
+                    _anc = np.array([float(self.cur_pos[0]), float(self.cur_pos[1])])
+                _err = np.array([float(self.cur_pos[0]), float(self.cur_pos[1])]) - _anc
+                _d = float(np.linalg.norm(_err))
+                if _d > _emax:
+                    _anc = _anc + _err * (1.0 - _emax / _d)   # 앵커가 e_max 밖으로는 끌려옴
+                self._hover_anchor = _anc
+                _hg = float(knob('HOVER_HARD_GAIN', '0') or 0)  # ★사수모드: 앵커 너머 가상타깃+속도FF
+                if _hg > 0.0:
+                    _e = _anc - np.array([float(self.cur_pos[0]), float(self.cur_pos[1])])  # 앵커로의 오차
+                    _tgt = _anc + _hg * _e                                    # 앵커 너머로 목표 밀기(공격적 P)
+                    _vff = np.clip(2.0 * _e, -6.0, 6.0)                       # 앵커 향 속도 피드포워드
+                    control_sp = (float(_tgt[0]), float(_tgt[1]),
+                                  float(self._hover_alt), self._hover_yaw, float(_vff[0]), float(_vff[1]), 0.0)
+                else:
+                    control_sp = (float(_anc[0]), float(_anc[1]),
+                                  float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
+            else:
+                control_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
+                              float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
+            # ★판정 분리(2026-08-27): drift 판정용 trajectory_sp 는 현재 위치 —
+            #   호버 중 drift 판정 비활성(구 soft-hold 의 의미론 복원). 명령(control_sp)은 앵커.
+            #   (이거 없으면 사수 홀드가 밀리는 과도 중에 crash_drift 로 잘림 — δ0.8 실측 +2.5s 절단)
+            # ★2026-09-12 종료 규칙 대칭(사용자 확정): hover 중에도 앵커 기준 10 m·1 s 지오펜스 적용 (HOVER_DRIFT_SYM=0 이면 구 면제)
+            if knob('HOVER_DRIFT_SYM', '1') not in ('', '0') and _emax > 0.0:
+                trajectory_sp = (float(self._hover_anchor[0]), float(self._hover_anchor[1]),
+                                 float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
+            else:
+                trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
+                                 float(self._hover_alt), self._hover_yaw, 0.0, 0.0, 0.0)
+            self._did_hover = True   # ★재접근은 '호버 후 복귀'에서만 — 무대응 track 은 재접근 안함(hijack 노출)
+        elif (not knob('NAIVE_TRACK')) and getattr(self, '_did_hover', False) and (getattr(self, '_reengaging', False) or (
+             getattr(self, '_last_traj_sp', None) is not None and
+             (lambda _n: math.hypot(self.cur_pos[0]-_n[0], self.cur_pos[1]-_n[1])
+                 > float(knob('REENGAGE_R', '2.0') or 2.0))(self._nearest_xy()))):
+            # ★2026-08-27 재접근 — "강제 홀딩 후 원궤적 복귀 기동". 목표 = 궤적 **최근접점**
+            #   (동결점 아님 → 지나온 경로 역주행 방지). 도달(REENGAGE_R 안)하면 시계가 그
+            #   phase 로 재동기된 채 정상 track 으로 넘어가 전진 재개. 판정은 유예(현재위치).
+            _tgt = self._reengage_nearest()   # 최근접점 + 시계 재동기(부수효과)
+            self._reengaging = True
+            _tx, _ty = float(_tgt[0]), float(_tgt[1])
+            _dx, _dy = _tx - float(self.cur_pos[0]), _ty - float(self.cur_pos[1])
+            _dd = math.hypot(_dx, _dy)
+            if _dd <= float(knob('REENGAGE_R', '2.0') or 2.0):
+                self._reengaging = False; self._did_hover = False   # 도달 → 순수 track 재개
+            _vap = min(self.cfg.flight_radius * self.cfg.flight_omega * 1.4,
+                       math.sqrt(max(2.0 * 2.0 * (_dd - 0.5), 0.01)))
+            _ux, _uy = (_dx/_dd, _dy/_dd) if _dd > 1e-6 else (0.0, 0.0)
+            control_sp = (_tx, _ty, float(_tgt[2]),
+                          math.atan2(_dy, _dx), _vap*_ux, _vap*_uy, 0.0)
+            # 판정 유예: 재접근 중 trajectory_sp=현재위치 (hover 와 동일 의미론).
+            #   안전망: 원점 기준 60 m 초과는 진짜 통제상실로 간주(기존 drift 목적 유지).
+            if math.hypot(self.cur_pos[0], self.cur_pos[1]) > 60.0:
+                trajectory_sp = control_sp   # → gt_err 커져 drift 판정 작동(안전망)
+            else:
+                trajectory_sp = (float(self.cur_pos[0]), float(self.cur_pos[1]),
+                                 float(self._last_traj_sp[2]), 0.0, 0.0, 0.0, 0.0)
+        else:
+            # ★2026-08-27 궤적 전진을 sim-dt 로 (wall 50Hz 타이머 × sim speed N 불일치 수정).
+            #   구 구현: 매 틱 고정 0.02s 전진 → speed10·RTF10 이면 sim 기준 1/10 속도로
+            #   위치목표가 기어가고 FF(1.2~1.8)와 싸워 사냥진동 발생 (실측: 명령 위치
+            #   진행속도 중앙 0.00, 실속도 0.7 진동. 과거 캡처 전부 RTF 의존 오염).
+            self._dt_sim_last = track_dt()   # 구: GT float 스탬프 차(폴백 0.02) / SIMCLOCK_UKF: 정수 스탬프 차(폴백 0)
+            self._sim_flight_t = getattr(self, '_sim_flight_t', 0.0) + self._dt_sim_last
+            trajectory_sp = self._compute_setpoint()
+            control_sp = trajectory_sp
+            self._last_traj_sp = trajectory_sp   # 재접근용 동결점 (hover/재접근 동안 유지)
+            self.tick_count += 1
+        return control_sp, trajectory_sp
+
+    def _legacy_track_dt(self):
+        """구 벽시계 틱 경로의 궤적 전진 dt: GT float sim 스탬프 차, 이상·첫 틱은 폴백 step_dt."""
+        _gs = getattr(self, '_gt_sim_time', None)
+        _gp = getattr(self, '_prev_gt_sim_time', None)
+        if _gs is not None and _gp is not None and 0.0 < (_gs - _gp) <= 1.0:
+            _d = _gs - _gp
+        else:
+            _d = self.step_dt   # 폴백(스탬프 이상·첫 틱)
+        self._prev_gt_sim_time = _gs
+        return _d
+
+    # ══════════════════════════════════════════════════════════
+    #  ★2026-09-23 SIMCLOCK_UKF — sim 스탬프 드레인 (설계: env/simclock.py)
+    #    GT 스탬프 1개 = 예측 1회(dt 0.02) · 같은 스탬프 GPS 로 업데이트 + RL 스텝 · 행동 적용은 t_k+ACT_LAT_SIM
+    # ══════════════════════════════════════════════════════════
+    def _sc_reset_ep_timing(self):
+        self._sc_ep = dict(npred=collections.Counter(), dtg=collections.Counter(), apply_lat=collections.Counter(),
+                           gps_gap=0, gt_gap=0, gt_fill=0, overrun=0, napply=0, lag_max=0.0, act_lag_max=0.0, wait=[],
+                           regress=0, gps_late=0, deferred=0, lag_warn=0, eff_lat_max=0.0)
+
+    def _sc_reset(self):
+        self._scq.reset()
+        self._sc_ctx = None; self._sc_applied = None; self._sc_traj_prev = None; self._sc_trow = None
+        self._sc_defq.clear(); self._sc_prev_snap = None; self._sc_gap_run = 0
+        self._sc_token += 1
+        self._sc_reset_ep_timing()
+
+    def _sc_enter_stabilize(self):
+        """TAKEOFF/SOFT → STABILIZE: 이전 상태의 스탬프를 버리고 이 순간부터 드레인."""
+        self._scq.reset(); self._sc_ctx = None; self._sc_traj_prev = None
+        self._sc_defq.clear(); self._sc_prev_snap = None; self._sc_stab_gt = 0; self._sc_gap_run = 0
+
+    def _sc_warn_once(self, key, msg):
+        if key not in self._sc_warned:
+            self._sc_warned.add(key); self.get_logger().warn(msg)
+
+    def _sc_die(self, msg):
+        """치명 상태: 로그 → _fatal 기록 → SystemExit. run_isaac 이 정리 후 RuntimeError(rc≠0)로 끝낸다(RUN_DONE≠0 → 체인이 완료로 오인하지 않음)."""
+        self._fatal = str(msg)
+        self.get_logger().error(f'  💀 {msg}')
+        raise SystemExit(self._fatal)
+
+    # ── 콜백 ────────────────────────────────────────────────────────────
+    def _sc_on_gt(self, msg):
+        if self.flight_state not in ('STABILIZE', 'LEARNING'):
+            return
+        now = pytime.time()
+        st = _sc_stamp_us(msg.header.stamp.sec, msg.header.stamp.nanosec)
+        if st % self._scq.gt_us:
+            self._sc_bad_stamp += 1
+            self._sc_warn_once('gt_stamp', f'  [SIMCLOCK] GT 스탬프 {st} µs 가 20 ms 격자가 아님 — run_sim 에 SIMCLOCK_UKF=1 이 안 넘어갔나?')
+            if self._sc_bad_stamp > 10:
+                self._sc_die('[SIMCLOCK] GT 스탬프가 20 ms 격자가 아님(>10회) — run_sim 과 노드의 SIMCLOCK_UKF 불일치(sim_env 확인)')
+        # 짝 나이(벽시계 ms): GT 전달 지연(run_sim 이 pose.covariance[0] 에 발행 벽시계를 싣는다) · 마지막 IMU/u 콜백 이후 경과
+        try:
+            _pub = float(msg.pose.covariance[0])
+        except Exception:
+            _pub = 0.0
+        _ti = getattr(self, '_sc_t_imu', None); _tu = getattr(self, '_sc_t_u', None)
+        meta = ((now - _pub) * 1e3 if _pub > 1e9 else float('nan'),
+                (now - _ti) * 1e3 if _ti else float('nan'), (now - _tu) * 1e3 if _tu else float('nan'))
+        snap = (tuple(getattr(self, n).copy() for n in _SC_SNAP), meta)
+        r = self._scq.push_gt(st, snap)
+        if r == 'regress':
+            self._sc_ep['regress'] += 1
+            self.get_logger().error(f'  [SIMCLOCK] GT 스탬프 역행({st} µs, 상태 {self.flight_state}) — sim 재기동으로 보고 정리')
+            if self.flight_state == 'LEARNING':
+                self._trigger_hard_reset()               # 에피소드 연속성(UKF·전이) 이 깨졌다 → 하트비트 소실과 같은 처리
+                return
+            self._sc_enter_stabilize()                   # STABILIZE: UKF 를 새로 초기화하고 이 스탬프부터
+            self.is_ukf_initialized = False; self.stable_counter = 0
+            self.ukf = DynamicsUKF(dt=self.step_dt, calib=self.calib, q_gate=self._ukf_q_gate)
+            self._scq.push_gt(st, snap)
+        self._sc_drain()
+
+    def _sc_on_gps(self, msg):
+        if self.home_lat is None:
+            self.home_lat = msg.latitude_deg; self.home_lon = msg.longitude_deg; self.home_alt = msg.altitude_msl_m
+        lat_rad = math.radians(self.home_lat)
+        pos = np.array([
+            math.radians(msg.longitude_deg - self.home_lon) * self.earth_radius * math.cos(lat_rad),
+            math.radians(msg.latitude_deg - self.home_lat) * self.earth_radius,
+            msg.altitude_msl_m - self.home_alt])
+        vel = np.array([msg.vel_e_m_s, msg.vel_n_m_s, -msg.vel_d_m_s])
+        st = int(msg.timestamp)
+        if self.flight_state in ('STABILIZE', 'LEARNING'):
+            if st % self._scq.grid_us:
+                self._sc_bad_stamp += 1
+                self._sc_warn_once('gps_stamp', f'  [SIMCLOCK] GPS 스탬프 {st} µs 가 100 ms 격자가 아님 — run_sim 에 SIMCLOCK_UKF=1 이 안 넘어갔나?')
+                if self._sc_bad_stamp > 10:
+                    self._sc_die('[SIMCLOCK] GPS 스탬프가 100 ms 격자가 아님(>10회) — run_sim 과 노드의 SIMCLOCK_UKF 불일치(sim_env 확인)')
+            if not self._scq.push_gps(st, (pos, vel)):
+                self._sc_ep['gps_late'] += 1
+            self._sc_drain()
+
+    def _sc_tick(self):
+        self._sc_drain()
+        # 드레인이 이번 틱 동안 명령을 안 냈으면(GT 공백) 마지막 명령을 그대로 재발행 — 재계산 없음(요 슬루·FF 상태 불변)
+        if not self._sc_pub_mark and getattr(self, '_last_sp_pub', None) is not None:
+            _pub, _msg = self._last_sp_pub
+            _pub.publish(_msg)
+        self._sc_pub_mark = False
+
+    def _sc_poll(self):
+        """학습기 회신 수거(논블로킹) → 통계 반영(요청 에피소드로 귀속) → 기다리던 행동 결정. 학습기 사망이면 치명 종료."""
+        from rl.learner_proc import LearnerDied
+        try:
+            reps = self.agent.poll()
+        except LearnerDied as e:
+            self._sc_die(f'learner died: {e}')
+        for r in reps:
+            if r.get('err'):
+                self.get_logger().error(f"  [LEARN ERROR] {str(r['err']).strip().splitlines()[-1]}")
+            self._sc_record_learn(r['loss'], r['dt_ms'], r['z_var'], r, ep=self._sc_req_ep.pop(r['k'], None))
+            c = self._sc_ctx
+            if c is not None and c.get('req') == r['k']:
+                c['learn_ms'] = r['dt_ms']
+        if self._sc_pend_ep:
+            self._sc_flush_pend_ep()
+        self._sc_try_decide()
+
+    # ── 드레인 ────────────────────────────────────────────────────────────
+    def _sc_drain(self):
+        if self._sc_in_drain:
+            return
+        self._sc_in_drain = True
+        tok = self._sc_token
+        latest = tuple(getattr(self, n).copy() for n in _SC_SNAP)
+        try:
+            n = 0
+            if self._lp:
+                self._sc_poll()
+            while self.flight_state in ('STABILIZE', 'LEARNING'):
+                if self._lp and n and (self._sc_ctx is not None or self._sc_defq):
+                    self._sc_poll()                        # 항목 사이: 따라잡기 중 도착한 θ_k 도 바로 반영(거짓 overrun 방지)
+                    if self.flight_state not in ('STABILIZE', 'LEARNING'):
+                        break
+                if n >= self._sc_drain_max:
+                    break                                  # 실행기에 양보(다음 콜백·틱이 이어서 처리) — GT 콜백 스냅샷이 늦어지지 않게
+                it = self._scq.pop()
+                if it is None:
+                    break
+                n += 1
+                self._sc_process(it)
+        finally:
+            self._sc_in_drain = False
+            if tok == self._sc_token:                      # 드레인 밖에서는 콜백의 최신값이 보이게 복원(리셋됐으면 리셋값 유지)
+                for n_, v in zip(_SC_SNAP, latest):
+                    getattr(self, n_)[:] = v
+
+    def _sc_process(self, it):
+        arrs, meta = it.snap
+        if it.missing and self._sc_prev_snap is not None and self.is_ukf_initialized:
+            # 결번 GT 칸(노드가 0.5 s 넘게 멈춰 RELIABLE 큐가 넘친 경우): 직전 스냅샷으로 예측만(fresh=False) → UKF 적분 시간 보존
+            for n, v in zip(_SC_SNAP, self._sc_prev_snap):
+                getattr(self, n)[:] = v
+            for _ in range(it.missing):
+                self.gps_updated = False
+                self._run_ukf_step()
+            self._sc_ep['gt_fill'] += it.missing
+        self._sc_prev_snap = arrs
+        for n, v in zip(_SC_SNAP, arrs):
+            getattr(self, n)[:] = v
+        self._sc_meta = meta
+        if self.flight_state == 'STABILIZE':
+            self._sc_stabilize(it); return
+        for a in it.applies:
+            self._sc_apply(it, a)
+
+        def _track_dt():                                   # 궤적 전진 = 정수 스탬프 차 (hover·재접근 동안은 아래에서 시계를 멈춘다)
+            p = self._sc_traj_prev
+            return (it.stamp - p) * 1e-6 if (p is not None and it.stamp > p) else 0.0
+        self._att_hold_active = bool(self._sc_applied == 1 and knob('HOVER_ATT'))
+        control_sp, trajectory_sp = self._learning_setpoint(self._sc_applied == 1, _track_dt)
+        self._sc_traj_prev = it.stamp                      # 모든 스탬프에서 갱신: hover·재접근 중 궤적 시계 정지, track 은 정확히 스탬프 차
+        if self._att_hold_active:
+            self._send_attitude_level()
+        else:
+            self._send_setpoint(*control_sp)
+        self._sc_pub_mark = True
+        self._sc_ukf(it)
+        if it.grid:
+            defer = (not self.sweep_mode) and (self._sc_ctx is not None or bool(self._sc_defq))
+            self._sc_step_timing(it, defer)
+            if self.sweep_mode:
+                self._sc_sweep_step(trajectory_sp, it)
+            elif defer:
+                self._sc_defer_grid(trajectory_sp, it)     # a_{k−1} 미결정: δ·바람·UKF 는 지금(sim 시각), RL 앞부분은 결정 뒤
+            else:
+                self._rl_step_sc(trajectory_sp, it)
+            if self.flight_state == 'LEARNING':
+                self._sc_check_lag(it)
+
+    def _sc_ukf(self, it):
+        if it.gps is not None:
+            self.obs_gps_pos[:] = it.gps[0]; self.obs_gps_vel[:] = it.gps[1]
+        self.gps_updated = it.gps is not None             # _run_ukf_step 이 읽는 "이 스텝 GPS fresh"
+        self._run_ukf_step()
+        self.gps_updated = False
+
+    def _sc_stabilize(self, it):
+        self._send_setpoint(0.0, 0.0, -abs(self.cfg.flight_altitude), 0.0)
+        self._sc_pub_mark = True
+        self._sc_stab_gt += 1
+        if not self.is_ukf_initialized and not (it.grid and it.gps is not None):
+            if self._sc_stab_gt > int(knob('SC_STAB_MAX_GT', '500') or 500):
+                self._sc_die(f'[SIMCLOCK] STABILIZE 에서 GT {self._sc_stab_gt}개 동안 격자 GPS 없음 — run_sim SIMCLOCK_UKF 불일치 또는 GPS 미발행')
+            return                                         # UKF 는 첫 격자 GPS 로 초기화(구: 첫 틱의 낡은 GPS)
+        self._sc_ukf(it)
+        self.stable_counter += 1                           # = 초기화 후 예측 수 (GT 스탬프 수)
+        warmup = int(self.cfg.warmup_seconds / self.step_dt)
+        attitude_stable = abs(self.cur_euler[0]) < 0.1 and abs(self.cur_euler[1]) < 0.1
+        if it.grid and self.stable_counter >= warmup and attitude_stable:   # 격자에서 전환 → 첫 RL 스텝 = +0.1 s
+            self.window_buffer.clear()
+            self.step_count = 0; self.tick_count = 0; self._traj_t = 0.0
+            pattern = self.scenario['pattern'] if self.scenario else 'hover'
+            if pattern == 'circle':
+                self.theta = 0.0
+            elif pattern in ('figure8', 'waypoint', 'aggressive'):
+                self.tick_count = 0
+            self.flight_state = 'LEARNING'
+            self._sc_traj_prev = it.stamp                  # 궤적 시간 = (스탬프 − s0)
+            self._sc_applied = self.prev_action            # sweep hover 셀은 1, RL 은 None
+            self.get_logger().info(
+                f'  → LEARNING (pattern={pattern}, theta={self.theta:.2f}) [SIMCLOCK s0={it.stamp / 1e6:.2f}s]')
+
+    # ── 계측 ────────────────────────────────────────────────────────────
+    def _sc_row_set(self, row, name, val):
+        row[len(row) - len(_SC_TIMING_COLS) + _SC_TI[name]] = val
+
+    def _sc_step_timing(self, it, defer):
+        e = self._sc_ep
+        lag = (self._scq.last_in - it.grid_stamp) * 1e-6
+        e['npred'][it.n_pred] += 1
+        if it.dt_gps_us >= 0:
+            e['dtg'][it.dt_gps_us] += 1
+        e['gps_gap'] += int(it.gps_gap); e['gt_gap'] += int(it.gt_gap); e['lag_max'] = max(e['lag_max'], lag)
+        e['deferred'] += int(defer)
+        if it.gps_gap:
+            self._sc_gap_run += 1
+            if e['gps_gap'] <= 3:
+                self.get_logger().warn(f'  [SIMCLOCK] GPS 결번 @ {it.grid_stamp / 1e6:.2f}s — fresh=False 로 진행 (에피 누적 {e["gps_gap"]})')
+            if self._sc_gap_run >= int(knob('SC_GAP_RUN_MAX', '20') or 20):
+                self._sc_die(f'[SIMCLOCK] GPS 결번 {self._sc_gap_run} 격자 연속 — run_sim 과 노드의 SIMCLOCK_UKF 불일치(sim_env) 또는 GPS 미발행')
+        else:
+            self._sc_gap_run = 0
+        nan = float('nan'); m = getattr(self, '_sc_meta', (nan, nan, nan))
+        self._sc_trow = [float(it.grid_stamp), float(it.dt_gps_us) if it.dt_gps_us >= 0 else nan, float(it.n_pred),
+                         it.n_pred * self.step_dt, float(it.gps_gap), float(it.gt_gap), lag, nan, nan, nan, nan, nan,
+                         float(defer), float(m[0]), float(m[1]), float(m[2])]
+
+    def _sc_check_lag(self, it):
+        """노드 지연 감시(TIMING_LOG 무관): 드레인 적체(last_in − 처리 스탬프)와 행동 결정 지연(처리 스탬프 − 가장 오래된 미결정 t_k)."""
+        e = self._sc_ep
+        lag = (self._scq.last_in - it.stamp) * 1e-6
+        t_und = self._scq.oldest_undecided_t()
+        alag = (it.stamp - t_und) * 1e-6 if t_und is not None else 0.0
+        e['act_lag_max'] = max(e['act_lag_max'], alag)
+        worst = max(lag, alag)
+        if worst > self._sc_lag_warn:
+            e['lag_warn'] += 1
+            if e['lag_warn'] <= 3 or e['lag_warn'] % 50 == 0:
+                self.get_logger().warn(f'  [SIMCLOCK] 노드 지연 드레인 {lag:.3f}s · 결정 {alag:.3f}s (sim) > {self._sc_lag_warn}s '
+                                       f'(보류 격자 {len(self._sc_defq)}, 큐 {len(self._scq.q)}, 에피 {e["lag_warn"]}회) — 학습기·CPU 가 RL 주기를 못 따라감')
+        if worst > self._sc_lag_max or len(self._scq.q) > 5000 or len(self._sc_defq) > 1000:
+            self._sc_die(f'[SIMCLOCK] 노드 지연 폭주: 드레인 {lag:.2f}s · 결정 {alag:.2f}s (sim, 한도 SC_LAG_MAX={self._sc_lag_max}) '
+                         f'— 학습기 처리량 < RL 주기. speed 를 낮출 것')
+
+    def _sc_record_learn(self, loss, dt_ms, z_var, st, ep=None):
+        """구 _async_learn_task 의 통계 반영과 같은 규칙(loss>0 일 때만). ep = 요청 에피소드(LEARNER_PROC):
+        이미 끝나 요약을 보류 중인 에피소드 몫이면 그 기록에 넣는다(다음 에피소드에 섞지 않음)."""
+        rec = None
+        if ep is not None:                                 # 보류 중인 에피소드 몫이면 그 기록으로(평가 라운드 중에도 episode 번호는 그대로라 먼저 본다)
+            rec = next((r for r in self._sc_pend_ep if r['episode'] == ep), None)
+        if st.get('td_kurt') is not None and rec is not None:
+            rec['td'] = tuple(st['td_kurt'])
+        if loss > 0:
+            self.last_learn_dt = dt_ms
+            self.last_z_var = z_var
+            self.last_kgain = float(st.get('kgain', 0.0) or 0.0)
+            self.last_pmax = float(st.get('pmax', 0.0) or 0.0)
+            self.last_innov = float(st.get('innov', 0.0) or 0.0)
+            self.last_argmax_flip = float(st.get('flip', 0.0) or 0.0)
+            self.last_qmax = float(st.get('qmax', 0.0) or 0.0)
+            self.last_nis = float(st.get('nis', 0.0) or 0.0)
+            if rec is not None:
+                rec['losses'].append(loss); rec['learn_dts'].append(dt_ms)
+            elif ep is None or ep == self.episode:
+                self.episode_losses.append(loss)
+                self._ep_learn_dts.append(dt_ms)
+
+    def _sc_flush_pend_ep(self, force=False):
+        """보류한 에피소드 요약·metrics 행을, 그 에피소드의 learn 요청이 모두 회신되면(또는 force) 순서대로 기록."""
+        open_eps = set(self._sc_req_ep.values())
+        while self._sc_pend_ep and (force or self._sc_pend_ep[0]['episode'] not in open_eps):
+            self._ep_emit(self._sc_pend_ep.pop(0))
+
+    def _sc_settle_learner(self, timeout=60.0):
+        """종료 직전(블로킹 허용): 남은 learn 회신을 받아 보류 요약을 기록."""
+        if not (self._sc and self._lp):
+            return
+        t_end = pytime.monotonic() + float(timeout)
+        try:
+            while self.agent._inflight > 0 and pytime.monotonic() < t_end:
+                for r in self.agent.poll():
+                    self._sc_record_learn(r['loss'], r['dt_ms'], r['z_var'], r, ep=self._sc_req_ep.pop(r['k'], None))
+                pytime.sleep(0.005)
+        except Exception as e:                             # noqa: BLE001 — 종료 경로: 기록만은 남긴다
+            self.get_logger().warn(f'  [LEARNER] 종료 대기 중 오류: {e}')
+        self._sc_flush_pend_ep(force=True)
+
+    # ── RL 스텝 ─────────────────────────────────────────────────────────
+    def _sc_learn(self):
+        """learn 요청. 반환 (요청 번호|None, learn_ms). LEARNER_PROC 면 비동기(θ_k 는 poll 로), 아니면 인라인 동기."""
+        if self._lp:
+            req, _upd = self.agent.learn_async()
+            self._sc_req_ep[req] = self.episode
+            return req, 0.0
+        try:
+            loss, dt_ms, z_var = self.agent.learn()
+        except Exception as e:
+            self.get_logger().error(f"  [LEARN ERROR] {e}")
+            return None, 0.0
+        self._sc_record_learn(loss, dt_ms, z_var, {k: getattr(self.agent, a, 0.0) for k, a in _SC_STAT_KEYS})
+        return None, float(dt_ms)
+
+    def _sc_atk_state(self):
+        return (self.attack_active_flag, self._cur_burst_start, self._last_burst_end, self._hover_latched,
+                tuple(getattr(self, '_cur_burst_bias', (0.0, 0.0))))
+
+    def _sc_set_atk(self, s):
+        self.attack_active_flag, self._cur_burst_start, self._last_burst_end, self._hover_latched, self._cur_burst_bias = \
+            s[0], s[1], s[2], s[3], tuple(s[4])
+
+    def _rl_step_sc(self, trajectory_sp, it, pre=None):
+        """RL 스텝 k (격자 t_k). 정석 순서: 관측·보상 → δ[k] 발행 → push → learn 요청 → θ_k 로 행동 결정(_sc_decide).
+        pre: 보류 격자 기록(_sc_defer_grid) — δ·바람은 이미 격자 시각에 처리됐고, 여기서는 그 시각의 스냅샷으로 앞부분만."""
+        _fr = self._rl_step_front(trajectory_sp, wind=(pre is None))
+        if _fr is None:
+            return
+        state, reward, done, term_reason, terminated, nis_vel, nis_gyr, nis_v_raw, nis_g_raw = _fr
+        row = (self._cap_rows[-1] if (self._timing_log and self._log_steps and not self.eval_mode and self._cap_rows) else None)
+        if pre is None:
+            atk_pre, latched_pre = self.attack_active_flag, self._hover_latched
+            # 공격 δ[k] 는 학습·행동과 무관하게 지금(격자 드레인 시점) 발행 — 규약 "스텝 t NIS 는 δ[t−1] 반영"(delta_eff) 그대로.
+            # 종료 스텝은 구 규칙대로 토글하지 않는다(_end_episode 가 끈다).
+            toggled_off = False if done else self._attack_toggle_step()
+            atk_post = self._sc_atk_state()
+        else:
+            atk_pre, latched_pre = pre['atk_pre'][0], pre['atk_pre'][3]
+            toggled_off = pre['toggled_off']; atk_post = pre['atk_post']
+        t_req = pytime.perf_counter(); req = None; learn_ms = 0.0
+        if self.prev_state is not None and self.prev_action is not None:
+            if not self.eval_mode and self.capture is None:
+                self.agent.push(self.prev_state, self.prev_action, reward, state, terminated)
+                req, learn_ms = self._sc_learn()
+        if done:
+            self._end_episode(term_reason); return
+        ctx = dict(k=self.step_count, t_k=it.grid_stamp, state=state, atk_pre=bool(atk_pre), latched_pre=bool(latched_pre),
+                   toggled_off=bool(toggled_off), trajectory_sp=trajectory_sp, reward=reward,
+                   nis=(nis_vel, nis_gyr, nis_v_raw, nis_g_raw), t_req=t_req, req=req, learn_ms=learn_ms, row=row,
+                   alt=-float(self.cur_pos[2]),
+                   log=(self.gt_pos.copy(), self.cur_pos.copy(), atk_post[0], atk_post[4]))
+        self._scq.request(ctx['k'], ctx['t_k'])
+        self._sc_ctx = ctx
+        self._sc_try_decide()
+
+    def _sc_defer_grid(self, trajectory_sp, it):
+        """a_{k−1} 결정 전에 격자 k 가 왔다: sim 시각에 묶인 것(바람 창·δ[k] 토글)은 지금, RL 앞부분(관측·보상·push·learn)은
+        a_{k−1} 결정 뒤 이 격자의 스냅샷으로(_sc_run_one_deferred). 학습기 지연은 행동 적용 지연 하나로만 남는다."""
+        last_k = self._sc_defq[-1]['k'] if self._sc_defq else self._sc_ctx['k']
+        k = last_k + 1
+        D = dict(k=k, it=it, trajectory_sp=trajectory_sp, snap=it.snap[0], meta=self._sc_meta,
+                 res=self.last_res.copy(), Pzz=self.last_Pzz.copy(), last_traj_sp=self._last_traj_sp,
+                 trow=self._sc_trow, atk_pre=self._sc_atk_state())
+        _sc_saved = self.step_count
+        self.step_count = k
+        try:
+            if k >= self.cfg.learning_warmup_steps:
+                self._wind_window_step()
+            D['toggled_off'] = self._attack_toggle_step()
+        finally:
+            self.step_count = _sc_saved
+        D['atk_post'] = self._sc_atk_state()
+        self._sc_defq.append(D)
+
+    def _sc_run_one_deferred(self):
+        D = self._sc_defq.popleft()
+        if self.step_count != D['k']:
+            self._sc_die(f'[SIMCLOCK] 내부 불일치: 보류 격자 k={D["k"]} ≠ step_count {self.step_count}')
+        tok = self._sc_token
+        cur_arr = tuple(getattr(self, n).copy() for n in _SC_SNAP)
+        cur = (self.last_res, self.last_Pzz, self._last_traj_sp, self._sc_trow, getattr(self, '_sc_meta', None), self._sc_atk_state())
+        for n, v in zip(_SC_SNAP, D['snap']):
+            getattr(self, n)[:] = v
+        self.last_res, self.last_Pzz, self._last_traj_sp = D['res'], D['Pzz'], D['last_traj_sp']
+        self._sc_trow, self._sc_meta = D['trow'], D['meta']
+        self._sc_set_atk(D['atk_pre'])
+        try:
+            self._rl_step_sc(D['trajectory_sp'], D['it'], pre=D)
+        finally:
+            if tok == self._sc_token:                      # 에피 종료(리셋)면 리셋 상태 유지
+                for n, v in zip(_SC_SNAP, cur_arr):
+                    getattr(self, n)[:] = v
+                self.last_res, self.last_Pzz, self._last_traj_sp, self._sc_trow, self._sc_meta = cur[:5]
+                self._sc_set_atk(cur[5])
+
+    def _sc_try_decide(self):
+        """결정 가능한 만큼 결정하고, 결정으로 풀린 보류 격자의 RL 앞부분을 순서대로 실행(재귀 없이 한 루프)."""
+        if self._sc_deciding:
+            return
+        self._sc_deciding = True
+        try:
+            while True:
+                if self._sc_ctx is None:
+                    if not self._sc_defq:
+                        return
+                    self._sc_run_one_deferred()           # 새 ctx(또는 에피 종료)
+                    continue
+                if self._lp and not self.agent.ready_to_act():
+                    return                                 # θ_k 미수신 — 드레인·틱은 계속 돈다
+                self._sc_decide()
+        finally:
+            self._sc_deciding = False
+
+    def _sc_decide(self):
+        """구 _rl_step_10hz 의 행동 선택 이후 부분. hover 캡처·failsafe 는 적용 시점(_sc_apply)으로 옮겼다.
+        로그·집계는 격자 t_k 의 값(ctx)으로 — 결정이 언제 나든(학습기 속도) 같은 결과."""
+        ctx = self._sc_ctx; self._sc_ctx = None
+        cfg = self.cfg; state = ctx['state']
+        if self.eval_mode:
+            action = self.agent.act(state, eps=0.0); eps = 0.0
+        elif self.capture is not None:
+            eps = 0.0
+            action = (self._cap_policy.act(self.step_count, self.scenario['plan']) if self._cap_policy is not None
+                      else capture_action(self.capture, self.step_count))
+        else:
+            eps = self.agent.get_epsilon()
+            action = self.agent.act(state, eps)
+        _dw = int(getattr(cfg, 'hover_dwell', 0) or 0)
+        if _dw > 0:
+            if getattr(self, '_dwell_left', 0) > 0:
+                action = 1; self._dwell_left -= 1
+            elif action == 1 and self.prev_action != 1:
+                self._dwell_left = _dw - 1
+        if action == 1:                                    # 탐지 집계: 토글 전 공격 상태(구 순서) 기준
+            if self.first_hover_step is None:
+                self.first_hover_step = self.step_count
+            if not ctx['atk_pre']:
+                self.hover_before_attack_count += 1
+        if ctx['atk_pre']:
+            if self.prev_action == 1 and action == 0:
+                self._ep_relapse += 1
+            self._ep_min_alt = min(self._ep_min_alt, ctx['alt'])
+        _gp, _cp, _af, _bb = ctx['log']                   # 디버그 줄: 격자 시각 값으로
+        _sv = (self.gt_pos.copy(), self.cur_pos.copy(), self.attack_active_flag, getattr(self, '_cur_burst_bias', (0.0, 0.0)))
+        self.gt_pos[:] = _gp; self.cur_pos[:] = _cp; self.attack_active_flag = _af; self._cur_burst_bias = _bb
+        try:
+            self._rl_debug_log(ctx['trajectory_sp'], action, eps, ctx['reward'], *ctx['nis'])
+        finally:
+            self.gt_pos[:] = _sv[0]; self.cur_pos[:] = _sv[1]; self.attack_active_flag = _sv[2]; self._cur_burst_bias = _sv[3]
+        wait_ms = (pytime.perf_counter() - ctx['t_req']) * 1000.0
+        self._sc_ep['wait'].append(wait_ms)
+        row = ctx['row']
+        if row is not None:
+            self._sc_row_set(row, 'act_wait_ms', wait_ms); self._sc_row_set(row, 'learn_ms', float(ctx['learn_ms']))
+        self.prev_state = state; self.prev_action = action; self.step_count += 1
+        self._scq.decide(dict(kind='rl', action=int(action), atk_pre=bool(ctx['atk_pre']),
+                              latched_pre=bool(ctx['latched_pre']), toggled_off=bool(ctx['toggled_off']), row=row))
+
+    def _sc_apply(self, it, a):
+        """결정된 행동을 이 스탬프에서 적용: hover 캡처(스냅샷 위치·요·고도 latch)·failsafe 스위치·적용 행동 전환."""
+        p = a.payload; action = int(p['action']); prev = self._sc_applied
+        if p.get('kind') == 'rl':
+            if action == 1 and prev != 1:
+                self._hover_pos[:] = self.cur_pos[:2]
+                self._hover_yaw = float(self.cur_euler[2])
+                if str(knob('HOVER_ANCHOR_RESET', '0') or '0') not in ('', '0'):   # ★09-23 위생: hover 진입마다 누수홀드 앵커 = 현재 위치(스윕 경로와 같은 의미)
+                    self._hover_anchor = np.array(self.cur_pos[:2], dtype=float)
+                # 결정 스텝의 OFF 토글이 이미 latch 를 풀었으면 토글 전 값(구 순서: 캡처 → OFF 해제), 아니면 지금 값
+                _latched = p['latched_pre'] if p['toggled_off'] else self._hover_latched
+                if p['atk_pre'] and _latched:
+                    pass                                   # 공격 대응 중 재진입: 고도 latch 유지
+                else:
+                    self._hover_alt = float(self.cur_pos[2])
+                    if p['atk_pre'] and self.attack_active_flag:
+                        self._hover_latched = True         # (지연 적용 중 공격이 이미 꺼졌으면 latch 하지 않음)
+                self._fs_switch(True)
+            if action == 0 and prev == 1:
+                self._fs_switch(False)
+            if p['toggled_off']:
+                self._hover_latched = False                # 구 순서: 캡처 → 같은 스텝 OFF 토글이 latch 해제
+        self._sc_applied = action
+        e = self._sc_ep
+        e['apply_lat'][a.lat_us] += 1; e['napply'] += 1; self._sc_run_ov[1] += 1
+        eff = a.lat_us * 1e-6 + (self._scq.last_in - it.stamp) * 1e-6   # 실효: 적용 setpoint 가 나갈 때 sim 은 last_in 까지 와 있다
+        e['eff_lat_max'] = max(e['eff_lat_max'], eff)
+        if a.overrun:
+            e['overrun'] += 1; self._sc_run_ov[0] += 1
+            if e['overrun'] <= 3:
+                self.get_logger().warn(f'  [ACT_LAT] overrun: 적용 지연 {a.lat_us / 1e6:.3f}s > {self._scq.target_us / 1e6:.3f}s '
+                                       f'(θ_k 수신 늦음, 에피 누적 {e["overrun"]})')
+        row = p.get('row')
+        if row is not None:
+            self._sc_row_set(row, 'act_applied_sim_lat', a.lat_us * 1e-6); self._sc_row_set(row, 'overrun', float(a.overrun))
+            self._sc_row_set(row, 'act_eff_lat', eff)
+
+    def _sc_sweep_step(self, trajectory_sp, it):
+        """스윕(고정 정책): 구 _sweep_step_10hz 그대로 부르고, 정한 행동의 적용만 드레인 규칙(ACT_LAT_SIM)으로."""
+        tok = self._sc_token; k = self.step_count
+        self._sweep_step_10hz(trajectory_sp)
+        if tok != self._sc_token or self.flight_state != 'LEARNING' or k < self.cfg.learning_warmup_steps:
+            return
+        self._scq.request(k, it.grid_stamp)
+        self._scq.decide(dict(kind='sweep', action=int(self.prev_action if self.prev_action is not None else 0)))
+
+    def _sc_timing_str(self):
+        """에피 요약 꼬리. SIMCLOCK 이면 항상 한 줄(overrun·지연), TIMING_LOG 면 분포까지."""
+        if not self._sc:
+            return ''
+        e = self._sc_ep; w = e['wait']
+        n = max(e['napply'], 1); frac = e['overrun'] / n
+        short = (f'  │ simclock: overrun={e["overrun"]}/{e["napply"]} ({100 * frac:.1f}%) node_lag_max={e["lag_max"]:.3f}s '
+                 f'act_lag_max={e["act_lag_max"]:.3f}s act_eff_lat_max={e["eff_lat_max"]:.3f}s deferred={e["deferred"]} '
+                 f'gps_gap={e["gps_gap"]} gt_gap={e["gt_gap"]}\n')
+        if frac > 0.01 and e['napply'] >= 20:
+            short += (f'  │ ⚠ [TIMING] overrun {100 * frac:.1f}% > 1% — 이 에피는 행동 적용 지연이 ACT_LAT_SIM 을 넘은 스텝이 섞였다 '
+                      f'(학습기 p99 > ACT_LAT/speed). 짝 비교에서 제외하거나 speed·ACT_LAT 조정\n')
+        if not self._timing_log:
+            return short
+        _d = lambda c: '{' + ', '.join(f'{k}:{v}' for k, v in sorted(c.items())) + '}'
+        _lp = (f' | learner mismatch={self.agent.n_mismatch} err={self.agent.n_errors}' if self._lp else '')
+        return (short +
+                f'  │ timing: n_pred={_d(e["npred"])} dt_gps_us={_d(e["dtg"])} gps_gap={e["gps_gap"]} gt_gap={e["gt_gap"]} '
+                f'gt_fill={e["gt_fill"]} regress={e["regress"]} gps_late={e["gps_late"]}\n'
+                f'  │         apply_lat_us={_d(e["apply_lat"])} overrun={e["overrun"]} node_lag_max={e["lag_max"]:.3f}s '
+                f'act_wait p50/max={(np.median(w) if w else 0):.1f}/{(max(w) if w else 0):.1f}ms{_lp}\n')
 
     # ══════════════════════════════════════════════════════════
     #  UKF Step (50Hz)
@@ -1637,7 +2282,20 @@ class OnlineRLNode(Node):
     # ══════════════════════════════════════════════════════════
     #  10Hz RL Step
     # ══════════════════════════════════════════════════════════
-    def _rl_step_10hz(self, trajectory_sp):
+    def _wind_window_step(self):
+        """★FROZEN-ENV v2: 강풍 윈도우 토글(★09-23 _rl_step_front 에서 추출, 연산 동일). wind_window=(s,e) → s에서 ON, e에서 OFF."""
+        _ww = getattr(self, '_wind_win', None)
+        if _ww:
+            if (not self._wind_win_on) and self.step_count >= _ww[0] and self.step_count < _ww[1]:
+                self._send_scenario_cmd(); self._wind_win_on = True
+                self.get_logger().info(f'  🌬 강풍 윈도우 ON @ step {self.step_count} (~{_ww[1]})')
+            elif self._wind_win_on and self.step_count >= _ww[1]:
+                self._send_scenario_cmd(dist_override='none', ws_override=0.0); self._wind_win_on = False
+                self.get_logger().info(f'  🌬 강풍 윈도우 OFF @ step {self.step_count}')
+
+    def _rl_step_front(self, trajectory_sp, wind=True):
+        """RL 스텝 앞부분(★09-23 추출, 연산 동일): NIS → 관측 → 종료·보상·집계 → 스텝 행.
+        관측 전(워밍업·창 미충족)이면 step_count 를 올리고 None. wind=False: 바람 창 토글은 호출자가 격자 시각에 이미 함(SIMCLOCK 보류 격자)."""
         cfg = self.cfg
 
         # ★09-18 원시 NIS 만 계산하고 관측 변환은 ObsBuilder(ObsSpec) 가 한다 (surrogate 와 같은 코드)
@@ -1648,22 +2306,17 @@ class OnlineRLNode(Node):
 
         if self.step_count < cfg.learning_warmup_steps:
             self.step_count += 1
-            return
+            return None
 
         # ★FROZEN-ENV v2: 강풍 윈도우 토글 (학습 경로). wind_window=(s,e) → s에서 ON, e에서 OFF.
-        _ww = getattr(self, '_wind_win', None)
-        if _ww:
-            if (not self._wind_win_on) and self.step_count >= _ww[0] and self.step_count < _ww[1]:
-                self._send_scenario_cmd(); self._wind_win_on = True
-                self.get_logger().info(f'  🌬 강풍 윈도우 ON @ step {self.step_count} (~{_ww[1]})')
-            elif self._wind_win_on and self.step_count >= _ww[1]:
-                self._send_scenario_cmd(dist_override='none', ws_override=0.0); self._wind_win_on = False
-                self.get_logger().info(f'  🌬 강풍 윈도우 OFF @ step {self.step_count}')
+        if wind:
+            self._wind_window_step()
 
-        state = self.obs.push(nis_v_raw, nis_g_raw, int(self.prev_action if self.prev_action is not None else 0))
+        state = self.obs.push(nis_v_raw, nis_g_raw, int(self.prev_action if self.prev_action is not None else 0),
+                               key=(0, int(self.episode), int(self.step_count)))   # ★09-23 입력잡음 공통난수 키(잡음 끔이면 무시)
         nis_vel, nis_gyr = self.obs.last_scaled     # 로그용 정책 입력 스칼라
         if state is None:
-            self.step_count += 1; return
+            self.step_count += 1; return None
 
         done, term_reason = self._check_done(trajectory_sp)
         _terminated_phys = term_reason in PHYSICAL_TERMINALS
@@ -1733,6 +2386,14 @@ class OnlineRLNode(Node):
 
         if self._log_steps and not self.eval_mode:       # ★09-18 캡처(학습 없음) · 학습 중 스텝 기록
             self._capture_log(state, nis_v_raw, nis_g_raw, done, term_reason, reward)
+        return state, reward, done, term_reason, terminated, nis_vel, nis_gyr, nis_v_raw, nis_g_raw
+
+    def _rl_step_10hz(self, trajectory_sp):
+        cfg = self.cfg
+        _fr = self._rl_step_front(trajectory_sp)
+        if _fr is None:
+            return
+        state, reward, done, term_reason, terminated, nis_vel, nis_gyr, nis_v_raw, nis_g_raw = _fr
 
         # ── Transition 저장 + 비동기 학습 ──
         if self.prev_state is not None and self.prev_action is not None:
@@ -1774,6 +2435,10 @@ class OnlineRLNode(Node):
             # 위치·yaw는 항상 재캡처 (수평 드리프트 보정 정상)
             self._hover_pos[:] = self.cur_pos[:2]
             self._hover_yaw = float(self.cur_euler[2])
+            # ★09-23 위생(HOVER_ANCHOR_RESET=1): 제어가 실제로 쓰는 누수홀드 앵커도 재캡처. 구 경로는 에피 첫 hover 에서만
+            #   앵커가 잡혀(에피 리셋 때만 None) 두 번째 이후 hover 가 첫 hover 자리로 되돌아가려 했다(선언 사건 46–57%, 변위 ~3배).
+            if str(knob('HOVER_ANCHOR_RESET', '0') or '0') not in ('', '0'):
+                self._hover_anchor = np.array(self.cur_pos[:2], dtype=float)
             # 고도만 latch: 공격 대응 중이면 재캡처 금지 (계단식 침하 방지)
             if self.attack_active_flag and self._hover_latched:
                 pass   # _hover_alt 그대로 유지
@@ -1798,6 +2463,15 @@ class OnlineRLNode(Node):
                 self._ep_relapse += 1
             self._ep_min_alt = min(self._ep_min_alt, -float(self.cur_pos[2]))
 
+        self._attack_toggle_step()
+
+        self._rl_debug_log(trajectory_sp, action, eps, reward, nis_vel, nis_gyr, nis_v_raw, nis_g_raw)
+
+        self.prev_state = state; self.prev_action = action; self.step_count += 1
+
+    def _attack_toggle_step(self):
+        """공격 δ(step_count) 토글·발행(★09-23 추출, 연산 동일). 반환: 이번 스텝에 OFF 로 바뀌었으면 True."""
+        _toggled_off = False
         # ── Attack burst on/off (버스트 경계에서 토글) ──
         _pb = self._plan_bias(self.step_count)   # ★09-18 공용 샘플러 δ(t) 프로파일 (없으면 구 버스트 방식)
         if _pb is not None:
@@ -1851,9 +2525,14 @@ class OnlineRLNode(Node):
             self._send_attack_cmd(False)
             self.attack_active_flag = False
             self._last_burst_end = self.step_count
+            _toggled_off = True
             self._hover_latched = False   # [latch] 공격 OFF → 해제(다음 대응은 새 고도 latch)
             self.get_logger().warn(f'  🟢 Attack OFF (burst) @ step {self.step_count}')
+        return _toggled_off
 
+    def _rl_debug_log(self, trajectory_sp, action, eps, reward, nis_vel, nis_gyr, nis_v_raw, nis_g_raw):
+        """TRAIN/EVAL 스텝 로그 줄(★09-23 추출, 형식 동일)."""
+        cfg = self.cfg
         # ── Debug log ──
         if self.step_count % cfg.log_interval == 0:
             sp = np.array(trajectory_sp[:3])
@@ -1884,36 +2563,40 @@ class OnlineRLNode(Node):
                 f'buf={buf} loss={cur_loss:.4f} Zvar={self.last_z_var:.3f} dt={self.last_learn_dt:.0f}ms | '
                 f'Kg={self.last_kgain:.3f} Pmax={self.last_pmax:.2f} Qmax={self.last_qmax:.1f} innov={self.last_innov:.3f} flip={self.last_argmax_flip:.3f} NIS={self.last_nis:.2f}')
 
-        self.prev_state = state; self.prev_action = action; self.step_count += 1
-
     # ══════════════════════════════════════════════════════════
     #  학습 에피소드 메트릭 CSV (reward/loss/F1/delay 등) → plot_results.py 용
     # ══════════════════════════════════════════════════════════
-    def _write_train_metrics(self, reason, avg_loss, eps):
+    def _write_train_metrics(self, R, avg_loss):
+        """R = _ep_record() (에피소드 끝 시점 값). ★09-23: LEARNER_PROC 에서 마지막 learn 회신 뒤에 기록할 수 있게 기록 dict 로 받는다."""
         import csv, os
-        tp, fp, fn, tn = self._ep_tp, self._ep_fp, self._ep_fn, self._ep_tn
+        reason, eps = R['reason'], R['eps']
+        tp, fp, fn, tn = R['conf']
         prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
         fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-        det_delay = self._ep_det_delay if self._ep_det_delay is not None else -1
+        det_delay = R['det_delay'] if R['det_delay'] is not None else -1
         crashed = 1 if reason in ('crash_altitude', 'crash_flip', 'crash_drift') else 0
         try:
-            td = self.agent.td_kurtosis()
+            td = R['td'] if R.get('td') is not None else self.agent.td_kurtosis()
             td_exkurt = float(td[2])
         except Exception:
             td_exkurt = 0.0
         row = {
-            'episode': self.episode, 'agent': getattr(self.cfg, 'agent_type', 'rhukf'),
-            'reward': round(self.episode_reward, 3), 'loss': round(float(avg_loss), 5),
-            'steps': self.step_count, 'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
+            'episode': R['episode'], 'agent': getattr(self.cfg, 'agent_type', 'rhukf'),
+            'reward': round(R['reward'], 3), 'loss': round(float(avg_loss), 5),
+            'steps': R['steps'], 'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
             'precision': round(prec, 4), 'recall': round(rec, 4), 'f1': round(f1, 4),
             'fp_rate': round(fp_rate, 4), 'det_delay': det_delay, 'crashed': crashed,
             'td_exkurt': round(td_exkurt, 4), 'epsilon': round(float(eps), 4),
-            'relapse': self._ep_relapse,   # [진단] 공격중 hover→track 재발 횟수
-            'min_alt': round(self._ep_min_alt, 2) if self._ep_min_alt < 999 else -1,  # 공격중 최저고도(m)
-            'bias_scale': round(float(self.scenario.get('bias_scale', 0.0)), 4) if self.scenario else 0.0,  # s별 delay 분석용
+            'relapse': R['relapse'],   # [진단] 공격중 hover→track 재발 횟수
+            'min_alt': round(R['min_alt'], 2) if R['min_alt'] < 999 else -1,  # 공격중 최저고도(m)
+            'bias_scale': round(float(R['scenario'].get('bias_scale', 0.0)), 4) if R['scenario'] else 0.0,  # s별 delay 분석용
         }
+        if R.get('sc') is not None and self._timing_log:   # ★09-23 SIMCLOCK+TIMING_LOG: 에피 overrun·지연(열 끝, 이름 기반)
+            _ov, _na, _lag, _alag, _eff = R['sc']
+            row.update(overrun=_ov, n_apply=_na, overrun_frac=round(_ov / max(_na, 1), 4), node_lag_max=round(_lag, 4),
+                       act_lag_max=round(_alag, 4), act_eff_lat_max=round(_eff, 4))
         if getattr(self, '_metrics_w', None) is None:
             os.makedirs(self.cfg.outdir, exist_ok=True)
             path = os.path.join(self.cfg.outdir,
@@ -1967,6 +2650,47 @@ class OnlineRLNode(Node):
     # ══════════════════════════════════════════════════════════
     #  Episode End
     # ══════════════════════════════════════════════════════════
+    def _ep_record(self, reason):
+        """에피소드 끝 시점 값(★09-23: 요약·metrics 행을 나중에 써도 같은 값이 되게 묶어 둔다)."""
+        e = self._sc_ep if self._sc else None
+        return dict(reason=reason, episode=self.episode, reward=self.episode_reward, steps=self.step_count,
+                    losses=list(self.episode_losses), learn_dts=list(self._ep_learn_dts),
+                    eps=self.agent.get_epsilon(), p_init=self.agent._compute_adaptive_p(),
+                    conf=(self._ep_tp, self._ep_fp, self._ep_fn, self._ep_tn), det_delay=self._ep_det_delay,
+                    relapse=self._ep_relapse, min_alt=self._ep_min_alt, scenario=self.scenario, td=None,
+                    timing=self._sc_timing_str(),
+                    sc=((e['overrun'], e['napply'], e['lag_max'], e['act_lag_max'], e['eff_lat_max']) if e is not None else None))
+
+    def _ep_emit(self, R):
+        """metrics csv 행 + 에피 요약 로그(형식 불변)."""
+        reason = R['reason']
+        avg_loss = np.mean(R['losses']) if R['losses'] else 0
+        eps = R['eps']; p_init = R['p_init']
+        self._write_train_metrics(R, avg_loss)
+        emojis = {'crash_drift': '⚠️ DRIFT', 'crash_altitude': '💀 CRASH',
+                  'crash_flip': '🔥 FLIP', 'timeout': '⏱️ TIMEOUT',
+                  'detection_failed': '🙈 MISS', 'recovery_failed': '🔒 STUCK',
+                  'excessive_fp': '🤡 PANIC'}
+        reset_label = {'crash_flip': 'HARD', 'crash_altitude': 'WARM'}.get(reason, 'SOFT')
+
+        _ld = R['learn_dts']
+        _sf = getattr(self.cfg, 'sim_speed_factor', 1.0)
+        _tdk = R['td'] if R.get('td') is not None else getattr(self.agent, 'td_kurtosis', lambda: (0, 0.0, 0.0))()
+        _learn_str = (
+            f'  │ learn-step: mean={np.mean(_ld):.1f}ms max={np.max(_ld):.1f}ms (n={len(_ld)}) '
+            f'| step예산={100.0/max(_sf,0.01):.0f}ms@speed{_sf:.1f}\n'
+            if _ld else '')
+        sc = R['scenario']
+        self.get_logger().info(
+            f'\n  ┌─ Ep {R["episode"]}: {emojis.get(reason, reason)} → {reset_label} reset\n'
+            f'  │ R={R["reward"]:.1f} Steps={R["steps"]} Loss={avg_loss:.4f}\n'
+            f'  │ ε={eps:.3f} P={p_init:.5f} | TD|n,μ,exkurt|={_tdk}\n'
+            f'{_learn_str}'
+            f'{R["timing"]}'
+            f'  │ Atk: {sc["attack_type"]}(int={sc["attack_intensity"]:.3f}, '
+            f'start={sc["attack_start_step"]}) | {sc["pattern"]} | '
+            f'{sc.get("disturbance_type","none")}\n  └─{"─"*50}')
+
     def _end_episode(self, reason):
         self._send_attack_cmd(False); self.attack_active_flag = False
         self._capture_flush(reason)
@@ -1987,31 +2711,11 @@ class OnlineRLNode(Node):
             return
 
         self.agent.end_episode(self.episode_reward, self.step_count)
-        avg_loss = np.mean(self.episode_losses) if self.episode_losses else 0
-        eps = self.agent.get_epsilon(); p_init = self.agent._compute_adaptive_p()
-        self._write_train_metrics(reason, avg_loss, eps)
-        emojis = {'crash_drift': '⚠️ DRIFT', 'crash_altitude': '💀 CRASH',
-                  'crash_flip': '🔥 FLIP', 'timeout': '⏱️ TIMEOUT',
-                  'detection_failed': '🙈 MISS', 'recovery_failed': '🔒 STUCK',
-                  'excessive_fp': '🤡 PANIC'}
-        reset_label = {'crash_flip': 'HARD', 'crash_altitude': 'WARM'}.get(reason, 'SOFT')
-
-        _ld = self._ep_learn_dts
-        _sf = getattr(self.cfg, 'sim_speed_factor', 1.0)
-        _tdk = getattr(self.agent, 'td_kurtosis', lambda: (0, 0.0, 0.0))()
-        _learn_str = (
-            f'  │ learn-step: mean={np.mean(_ld):.1f}ms max={np.max(_ld):.1f}ms (n={len(_ld)}) '
-            f'| step예산={100.0/max(_sf,0.01):.0f}ms@speed{_sf:.1f}\n'
-            if _ld else '')
-
-        self.get_logger().info(
-            f'\n  ┌─ Ep {self.episode}: {emojis.get(reason, reason)} → {reset_label} reset\n'
-            f'  │ R={self.episode_reward:.1f} Steps={self.step_count} Loss={avg_loss:.4f}\n'
-            f'  │ ε={eps:.3f} P={p_init:.5f} | TD|n,μ,exkurt|={_tdk}\n'
-            f'{_learn_str}'
-            f'  │ Atk: {self.scenario["attack_type"]}(int={self.scenario["attack_intensity"]:.3f}, '
-            f'start={self.scenario["attack_start_step"]}) | {self.scenario["pattern"]} | '
-            f'{self.scenario.get("disturbance_type","none")}\n  └─{"─"*50}')
+        _R = self._ep_record(reason)
+        if self._sc and self._lp and self.episode in set(self._sc_req_ep.values()):
+            self._sc_pend_ep.append(_R)       # ★09-23 이 에피 마지막 learn 회신(종료 스텝 갱신) 뒤에 기록 — 블로킹 대기 없음
+        else:
+            self._ep_emit(_R)
 
         if self.episode % 50 == 0:
             self.agent.save(os.path.join(self.cfg.outdir, f'model_ep{self.episode}.pt'))
@@ -2223,7 +2927,8 @@ class OnlineRLNode(Node):
             _nvr = compute_nis_scaled(self.last_res[3:6], self.last_Pzz[3:6, 3:6], 3.0)[0]
             _ngr = compute_nis_scaled(self.last_res[6:9], self.last_Pzz[6:9, 6:9], 3.0)[0]
             if self.step_count == cfg.learning_warmup_steps: self._dwell_left = 0
-            _st = self.obs.push(_nvr, _ngr, int(self.prev_action if self.prev_action is not None else 0))
+            _st = self.obs.push(_nvr, _ngr, int(self.prev_action if self.prev_action is not None else 0),
+                                 key=(3, int(self.episode), int(self.step_count)))
             if _st is None:
                 action = 0
             else:
@@ -2447,9 +3152,19 @@ def run_isaac(exp, log=print):
     iz = exp.isaac
     cfg.headless = bool(iz['headless']); cfg.sim_speed_factor = float(iz['speed'])
     cfg.isaac_sim_env = dict(iz.get('sim_env') or {}); cfg.use_compile = bool(iz.get('compile', True))
-    for _k in ('SENSOR_NOISE_SCALE', 'SPEED_SCALE'):          # 노드·run_sim 둘 다 읽는 키 → 노브에만 적어도 양쪽에 같은 값
+    for _k in ('SENSOR_NOISE_SCALE', 'SPEED_SCALE', 'SIMCLOCK_UKF'):   # 노드·run_sim 둘 다 읽는 키 → 노브에만 적어도 양쪽에 같은 값 (★09-23 SIMCLOCK_UKF 추가: 미설정이면 복사 안 함)
         if knob(_k) is not None and _k not in cfg.isaac_sim_env:
             cfg.isaac_sim_env[_k] = knob(_k)
+    # ★09-23 SIMCLOCK_UKF 는 노드·run_sim 이 같아야 한다(한쪽만 켜면 GPS 격자 불일치 → 전 스텝 gps_gap·STABILIZE 정지). 기동 전에 거부.
+    _on = lambda v: str(v if v is not None else '0').strip() not in ('', '0')
+    if knob('SIMCLOCK_UKF') is not None or 'SIMCLOCK_UKF' in cfg.isaac_sim_env:
+        if _on(knob('SIMCLOCK_UKF')) != _on(cfg.isaac_sim_env.get('SIMCLOCK_UKF')):
+            raise ValueError(f"SIMCLOCK_UKF 불일치: 노드 knob={knob('SIMCLOCK_UKF')!r} vs run_sim sim_env={cfg.isaac_sim_env.get('SIMCLOCK_UKF')!r} "
+                             f"— env.isaac.knobs.SIMCLOCK_UKF 하나만 설정할 것(자동으로 sim_env 에 복사)")
+        # 인라인 동기 학습 + speed>1 은 learn 동안 노드가 멈춰 GT 스냅샷의 gyro·u 짝이 learn×speed 만큼 어긋난다 → 본선 금지
+        if _on(knob('SIMCLOCK_UKF')) and not _on(knob('LEARNER_PROC')) and cfg.sim_speed_factor > 1.0 and not _on(knob('SC_INLINE_OK')):
+            raise ValueError('SIMCLOCK_UKF=1 · LEARNER_PROC=0 · speed>1 은 거부(동기 learn 이 입력 짝을 어긋나게 함) — LEARNER_PROC=1 을 켜거나 '
+                             '의도적이면 SC_INLINE_OK=1')
     os.makedirs(cfg.outdir, exist_ok=True)
 
     import random as _random
@@ -2494,15 +3209,25 @@ def run_isaac(exp, log=print):
     #     param save
     #   (미설정이면 에피소드 중 배터리 failsafe로 disarm될 수 있음)
 
-    if cfg.use_compile:
-        node.agent.warmup_compile()
-
     try:
+        if cfg.use_compile:
+            node.agent.warmup_compile()      # ★09-23 try 안으로: 컴파일 실패·학습기 사망이어도 sim·학습기 정리
         rclpy.spin(node)
     except (KeyboardInterrupt, SystemExit) as e:
         node.get_logger().info(f'Shutdown: {e}')
     finally:
         node.sim_mgr.stop()
+        if getattr(node, '_sc', False) and getattr(node, '_lp', False) and getattr(node, '_sc_pend_ep', None):
+            try:
+                node._sc_settle_learner(5.0)                # 보류 중인 에피 요약·metrics 행
+            except Exception as _e:
+                print(f'[LEARNER] 보류 요약 기록 실패(무시): {_e}')
+        _close = getattr(node.agent, 'close', None)          # ★09-23 LEARNER_PROC: 대기 중 save 처리 후 학습기 프로세스 정리
+        if callable(_close):
+            try:
+                _close()
+            except Exception as _e:
+                print(f'[LEARNER] 종료 정리 실패(무시): {_e}')
         try:
             from torch._inductor.async_compile import shutdown_compile_workers
             shutdown_compile_workers()
@@ -2517,6 +3242,8 @@ def run_isaac(exp, log=print):
         except Exception:
             pass
 
+    if getattr(node, '_fatal', None):   # ★09-23 학습기 사망·노드 지연 폭주·SIMCLOCK 불일치 → rc≠0 (hist.json 안 씀, 체인이 완료로 오인하지 않음)
+        raise RuntimeError(node._fatal)
     return []
 
 

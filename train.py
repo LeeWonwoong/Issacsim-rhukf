@@ -51,7 +51,7 @@ def probe(agent, exp, ob_template, n_ep, episode=0):
         genv.reset(); ob.reset(); prev_a = 0; det = None
         for _t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
-            s = ob.push(v, g, prev_a)
+            s = ob.push(v, g, prev_a, key=(1, int(episode), _, _t))
             if s is not None:
                 a = agent.act(s, 0.0, greedy=True)
                 if atk:
@@ -87,7 +87,7 @@ def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
         genv.reset(); ob.reset(); prev_a = 0; ep_fp = 0; det_t = {}
         for _t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
-            s = ob.push(v, g, prev_a)
+            s = ob.push(v, g, prev_a, key=(2, k, _t))
             if s is not None:
                 if atk:
                     tt = max(genv.t - (1 if genv.knn else 0), 0); c = genv.plan.cls_at(tt); b = by_cls.setdefault(c, [0, 0])
@@ -136,7 +136,7 @@ def run_surrogate(exp, log=print):
         det_delay = None; t = 0
         for t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
-            s = ob.push(v, g, prev_a)
+            s = ob.push(v, g, prev_a, key=(0, ep, t))
             if s is None:
                 if genv.step(): break
                 continue
