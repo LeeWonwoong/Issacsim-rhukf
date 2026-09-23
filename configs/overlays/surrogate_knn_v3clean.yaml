@@ -1,0 +1,10 @@
+# configs/overlays/surrogate_knn_v3clean.yaml — ★09-23 v3 와 같고 풀만 오염 제거판.
+#   pool_knn_v2 의 41%(1,110 / 2,709 에피)가 ui1 SWIRL Isaac 학습 런 스트림이었다
+#   (v4 swirl×3·v5 swirl_s42·v7 swirlBui1·swirlA2). 그 런들은 학습 스레드가 50 Hz 필터 틱을 막아
+#   정책 무관 구간 gyro NIS 스파이크가 Adam 의 2–3배였다(학습부하 관측 오염, 메모리 isaac-learn-latency…).
+#   v2clean = 캡처(학습 없음) + Adam 런 + ui4 SWIRL 런만: 1,599 에피 · 438,734 행 · 공격 행 26,775.
+#   ⚠ v3 의 코퓰러·에피효과 노브는 오염 풀 기준으로 맞춘 값이다 — 타이밍 수정 후 깨끗한 Isaac 캡처로 재정합할 것.
+extends: surrogate_knn_v3.yaml
+env:
+  surrogate:
+    pool: results/claudecodefortest/pools/pool_knn_v2clean.npz
