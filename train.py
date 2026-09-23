@@ -82,13 +82,16 @@ def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
     genv = SurrogateEnv(exp.surrogate, exp.scenario.attack, exp.scenario.wind, ep_steps, exp.cfg.seed + seed_off, reseed_per_episode=True)
     ob = copy.deepcopy(ob_template)
     tp = fp = fn = tn = 0; by_cls = {}; ev_seen = ev_det = 0; dels = []; crashes = 0; fa_eps = 0; n_clean = 0
+    from env.reward import RewardTracker                  # ★09-23 greedy 리턴·모드 전환 수(학습과 같은 보상 정의)
+    etr = RewardTracker(exp.reward); rets = []; costs = []; sws = []; relapse = 0; n_rw = 0
     for k in range(n_ep):
         genv.ep_idx = exp.cfg.max_episodes - 1 + k           # 에피소드마다 다른 (시드, ep) 난수 + 바람 schedule 은 마지막 체제
-        genv.reset(); ob.reset(); prev_a = 0; ep_fp = 0; det_t = {}
+        genv.reset(); ob.reset(); prev_a = 0; ep_fp = 0; det_t = {}; etr.reset(); eret = 0.0; n_rw = 0
         for _t in range(ep_steps):
             v, g, atk = genv.nis(prev_a)
             s = ob.push(v, g, prev_a, key=(2, k, _t))
             if s is not None:
+                eret += etr.step(prev_a, atk, genv.attack_delay(), terminated=genv.crashed); n_rw += 1
                 if atk:
                     tt = max(genv.t - (1 if genv.knn else 0), 0); c = genv.plan.cls_at(tt); b = by_cls.setdefault(c, [0, 0])
                     ev = int(genv.plan.bstart[tt]) if hasattr(genv.plan, 'bstart') else 0
@@ -100,19 +103,24 @@ def evaluate(agent, exp, ob_template, n_ep, seed_off=7000):
                         fn += 1; b[1] += 1
                 elif prev_a == 1: fp += 1; ep_fp += 1
                 else: tn += 1
-                prev_a = agent.act(s, 0.0, greedy=True)
+                _a = agent.act(s, 0.0, greedy=True)
+                if atk and prev_a == 1 and _a == 0: relapse += 1      # 공격 중 hover 해제(끊김)
+                prev_a = _a
             if genv.step(): break
         for ev, d in det_t.items():
             ev_seen += 1
             if d is not None: ev_det += 1; dels.append(d)
         crashes += int(genv.crashed)
         if not genv.plan.has_attack: n_clean += 1; fa_eps += int(ep_fp > 0)
+        rets.append(eret); costs.append(eret - exp.reward.scale * exp.reward.alive * n_rw); sws.append(etr.n_switch)
     agent.steps_done = sd0
     prec = tp / (tp + fp) if tp + fp else 0.0; rec = tp / (tp + fn) if tp + fn else 0.0
     return dict(n_ep=n_ep, f1=(2 * prec * rec / (prec + rec) if prec + rec else 0.0), prec=prec, rec=rec,
                 fpr=(fp / (fp + tn) if fp + tn else 0.0), event_det=(ev_det / ev_seen if ev_seen else float('nan')), n_events=ev_seen,
                 delay=(float(np.mean(dels)) if dels else float('nan')), delay_med=(float(np.median(dels)) if dels else float('nan')),
                 fa_episode_rate=(fa_eps / n_clean if n_clean else float('nan')), crash=crashes,
+                ret=float(np.mean(rets)) if rets else float('nan'), ret_cost=float(np.mean(costs)) if costs else float('nan'),
+                sw_per_ep=float(np.mean(sws)) if sws else float('nan'), relapse_per_event=(relapse / ev_seen if ev_seen else float('nan')),
                 rec_by_cls={k: (v[0] / (v[0] + v[1]) if v[0] + v[1] else None) for k, v in sorted(by_cls.items())})
 
 
@@ -186,6 +194,7 @@ def run_surrogate(exp, log=print):
                    nisf=mean(nisf), aflip=mean(flip), kgain=float(getattr(agent, '_last_kgain', 0.0) or 0.0),
                    pmax=float(getattr(agent, '_last_pmax', 0.0) or 0.0),
                    reward_cost=epr - exp.reward.scale * exp.reward.alive * n_r,     # 생존 보상 뺀 부분(오경보·지연·탐지)
+                   n_sw=int(tracker.n_switch), reward_nosw=epr + exp.reward.scale * float(getattr(exp.reward, 'c_sw', 0.0)) * tracker.n_switch,   # ★09-23 전환 비용 제외 리턴(비교용)
                    rec_by_cls={k: (v[0] / (v[0] + v[1]) if v[0] + v[1] else None) for k, v in by_cls.items()},
                    wrec=(wtp / (wtp + wfn) if wtp + wfn else float('nan')), srec=(stp / (stp + sfn) if stp + sfn else float('nan')),
                    sec=time.time() - t0)
