@@ -1,0 +1,52 @@
+════ A. GPU 서버 → USB ═════════════════════════════════════════════════
+  # 패키지 갱신(새 모델 나올 때마다 이 한 줄):
+  PKG=~/swirl_field_pkg bash px4_field/deploy_jetson.sh
+  cp -r ~/swirl_field_pkg /media/acsl/00A3-D44E           # 통째로 복사
+
+sudo umount /dev/sda1
+sudo umount /media/acsl/media/acsl/00A3-D44E  
+sudo mount -o rw /dev/sdb1 /media/acsl/00A3-D44E  
+
+════ B. 노트북: USB → Downloads → 젯슨 ════════════════════════════════
+  cp -r /media/<USB>/swirl_field_pkg ~/Downloads/
+  ssh quad@<젯슨IP> 'mv ~/px4_field ~/px4_field_old_0922 2>/dev/null; rm -rf ~/swirl_field'   # 옛 폴더 보관·정리
+  scp -r ~/Downloads/swirl_field_pkg quad@<젯슨IP>:~/swirl_field
+  ssh quad@<젯슨IP> 'ls ~/swirl_field ~/swirl_field/px4_field/models'        # env calibration configs etc px4_field / swirl_*.npz
+
+════ C. 나중에 모델만 갈아끼우기 (B·A′ 나오면) ═══════════════════════
+  scp ~/Downloads/swirl_v5B_s42.npz quad@<젯슨IP>:~/swirl_field/px4_field/models/
+  # 실행 시 --model models/swirl_v5B_s42.npz 만 바꾸면 끝. 코드·설정은 그대로.
+
+════ D. 젯슨 SSH 창 1 — 정책 노드 (벤치 = 실비행 명령과 동일, --bench 만 추가) ═══
+  ssh quad@<젯슨IP>
+  cd ~/swirl_field/px4_field
+  source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash   # 젯슨의 px4_msgs(ActuatorAttack 포함)
+  python3 -c "import rclpy, px4_msgs.msg, numpy, yaml, pymavlink; print('deps OK')"
+  sudo chmod 666 /dev/ttyACM0                     # FailsafeParams 용 FC USB (QGC 등이 물고 있으면 lsof 로 정리)
+  ros2 topic hz /fmu/out/sensor_combined          # DDS 확인(에이전트는 systemd 자동). 안 뜨면 RUN_DETAIL §470
+  python3 f13_policy.py --model models/swirl_v5B_s42.npz --pattern circle --attack rc \
+          --fs-url /dev/ttyACM0 --atk-tq-max 0.5 --bench --no-fetch
+  # "UKF 초기화: pos … vel …" 이 뜨면 준비 완료. "UKF 입력 대기" 가 계속이면 GPS 픽스 없음 → 실외 지상·창가로.
+  # 실비행 때는 --bench 를 빼고 --shadow(첫 비행) 또는 그대로. 나머지 인자는 동일.
+
+════ E. 젯슨 SSH 창 2 — 실시간 그림 ═════════════════════════════════════
+  ssh -X quad@<젯슨IP>; cd ~/swirl_field/px4_field
+  python3 plot_obs_live.py --latest field_logs --live         # 12-D 관측 히트맵·관측·행동, 1 s 갱신
+  # X 가 느리면 노트북에서:
+  #   mkdir -p ~/jetson_logs; while true; do rsync -q quad@<젯슨IP>:~/swirl_field/px4_field/field_logs/ ~/jetson_logs/; sleep 1; done &
+  #   python3 ~/Downloads/swirl_field_pkg/px4_field/plot_obs_live.py --latest ~/jetson_logs --live
+
+════ F. FC 파라미터(지상, QGC) ══════════════════════════════════════════
+  ATK_EN 1 · ATK_AUX_SW 1 · ATK_AUX_TQ 2 · ATK_TQ_AXIS 0 · ATK_TQ_MAX 0.5 · ATK_SW_THR 0.9
+  송신기: 스위치 → RC_MAP_AUX1, 노브 → RC_MAP_AUX2   (08-10 실기와 동일)
+
+════ G. 조종기 + 손 (프로펠러 없음) ═════════════════════════════════════
+  ① Stabilized 에서 arm → 창 1 에 armed → 오프보드 스위치 ON → ENGAGED, 모터 낮게 회전(추력 0.10)
+  ② 기체 수평으로 가만히 10 s → 창 2 관측 낮게 깔림(평시 기준선, hover 안 켜져야 함)
+  ③ 스위치 up → 노브 ↑ (δ 0.3~0.5) — 창 2 에 공격 음영, 모터 두 개 ↑ 두 개 ↓
+     동시에 한쪽으로 10~20° 기울여 붙잡고 살짝 흔들며 5~10 s 유지
+     → gyro 관측 ↑ → 행동 1(hover), 창 1 [FAILSAFE] ENGAGE
+  ④ 노브 ↓ → 스위치 down → 수평·정지 → 관측 ↓ → 행동 0(track), RELEASE
+  ⑤ ③~④ 2~3회(기울기·시간 바꿔가며) → 오프보드 OFF → disarm → 창 1 Ctrl-C
+  로그: ~/swirl_field/px4_field/field_logs/f13_policy_circle_<시각>.csv
+  사후: python3 plot_obs_live.py field_logs/f13_policy_circle_<시각>.csv --out bench_obs.png

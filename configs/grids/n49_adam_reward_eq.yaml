@@ -1,0 +1,8 @@
+# 09-22 21:25 사용자: 오탐=미탐 동일 벌점 + 보너스 변형을 Adam surrogate(v2 풀, CPU)로 빠르게. (R₀,C_FP,C_FN,R_d) = (1,2,2,5) / (1,2,2,4) / (1,1,1,4) / (1,1,1,6)  [기준 (1,1.5,1.5,4) 는 n48 base 0.777]
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n49_adam_reward_eq
+seeds: [42]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {r: [{_name: 1225, reward.c_fa: 2.0, reward.c_d: 2.0, reward.bonus: 5.0}, {_name: 1224, reward.c_fa: 2.0, reward.c_d: 2.0, reward.bonus: 4.0}, {_name: 1114, reward.c_fa: 1.0, reward.c_d: 1.0, reward.bonus: 4.0}, {_name: 1116, reward.c_fa: 1.0, reward.c_d: 1.0, reward.bonus: 6.0}]}}

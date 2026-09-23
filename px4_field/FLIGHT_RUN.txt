@@ -1,0 +1,63 @@
+══════════════════════════════════════════════════════════════════════════════
+ FLIGHT_RUN.txt — 현장 사용 명령만 (모델: swirl_v5B_s42.npz)   ※ 빌드·배포·문제해결은 DEPLOY_BUILD.txt
+══════════════════════════════════════════════════════════════════════════════
+ 창 구성: [노트북 창 L1] ssh quad@172.20.10.4 → 정책 노드   /  [노트북 창 L2] CSV 동기화  /  [노트북 창 L3·L4] 그림
+ 흐름: QGC 파라미터 → 노드(오프보드 주행 + NN 추론) → 노트북 그림 → 조종기(이륙·SWB·VRA) → 사후
+
+──────────────────────────────────────────────────────────────────────────────
+ 1. QGC — FC 파라미터 (전원 후 1회)
+──────────────────────────────────────────────────────────────────────────────
+  EKF2_RNG_CTRL 2 · EKF2_OF_CTRL 0 · MPC_XY_VEL_MAX 2.0
+  ATK_EN 1 · ATK_AUX_SW 1 · ATK_SW_THR 0.9 · ATK_AUX_TQ 0 · ATK_TQ_AXIS 0 · ATK_TH_MAX 0
+  ATK_TQ_MAX 0.5            # ★ 공격 크기 δ (VRA 오른쪽 끝 = on). 약하게: 0.3
+  # param show ATK_EN 이 떠야 공격 펌웨어. SWC(모드)·SWD(모터종료)는 손대지 않는다.
+
+──────────────────────────────────────────────────────────────────────────────
+ 2. [L1] 젯슨 — 정책 노드 (오프보드 주행 + NN 실시간 추론)
+──────────────────────────────────────────────────────────────────────────────
+  ssh quad@172.20.10.4
+  cd ~/swirl_field/px4_field; source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash
+  sudo chmod 666 /dev/ttyACM0                                   # dialout 그룹이면 생략
+  MODEL=models/swirl_v5B_s42.npz
+  # 벤치(프로펠러 없음, 빠른 검증):  아래 명령 뒤에 --bench --no-fetch
+  # 첫 소티(결정만 기록):            아래 명령 뒤에 --shadow
+  # 본 소티(NN 이 hover 실행):
+  python3 f13_policy.py --model $MODEL --pattern circle --attack rc --fs-url /dev/ttyACM0 --atk-aux-tq 0 --atk-tq-max 0.5
+  # 패턴: --pattern waypoint | figure8 | aggressive | scurve.  뜨면 "UKF 초기화 …" → WAIT 로 SWB 대기.
+  # 끝: 착륙·disarm 뒤 Ctrl-C (ulog 자동 회수). 로그 field_logs/f13_policy_<pattern>_<시각>.csv
+
+──────────────────────────────────────────────────────────────────────────────
+ 3. [L2·L3·L4] 노트북 — CSV 받아서 실시간 그림 (ROS 불필요, 젯슨 부담 없음)
+──────────────────────────────────────────────────────────────────────────────
+  mkdir -p ~/jetson_logs
+  [L2] while true; do rsync -q -a quad@172.20.10.4:~/swirl_field/px4_field/field_logs/ ~/jetson_logs/; sleep 1; done
+  [L3] python3 ~/Downloads/swirl_field_pkg/px4_field/plot_obs_live.py  --latest ~/jetson_logs --live     # 12-D 관측·행동·δ·Q차
+  [L4] python3 ~/Downloads/swirl_field_pkg/px4_field/plot_policy_log.py --latest ~/jetson_logs --live     # 3D 궤적·탑뷰·타임라인
+  # 새 소티가 시작되면 가장 새 CSV 로 자동 전환.
+  # ── 젯슨에서 직접 띄우기(가볍게) ── ssh -X quad@172.20.10.4 로 접속한 창에서 (echo $DISPLAY 가 비어 있으면 안 뜸)
+  #   cd ~/swirl_field/px4_field
+  #   python3 plot_obs_live.py  --latest field_logs --live --light --every 2 --window 20     # 히트맵 없이 관측·행동만
+  #   python3 plot_policy_log.py --latest field_logs --live --every 2                        # 3D·타임라인 (무거우면 생략)
+
+──────────────────────────────────────────────────────────────────────────────
+ 4. 조종기 순서 (각 소티)
+──────────────────────────────────────────────────────────────────────────────
+  ① 잔디에 놓고 전원 → EKF 수렴 30~60 s → Position 모드 arm → 스틱 이륙 → 2.5 m 안정 호버
+  ② SWB ON(오프보드) → L1 "OFFBOARD 진입" → ENGAGED → settle 4 s → 패턴 자동, NN 10 Hz 결정
+  ③ 궤적 안정 뒤 VRA 오른쪽 끝(공격 on) 10~20 s → L3 gyro 관측 ↑ → 행동 1(hover), L1 "▶ HOVER (선언 #n)"
+  ④ VRA 내림(off) → 행동 0(track), "◀ TRACK 복귀" → 최근접점 재접근 → 패턴 계속
+  ⑤ ③④ 2~3회 반복 → 완주 후 DONE_HOLD(제자리 정지)
+  ⑥ SWB OFF(Position 인계) → 스틱 착륙 → disarm → L1 Ctrl-C
+  ★ 이상 시: VRA 내림 → SWB OFF → 최후 SWD
+
+  벤치(프로펠러 없음)일 때: Stabilized arm → SWB ON → 모터 낮게 회전 → VRA on = 모터 두 개↑두 개↓(공격 경로)
+                            + 손으로 10~20° 기울여 유지 = NN hover 선언 확인 → VRA off·수평 → track 복귀
+
+──────────────────────────────────────────────────────────────────────────────
+ 5. 사후 — 그림 저장·로그 회수
+──────────────────────────────────────────────────────────────────────────────
+  [노트북] F=$(ls -t ~/jetson_logs/f13_policy_*.csv | head -1)
+  python3 ~/Downloads/swirl_field_pkg/px4_field/plot_obs_live.py  $F --out ${F%.csv}_obs.png
+  python3 ~/Downloads/swirl_field_pkg/px4_field/plot_policy_log.py $F --out ${F%.csv}_traj.png
+  scp -r quad@172.20.10.4:~/swirl_field/px4_field/ulog_* ~/Downloads/ 2>/dev/null           # ulog
+  # ~/jetson_logs + ulog → USB → 서버 results/claudecodefortest/field_logs_<날짜>/

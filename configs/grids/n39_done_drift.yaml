@@ -1,0 +1,11 @@
+# 09-21 23:15 사용자 방향("가치학습을 더 어렵게 = DONE"): 추종오차 기반 임무실패 종료 도입 후 SWIRL vs Adam 3시드 탐침.
+#   종료 정의: 수평 추종오차 > 2.5 m 가 1.0 s 지속 (Isaac capture_drift 116ep 보정, ws<6 발화율 평시 0%·약 0%·전이 9%·강 67%).
+#   → 리턴의 생존항이 처음으로 정책 의존이 된다(현재는 7200/7200 에피에서 297 상수). 무대응 종료율 18%·리턴 −27점.
+#   기준선: n16b_obsdiv_v4 div4 (같은 무대·같은 시드, 종료 없음) SWIRL 0.872/리턴 296.6 vs Adam 0.840/292.6.
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml, configs/overlays/done_drift.yaml]
+outdir: results/claudecodefortest/n39_done_drift
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.p_delta: 0.2, agent.swirl.alpha: 0.03, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.buffer: [50000]}}
+  a: {device: gpu, set: {agent.type: adam, run.device: cuda, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.buffer: [50000]}}

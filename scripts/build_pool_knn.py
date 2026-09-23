@@ -21,6 +21,8 @@ import sys
 
 import numpy as np
 
+PATS = ['waypoint', 'circle', 'figure8', 'aggressive', 'scurve']   # ★09-22: 패턴 인덱스(surrogate _feat 와 동일 순서)
+
 
 def episode_rows(z):
     cols = [str(c) for c in z['cols']]; R = z['rows']
@@ -42,7 +44,8 @@ def episode_rows(z):
     for i in range(1, n):
         dwell[i] = dwell[i - 1] + 1 if a[i] == a[i - 1] else 0
     ws = np.full(n, float(z['wind_speed']))
-    return np.c_[de, lag(1), lag(3), lag(6), since, a, dwell, ws, dlast, C['nis_v_raw'], C['nis_g_raw']]
+    pat = np.full(n, float(PATS.index(str(z['pattern'])) if ('pattern' in z.files and str(z['pattern']) in PATS) else -1))   # ★09-22 v3: 기동 패턴 조건
+    return np.c_[de, lag(1), lag(3), lag(6), since, a, dwell, ws, dlast, C['nis_v_raw'], C['nis_g_raw'], pat]
 
 
 def main():
@@ -57,7 +60,7 @@ def main():
                     continue
                 blocks.append(X); eps.append(np.full(len(X), k)); srcs.append(f); k += 1
     X = np.concatenate(blocks); ep = np.concatenate(eps)
-    names = ['d0', 'd1', 'd3', 'd6', 'since_end', 'act', 'dwell', 'ws', 'dlast', 'nis_v', 'nis_g']
+    names = ['d0', 'd1', 'd3', 'd6', 'since_end', 'act', 'dwell', 'ws', 'dlast', 'nis_v', 'nis_g', 'pat']
     # 시간 상관(코퓰러 ρ): 조건을 만족하는 연속 두 스텝 쌍에서 log NIS 의 lag-1 상관
     def rho(mask_fn, col):
         xs, ys = [], []
@@ -70,8 +73,9 @@ def main():
     clean = lambda A: (A[:, 0] == 0) & (A[:, 4] == 99) & (A[:, 5] == 0)
     atk = lambda A: A[:, 0] > 0
     rh = dict(rho_g_cln=rho(clean, 10), rho_v_cln=rho(clean, 9), rho_g_atk=rho(atk, 10), rho_v_atk=rho(atk, 9))
-    np.savez(out, format='knn_v2', X=X, names=np.array(names), ep=ep, sources=np.array(srcs), rho=json.dumps(rh))
-    print(f'{out}: 행 {len(X)} · 에피소드 {k} · 공격 행 {(X[:, 0] > 0).sum()} · hover 행 {(X[:, 5] == 1).sum()} · 시간상관 {rh}')
+    np.savez(out, format='knn_v3', X=X, names=np.array(names), ep=ep, sources=np.array(srcs), rho=json.dumps(rh))
+    import collections; pc = collections.Counter(X[:, 11].astype(int))
+    print(f'{out}: 행 {len(X)} · 에피소드 {k} · 공격 행 {(X[:, 0] > 0).sum()} · hover 행 {(X[:, 5] == 1).sum()} · 패턴 행수 {dict(sorted(pc.items()))} · 시간상관 {rh}')
 
 
 if __name__ == '__main__':

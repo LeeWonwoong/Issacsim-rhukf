@@ -1,0 +1,74 @@
+══════════════════════════════════════════════════════════════════════════════
+ BENCH_NOW.txt — 지금 할 것: 새 파일 올리기 → 실내 벤치(프로펠러 없음) → 실시간 그림      2026-09-22
+   서버·노트북 = acsl, USB = 00A3-D44E, 젯슨 = quad@172.20.10.4, 모델 = swirl_v5B_s42.npz
+══════════════════════════════════════════════════════════════════════════════
+
+──────────────────────────────────────────────────────────────────────────────
+ ① [GPU 서버] 패키지 → USB
+──────────────────────────────────────────────────────────────────────────────
+  cd ~/projects/Issacsim-rhukf
+  PKG=~/swirl_field_pkg bash px4_field/deploy_jetson.sh
+  rm -rf ~/swirl_field_pkg/px4_field/__pycache__ ~/swirl_field_pkg/env/__pycache__
+  sudo mkdir -p /media/acsl/usb
+  sudo mount -o uid=$(id -u),gid=$(id -g) /dev/sda1 /media/acsl/usb
+  rm -rf /media/acsl/usb/swirl_field_pkg
+  cp -r ~/swirl_field_pkg /media/acsl/usb/ && sync
+  sudo umount /media/acsl/usb                                   # 뒤에 뽑기
+
+──────────────────────────────────────────────────────────────────────────────
+ ② [노트북] USB → Downloads → 젯슨 (바뀐 파일만)
+──────────────────────────────────────────────────────────────────────────────
+  rm -rf ~/Downloads/swirl_field_pkg
+  cp -r /media/acsl/00A3-D44E/swirl_field_pkg ~/Downloads/
+  cd ~/Downloads/swirl_field_pkg/px4_field
+  scp f13_policy.py plot_obs_live.py plot_policy_log.py nis_from_ulog.py quad@172.20.10.4:~/swirl_field/px4_field/
+  scp models/swirl_v5B_s42.npz quad@172.20.10.4:~/swirl_field/px4_field/models/
+  ssh quad@172.20.10.4 'grep -c fake-gps ~/swirl_field/px4_field/f13_policy.py'    # 1 이상 = 새 파일 OK
+
+  (처음 설치라면 대신)
+  ssh quad@172.20.10.4 'mv ~/px4_field ~/px4_field_old_0922 2>/dev/null; rm -rf ~/swirl_field'
+  scp -r ~/Downloads/swirl_field_pkg quad@172.20.10.4:~/swirl_field
+
+──────────────────────────────────────────────────────────────────────────────
+ ③ [젯슨 창 1] 정책 노드 — 실내 벤치
+──────────────────────────────────────────────────────────────────────────────
+  ssh quad@172.20.10.4
+  cd ~/swirl_field/px4_field
+  source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash
+  sudo chmod 666 /dev/ttyACM0
+  python3 f13_policy.py --model models/swirl_v5B_s42.npz --pattern circle --attack rc \
+          --fs-url /dev/ttyACM0 --atk-aux-tq 0 --atk-tq-max 0.5 --bench --no-fetch --fake-gps
+  #  성공: "UKF 초기화: pos [0. 0. 0.] vel [0. 0. 0.]"  → 이후 10 Hz 로 CSV 행이 쌓임
+  #  "UKF 입력 대기 … thrust False torque False" 면 → 조종기로 arm 하면 뜸
+  #  (실외 실비행: --bench --no-fetch --fake-gps 세 개를 빼고, 첫 소티만 --shadow 추가)
+
+──────────────────────────────────────────────────────────────────────────────
+ ④ [젯슨 창 2] 실시간 그림 — 반드시 ssh -X
+──────────────────────────────────────────────────────────────────────────────
+  ssh -X quad@172.20.10.4
+  cd ~/swirl_field/px4_field
+  echo $DISPLAY                                                 # 비어 있으면 -X 로 다시 접속
+  python3 -u plot_obs_live.py --latest field_logs --live --light --every 2 --window 20
+  #  "matplotlib backend: TkAgg" → "첫 그림 완료: … 스텝 N" 이 뜨면 정상
+  #  "로그 대기 중 … 행 0" 이면 창 1 이 아직 UKF 초기화 전(③ 확인)
+  #  (여유 있으면 창 3)  python3 -u plot_policy_log.py --latest field_logs --live --every 2
+
+──────────────────────────────────────────────────────────────────────────────
+ ⑤ [조종기 + 손]  FC 파라미터: ATK_EN 1 · ATK_AUX_SW 1 · ATK_SW_THR 0.9 · ATK_AUX_TQ 0 · ATK_TQ_AXIS 0 · ATK_TQ_MAX 0.5
+──────────────────────────────────────────────────────────────────────────────
+  1) Stabilized 에서 arm(프로펠러 없음) → 창 1 에 armed
+  2) SWB ON(오프보드) → 창 1 "OFFBOARD 진입" → ENGAGED → 모터 낮게 회전(추력 0.10)
+  3) 기체 수평으로 10 s 가만히 → 창 2 관측 낮게(기준선)
+  4) VRA 오른쪽 끝(공격 on) → 모터 두 개↑ 두 개↓  +  한쪽으로 10~20° 기울여 5~10 s 유지
+       → 창 2: gyro 관측 ↑ → 행동 1(hover),  창 1: "▶ HOVER (선언 #1)"
+  5) VRA 내림(off) → 기체 수평·정지 → 행동 0(track), "◀ TRACK 복귀"
+  6) 4)5) 를 2~3회 → SWB OFF → disarm → 창 1 Ctrl-C
+  ★ 벤치에선 노브 공격만으로는 NIS 가 안 뜬다(기체가 안 움직임). 손 기울임이 물리 신호를 대신한다.
+
+──────────────────────────────────────────────────────────────────────────────
+ ⑥ 사후
+──────────────────────────────────────────────────────────────────────────────
+  [젯슨]   F=$(ls -t field_logs/f13_policy_*.csv | head -1); echo $F
+           python3 plot_obs_live.py $F --out /tmp/obs.png
+  [노트북] scp quad@172.20.10.4:/tmp/obs.png ~/Downloads/
+           scp -r quad@172.20.10.4:~/swirl_field/px4_field/field_logs ~/Downloads/field_logs_$(date +%m%d)

@@ -1,0 +1,12 @@
+# 09-22 20:05 사용자: SWIRL 스케줄을 Adam 과 동일(ui1·τ0.005·B256)로 고정하고 P·R(·N) 정밀 튜닝 — surrogate v2 풀에서 3시드 (Isaac 은 s42 만 병행).
+#   P {0.01,0.05,0.1,0.2} × R {0.5,1}, α 는 규칙 α√pΔ≈0.01–0.015 (0.1/0.05/0.05/0.03). N6 먼저, N10 은 상위 2셀만 뒤에.
+#   Adam 3e-4·β5·clip10·B256 을 같은 풀에서 3시드 = 기준.  GPU 는 Isaac SWIRL 런과 공유 → watchdog(learn-step>30ms 면 일시정지).
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n47_surr_v2_tune
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.q: 1.0e-3, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {P: [{_name: p001, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1}, {_name: p005, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.05}, {_name: p01, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05}, {_name: p02, agent.swirl.p_delta: 0.2, agent.swirl.alpha: 0.03}], agent.swirl.R: [0.5, 1.0]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {agent.batch: [256]}}

@@ -1,0 +1,7 @@
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n58_N_sweep
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, agent.swirl.R: 1.75, agent.swirl.q: 1.0e-3, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.038, agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6},
+      axes: {agent.swirl.N: [8, 12]}}

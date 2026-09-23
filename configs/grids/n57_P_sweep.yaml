@@ -1,0 +1,9 @@
+# 09-23 01:45 P(K gain) 스윕. 보상 3.0/1.0/6 · 기준 R 0.5(pΔ0.01). pΔ 0.05 → R 1.25 · pΔ 0.1 → R 1.75 (같은 R/P_zz_σ 비)
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n57_P_sweep
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, agent.swirl.q: 1.0e-3, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.N: 10, agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6},
+      axes: {p: [{_name: P005, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.05, agent.swirl.R: 1.25},
+                 {_name: P010, agent.swirl.p_delta: 0.10, agent.swirl.alpha: 0.03, agent.swirl.R: 1.75}]}}

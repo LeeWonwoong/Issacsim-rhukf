@@ -51,6 +51,7 @@ class AttackConfig:
     deadline_steps: int = 0             # ★09-21 선언 마감(0=끔): 사건 안에서 연속 미선언(track) 스텝이 이 값에 이르면 임무 실패로 에피소드 종료(terminated). 물리 근거: δ0.8 failsafe 생존 0.5 s 100%·1 s 85%
     event_gap: Tuple[int, int] = (30, 60)   # profile: 사건 끝 → 다음 온셋 간격(스텝)
     authority_nm: float = 4.36          # δ → N·m (Isaac 주입용)
+    delta_max: float = 1.0              # ★09-22 v5: 프로파일(성장 포함) 유효 δ 상한. v2/v3 는 성장이 밴드 상한(0.80)을 넘던 버그 → v5 는 0.80 으로 클립
 
     def __post_init__(self):
         if self.family not in ('v5', 'profile'):
@@ -146,7 +147,7 @@ def sample_attack(rng: np.random.Generator, cfg: AttackConfig, n: int, with_dire
             prof = _profile(c, cfg, d0, dur, g, gs)
             e = min(t + len(prof), emax)
             if e > t:
-                plan.delta[t:e] = np.clip(prof[:e - t], 0.0, 1.0); plan.active[t:e] = True; plan.bstart[t:e] = t
+                plan.delta[t:e] = np.clip(prof[:e - t], 0.0, float(cfg.delta_max)); plan.active[t:e] = True; plan.bstart[t:e] = t
                 plan.events.append(dict(start=t, end=e, cls=c.name, d0=d0, g=g, grow_steps=gs))
             t = e + int(rng.integers(cfg.event_gap[0], cfg.event_gap[1] + 1))
         plan.cls = plan.events[0]['cls'] if plan.events else 'none'

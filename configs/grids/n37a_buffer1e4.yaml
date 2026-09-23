@@ -1,0 +1,73 @@
+# 격차 확대 레버 A (축A U(0,6)) (09-21 21:45 제안, 사용자 허락 후 실행): 리플레이 버퍼 5e4 → 1e4 (≈33 에피, 둘 다) — 유한기억에서 비정상성이 희석되지 않게.
+#   무대 2종: 축 A U(0,6) 랜덤 바람 · 펄스(ep80–99 U(7,10)). SWIRL pΔ0.2·α0.03 vs Adam 3e-4, v4·정수보상, 3시드 probe16.
+#   비교 기준: n16b div4(축A, 버퍼 5e4) · n36(펄스, 5e4). 구 레짐 근거: 버퍼 1e4 에서 SWIRL 0.68 vs Adam 0.53 (Δ+0.15).
+#   ⚠ GPU 격자 — Isaac SWIRL 런과 동시 실행 금지(learn-step 예산). Isaac 체인 종료 후 또는 Adam 창에서만.
+base:
+- configs/newenv_v4.yaml
+- configs/overlays/surrogate_knn.yaml
+outdir: results/claudecodefortest/n37a_buffer1e4
+seeds:
+- 42
+- 43
+- 44
+stages:
+  a: {}
+learners:
+  s:
+    device: gpu
+    set:
+      agent.type: swirl
+      run.device: cuda
+      log.eval_n: 100
+      agent.swirl.R: 1.0
+      agent.swirl.huber_c: 0
+      agent.swirl.argmax: spas
+      agent.swirl.act: target
+      agent.tau: 0.005
+      agent.update_interval: 1
+      agent.batch: 256
+      agent.hidden:
+      - 24
+      - 24
+      agent.swirl.N: 6
+      agent.swirl.p_delta: 0.2
+      agent.swirl.alpha: 0.03
+      agent.buffer: 10000
+      log.probe_every: 5
+      log.probe_n: 16
+      reward.scale: 1.0
+      reward.alive: 1.0
+      reward.c_fa: 2.0
+      reward.c_d: 3.0
+      reward.bonus: 10.0
+      reward.terminal_penalty: 0.0
+    axes:
+      agent.buffer:
+      - 10000
+  a:
+    device: cpu
+    set:
+      agent.type: adam
+      run.device: cpu
+      log.eval_n: 100
+      agent.batch: 256
+      agent.hidden:
+      - 24
+      - 24
+      agent.adam.lr: 0.0003
+      agent.adam.huber_beta: 5.0
+      agent.adam.grad_clip: 10.0
+      agent.tau: 0.005
+      agent.update_interval: 1
+      agent.buffer: 10000
+      log.probe_every: 5
+      log.probe_n: 16
+      reward.scale: 1.0
+      reward.alive: 1.0
+      reward.c_fa: 2.0
+      reward.c_d: 3.0
+      reward.bonus: 10.0
+      reward.terminal_penalty: 0.0
+    axes:
+      agent.buffer:
+      - 10000

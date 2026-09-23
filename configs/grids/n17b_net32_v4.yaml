@@ -1,0 +1,9 @@
+# 09-22 00:40 사용자 지시: Isaac 전에 망 [32,32] 를 2시드로 빠르게 한 번. v4·정수보상·축A U(0,6), SWIRL pΔ0.1·α0.05(사용자 선택)·N6, Adam 3e-4 [32,32].
+#   비교 기준: [24,24] = n33(pΔ0.1, v3) / n16b div4(pΔ0.2, v4). 파라미터 962 → 1538 (계산 2.7×, Isaac 은 speed 1.5 필요).
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n17b_net32_v4
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 256, agent.swirl.N: 6, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.hidden: [[32, 32]]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.hidden: [[32, 32]]}}

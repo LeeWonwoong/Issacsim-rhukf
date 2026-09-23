@@ -1,0 +1,46 @@
+══════════════════════════════════════════════════════════════════════════════
+ UPDATE_NOW.txt — 바뀐 파일을 젯슨까지 다시 올리는 과정 (서버 → USB 00A3-D44E → 노트북 → 젯슨 quad@172.20.10.4)
+══════════════════════════════════════════════════════════════════════════════
+ 이번에 바뀐 파일: px4_field/plot_obs_live.py (새 그림 ①②③) · f13_policy.py (--fake-gps, --atk-aux-tq) ·
+                   plot_policy_log.py · nis_from_ulog.py   + 모델 models/swirl_v5B_s42.npz
+ 새 파일인지 확인하는 표식:  plot_obs_live.py 에 "① NN 이 보는 것" 문자열 / f13_policy.py 에 "fake-gps" 문자열
+
+──────────────────────────────────────────────────────────────────────────────
+ ① [GPU 서버, acsl] 패키지 다시 만들고 USB 에 복사
+──────────────────────────────────────────────────────────────────────────────
+  cd ~/projects/Issacsim-rhukf
+  PKG=~/swirl_field_pkg bash px4_field/deploy_jetson.sh
+  rm -rf ~/swirl_field_pkg/px4_field/__pycache__ ~/swirl_field_pkg/env/__pycache__
+  grep -c "① NN 이 보는 것" ~/swirl_field_pkg/px4_field/plot_obs_live.py        # 1 이면 새 그림 버전
+  sudo mkdir -p /media/acsl/usb
+  sudo mount -o uid=$(id -u),gid=$(id -g) /dev/sda1 /media/acsl/usb
+  rm -rf /media/acsl/usb/swirl_field_pkg
+  cp -r ~/swirl_field_pkg /media/acsl/usb/ && sync
+  grep -c "① NN 이 보는 것" /media/acsl/usb/swirl_field_pkg/px4_field/plot_obs_live.py   # 1 = USB 에도 새 버전
+  sudo umount /media/acsl/usb                                                        # 뒤에 뽑기
+
+──────────────────────────────────────────────────────────────────────────────
+ ② [노트북, acsl] USB → Downloads
+──────────────────────────────────────────────────────────────────────────────
+  rm -rf ~/Downloads/swirl_field_pkg
+  cp -r /media/acsl/00A3-D44E/swirl_field_pkg ~/Downloads/
+  grep -c "① NN 이 보는 것" ~/Downloads/swirl_field_pkg/px4_field/plot_obs_live.py     # 1
+
+──────────────────────────────────────────────────────────────────────────────
+ ③ [노트북 → 젯슨] 바뀐 파일만 덮어쓰기
+──────────────────────────────────────────────────────────────────────────────
+  cd ~/Downloads/swirl_field_pkg/px4_field
+  scp plot_obs_live.py plot_policy_log.py f13_policy.py nis_from_ulog.py quad@172.20.10.4:~/swirl_field/px4_field/
+  scp models/swirl_v5B_s42.npz quad@172.20.10.4:~/swirl_field/px4_field/models/
+  ssh quad@172.20.10.4 'grep -c "① NN 이 보는 것" ~/swirl_field/px4_field/plot_obs_live.py; grep -c fake-gps ~/swirl_field/px4_field/f13_policy.py'
+  #   → 둘 다 1 이상이면 젯슨에 새 버전이 올라간 것
+
+──────────────────────────────────────────────────────────────────────────────
+ ④ [젯슨] 실행 (BENCH_NOW.txt ③④⑤ 와 동일)
+──────────────────────────────────────────────────────────────────────────────
+  창 1:  cd ~/swirl_field/px4_field; source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash
+         python3 f13_policy.py --model models/swirl_v5B_s42.npz --pattern circle --attack rc \
+                 --fs-url /dev/ttyACM0 --atk-aux-tq 0 --atk-tq-max 0.5 --bench --no-fetch --fake-gps
+  창 2:  (ssh -X)  cd ~/swirl_field/px4_field
+         python3 -u plot_obs_live.py --latest field_logs --live --light --every 2 --window 20
+  δ 확인(VRA 돌리면서):  ros2 topic echo /fmu/out/manual_control_setpoint --field aux1     # 끝에서 ≈1.0

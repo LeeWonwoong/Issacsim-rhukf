@@ -6,19 +6,25 @@
 #              python3 f13_policy.py --model models/swirl_v4_s42.npz --pattern circle --attack rc --fs-url /dev/ttyACM0 --shadow   # 첫 비행은 shadow
 #              python3 plot_policy_log.py --latest field_logs --live                                                                # 실시간 그림
 set -eu
-JETSON="${JETSON:?JETSON=user@host 필요}"
+PKG="${PKG:-}"                       # ★09-22: PKG=<로컬 폴더> 면 젯슨 대신 그 폴더에 같은 구조로 묶는다(USB 반출용). 예: PKG=~/swirl_field_pkg
+[ -z "$PKG" ] && JETSON="${JETSON:?JETSON=user@host 필요 (또는 PKG=<폴더>)}"
 DEST="${DEST:-swirl_field}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 FILES=(
   env/__init__.py env/knobs.py env/ukf_filter.py env/observation.py env/attack.py env/scenario.py env/reward.py env/failsafe_params.py
   calibration/calibration.json
-  configs/base.yaml configs/newenv.yaml configs/newenv_v2.yaml configs/newenv_v3.yaml configs/newenv_v4.yaml configs/overlays/isaac.yaml
-  px4_field/f13_policy.py px4_field/policy_np.py px4_field/export_policy.py px4_field/plot_policy_log.py
-  px4_field/offboard_common.py px4_field/f5_pattern.py px4_field/traj_common.py px4_field/nis_from_ulog.py px4_field/fetch_ulog.py px4_field/check_ulog.py
-  px4_field/models
+  configs/base.yaml configs/newenv.yaml configs/newenv_v2.yaml configs/newenv_v3.yaml configs/newenv_v4.yaml configs/newenv_v5.yaml configs/overlays/isaac.yaml
+  px4_field/f13_policy.py px4_field/policy_np.py px4_field/export_policy.py px4_field/plot_policy_log.py px4_field/plot_obs_live.py
+  px4_field/offboard_common.py px4_field/f5_pattern.py px4_field/traj_common.py px4_field/watch_ekf.py px4_field/watch_offboard.py px4_field/f1_hover.py px4_field/nis_from_ulog.py px4_field/fetch_ulog.py px4_field/check_ulog.py
+  px4_field/models px4_field/FIELD_COMMANDS.txt px4_field/FLIGHT_RUN.txt px4_field/DEPLOY_BUILD.txt px4_field/BENCH_NOW.txt px4_field/UPDATE_NOW.txt px4_field/RUN.txt px4_field/RUN_DETAIL.txt
   etc/analysis/rc_attack_trigger.py
 )
 for f in "${FILES[@]}"; do [ -e "$f" ] || echo "⚠ 없음: $f"; done
-rsync -avR --exclude '__pycache__' "${FILES[@]}" "$JETSON:~/$DEST/"
-echo "완료 → $JETSON:~/$DEST/   (f13 은 cfgload/torch 를 쓰지 않는다 — YAML 병합으로 공격 설정을 읽는다)"
+if [ -n "$PKG" ]; then
+  mkdir -p "$PKG"; rsync -aR --exclude '__pycache__' "${FILES[@]}" "$PKG/"
+  echo "완료 → $PKG/  (USB 로 옮긴 뒤 젯슨 ~/swirl_field/ 로 복사: scp -r <PKG> quad@<IP>:~/swirl_field)"
+else
+  rsync -avR --exclude '__pycache__' "${FILES[@]}" "$JETSON:~/$DEST/"
+  echo "완료 → $JETSON:~/$DEST/   (f13 은 cfgload/torch 를 쓰지 않는다 — YAML 병합으로 공격 설정을 읽는다)"
+fi

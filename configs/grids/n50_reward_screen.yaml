@@ -1,0 +1,14 @@
+# 09-22 23:00 사용자: ③b/c/d surrogate 3시드, SWIRL R0.4·pΔ0.01·α0.1·B128·N10·ui1·τ0.005, Adam 도 batch 128.
+#   ★사용자 설계 요건: 오탐↓ · 지연↓ · **공격 중 hover 유지**  ⇒ 유지 임계 p*_h = C_FP/(C_FP+C_FN) 를 낮게(C_FN ≥ C_FP).
+#     → (1,2,1,6)(p*_h 0.667 = 놓아주는 설계)은 요건 위배라 폐기, (1,1,2,6)(p*_h 0.333 = 유지 강조)로 교체.
+#   후보: v5 (1,1.5,1.5,4) 기준 · (1,1,1,6) 희소·장데드라인 · (1,2,2,5) 진한 벌점 · (1,1,2,6) 유지 강조
+#   R0.4 근거: P_zz_σ(0.48 @v5·ui1·P0.01) × 보상 결정항비 → 예측 0.63, R/P_zz_σ = 0.63 (Isaac 실측상 ≤1.5 가 좋은 대역, v2 는 0.51)
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n50_reward_screen
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 0.4, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.q: 1.0e-3, agent.swirl.N: 10, agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {w: [{_name: v5}, {_name: 1116, reward.c_fa: 1.0, reward.c_d: 1.0, reward.bonus: 6.0}, {_name: 1225, reward.c_fa: 2.0, reward.c_d: 2.0, reward.bonus: 5.0}, {_name: 1126, reward.c_fa: 1.0, reward.c_d: 2.0, reward.bonus: 6.0}]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 128, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {w: [{_name: v5}, {_name: 1116, reward.c_fa: 1.0, reward.c_d: 1.0, reward.bonus: 6.0}, {_name: 1225, reward.c_fa: 2.0, reward.c_d: 2.0, reward.bonus: 5.0}, {_name: 1126, reward.c_fa: 1.0, reward.c_d: 2.0, reward.bonus: 6.0}]}}

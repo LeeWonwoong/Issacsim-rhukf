@@ -1,0 +1,13 @@
+# 09-22 23:10 보완: n50 은 R0.4 고정(사용자 지시)인데, 워크플로 검증에서 "R 미정합 상태의 보상 비교는 해석 불가"(R 만으로 F1 0.641→0.781) 로 나왔다.
+#   → 각 보상의 권고 R 로 같은 셀을 한 번 더 돈다. 권고값(점유가중 결정항 rms s_dec 비, 지수 a∈[0.76,1.33]):
+#      v5 0.5 · (1,1,1,6) 0.4(= n50 과 동일이라 제외) · (1,2,2,5) 0.7 · (1,1,2,6) 0.6
+#   Adam 은 R 이 없으므로 n50 의 Adam 3시드를 그대로 짝으로 쓴다.
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n52_reward_R
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.q: 1.0e-3, agent.swirl.N: 10, agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {w: [{_name: v5R05, agent.swirl.R: 0.5},
+                 {_name: 1225R07, reward.c_fa: 2.0, reward.c_d: 2.0, reward.bonus: 5.0, agent.swirl.R: 0.7},
+                 {_name: 1126R06, reward.c_fa: 1.0, reward.c_d: 2.0, reward.bonus: 6.0, agent.swirl.R: 0.6}]}}

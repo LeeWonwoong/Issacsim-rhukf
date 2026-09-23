@@ -1,0 +1,11 @@
+# 09-21 23:05 사용자 지시: Adam 의 강건성 하이퍼를 현 보상 스케일(정수 1,2,3,10)에 맞게 재점검.
+#   발견: n25 에서 grad_clip 10 과 70 의 5시드 결과가 비트 동일 → 클립 미발동. β5 는 구 보상 scale 5 유산이라
+#   정수 보상(후기 loss 0.061·RMS|δ|≈0.78)에서 Huber 가 전 구간 MSE = 이상치 강건성 장치가 꺼진 상태.
+#   축: huber_beta {1, 5} × grad_clip {1, 10} × amsgrad {false, true}. lr 3e-4 고정(교수 방침 = 관례 표준).
+#   기준선: n16b_obsdiv_v4 div4 (β5·clip10·amsgrad false) SWIRL 0.872 vs Adam 0.840. 무대 v4 축 A, 시드 42–44, CPU 전용.
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n38_adam_robust
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0}, axes: {agent.adam.huber_beta: [1.0, 5.0], agent.adam.grad_clip: [1.0, 10.0], agent.adam.amsgrad: [false, true]}}

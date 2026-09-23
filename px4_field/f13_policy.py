@@ -101,7 +101,8 @@ class PolicyPattern(F5Pattern):
         self._pcsv_path = os.path.join(outdir, f'f13_policy_{self.pattern}_{stamp}.csv')
         self._pcsv = open(self._pcsv_path, 'w', newline=''); self._pw = csv.writer(self._pcsv)
         self._pw.writerow(['t_wall', 't_seq', 'k', 'state', 'nis_v_raw', 'nis_g_raw', 'obs_v', 'obs_g', 'q_track', 'q_hover', 'action', 'hovering',
-                           'atk_active', 'delta', 'dir', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'gps_hz', 'ukf_ms', 'sp_x', 'sp_y', 'sp_z', 'sp_vx', 'sp_vy', 'stage'])
+                           'atk_active', 'delta', 'dir', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'gps_hz', 'ukf_ms', 'sp_x', 'sp_y', 'sp_z', 'sp_vx', 'sp_vy', 'stage',
+                           *[f'o{i}' for i in range(self.obs.spec.dim)]])   # ★09-22 정책 입력 벡터(창 4×[vel,gyro,prev_action], 오래된 프레임부터)
         self._ukf_ms = 0.0
         self.create_timer(UKF_DT, self._ukf_tick)
         self.get_logger().info(
@@ -164,8 +165,14 @@ class PolicyPattern(F5Pattern):
     def _ukf_tick(self):
         with self._lock:
             g, gps, seq, th, tq, ref = self._gyro, self._gps, self._gps_seq, self._th, self._tq, self._ref
+        if self.A.fake_gps:                      # ★ 벤치 전용(09-22): GPS 픽스/EKF 원점 없이도 돌게 — 정지 기체 = 위치·속도 0 (vel NIS 는 0 근방, gyro 만 유효)
+            self._fake_seq = getattr(self, '_fake_seq', 0) + 1; seq = self._fake_seq
+            gps = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0); ref = (0.0, 0.0, 0.0)
         if g is None or gps is None or th is None or tq is None or ref is None:
-            self.warn_once('ukf_wait', f'  UKF 입력 대기: gyro {g is not None} gps {gps is not None} thrust {th is not None} torque {tq is not None} ref {ref is not None}')
+            self.warn_once('ukf_wait', f'  UKF 입력 대기: gyro {g is not None} gps {gps is not None} thrust {th is not None} torque {tq is not None} ref {ref is not None}'
+                           + ('  ← gps/ref 가 False 면 GPS 픽스·EKF 원점 없음(실외 지상 또는 --fake-gps 벤치), thrust/torque 가 False 면 arm 필요' ))
+            self._wait_n = getattr(self, '_wait_n', 0) + 1
+            if self._wait_n % 250 == 0: self.get_logger().warn(f'  UKF 입력 대기 계속({self._wait_n // 50}s): gyro {g is not None} gps {gps is not None} thrust {th is not None} torque {tq is not None} ref {ref is not None}')
             return
         t0 = time.time()
         lat, lon, alt, vn, ve, vd = gps
@@ -187,6 +194,7 @@ class PolicyPattern(F5Pattern):
             nv, _ = compute_nis_scaled(res[3:6], Pzz[3:6, 3:6], 3.0); ng, _ = compute_nis_scaled(res[6:9], Pzz[6:9, 6:9], 3.0)
             self.last_nis = (float(nv), float(ng))
             st = self.obs.push(nv, ng, int(self.prev_action)); self.last_obs = self.obs.last_scaled
+            self.last_st = st
             if st is not None:
                 self.q = self.pol.q(st); a = int(np.argmax(self.q))
             else:
@@ -206,7 +214,11 @@ class PolicyPattern(F5Pattern):
     # ── 공격 발행 (10 Hz, GPS fresh 스텝) ──
     def _attack_step(self):
         if self.A.attack == 'rc':
-            a1, a2 = self._aux; d_rc = float(self.A.atk_tq_max) * min(max(a2, 0.0), 1.0) if a1 > float(self.A.atk_sw_thr) else 0.0
+            a1, a2 = self._aux
+            if a1 > float(self.A.atk_sw_thr):   # 게이트(VRA=aux1) on
+                d_rc = float(self.A.atk_tq_max) if int(self.A.atk_aux_tq) == 0 else float(self.A.atk_tq_max) * min(max(a2, 0.0), 1.0)   # ATK_AUX_TQ 0 = 고정 크기(08-10 실기), 2 = VRB 노브 비율
+            else:
+                d_rc = 0.0
             self.atk_delta = max(d_rc, self._ext_delta); return
         if self.pub_attack is None: return
         active = False; d = 0.0
@@ -235,12 +247,14 @@ class PolicyPattern(F5Pattern):
 
     def _policy_log(self):
         lp = self.lp; t_seq = 0.0 if self.t_engage is None else time.time() - self.t_engage
+        st = getattr(self, 'last_st', None)   # 정책 입력 12-D (창 미충전이면 빈칸)
+        st_cols = [''] * self.obs.spec.dim if st is None else [f'{v:.4f}' for v in st]
         self._pw.writerow([f'{time.time():.3f}', f'{t_seq:.2f}', self.atk_k, self.state, f'{self.last_nis[0]:.4f}', f'{self.last_nis[1]:.4f}',
                            f'{self.last_obs[0]:.4f}', f'{self.last_obs[1]:.4f}', f'{self.q[0]:.3f}', f'{self.q[1]:.3f}', self.action, int(self.hovering),
                            int(self.atk_delta > 0), f'{self.atk_delta:.3f}', f'{self.atk_dir:.3f}',
                            *(f'{v:.3f}' for v in ((lp.x, lp.y, lp.z, lp.vx, lp.vy, lp.vz) if lp is not None else (0,) * 6)),
                            f'{self.fresh_n / max(1e-6, time.time() - self._t_start):.1f}', f'{self._ukf_ms:.1f}',
-                           *(f'{v:.3f}' for v in getattr(self, '_last_sp', (float('nan'),) * 5)), self.stage])
+                           *(f'{v:.3f}' for v in getattr(self, '_last_sp', (float('nan'),) * 5)), self.stage, *st_cols])
 
     # ── 패턴 스텝: 정책 hover 삽입 ──
     def step(self, t):
@@ -381,6 +395,7 @@ def main():
     ap.add_argument('--attack', choices=['none', 'dds', 'rc'], default='none', help='dds: 노드가 v4 프로파일 발행 / rc: RC aux·외부 트리거가 넣는 δ 를 기록만')
     ap.add_argument('--atk-tq-max', dest='atk_tq_max', type=float, default=0.4, help='rc 모드 δ 기록용 ATK_TQ_MAX (PX4 파라미터와 같게)')
     ap.add_argument('--atk-sw-thr', dest='atk_sw_thr', type=float, default=0.9, help='rc 모드 aux1 스위치 임계 (ATK_SW_THR)')
+    ap.add_argument('--atk-aux-tq', dest='atk_aux_tq', type=int, default=0, help='rc 모드 크기 노브: 0 = 없음(스위치 on = ATK_TQ_MAX 고정, 08-10 실기 설정) / 2 = aux2(VRB) 비율 × ATK_TQ_MAX. PX4 ATK_AUX_TQ 와 같게')
     ap.add_argument('--attack-cfg', dest='attack_cfg', default=os.path.join(HERE, '..', 'configs', 'newenv_v4.yaml'))
     ap.add_argument('--attack-max', dest='attack_max', type=float, default=0.4, help='δ 상한 (현장 안전: 강공격 0.7+ 금지)')
     ap.add_argument('--attack-seed', dest='attack_seed', type=int, default=0)
@@ -404,6 +419,7 @@ def main():
     ap.add_argument('--settle', type=float, default=4.0); ap.add_argument('--wp-speed', dest='wp_speed', type=float, default=None)
     ap.add_argument('--need-alt', dest='need_alt', type=float, default=1.0); ap.add_argument('--max-radius', dest='max_radius', type=float, default=0.0)
     ap.add_argument('--bench', action='store_true'); ap.add_argument('--bench-thrust', dest='bench_thrust', type=float, default=0.10)
+    ap.add_argument('--fake-gps', dest='fake_gps', action='store_true', help='벤치 전용: GPS 픽스/EKF 원점 없이 위치·속도 0 으로 UKF 구동(실내). 실비행 금지')
     ap.add_argument('--outdir', default='field_logs')
     add_postflight_args(ap)
     a = ap.parse_args()

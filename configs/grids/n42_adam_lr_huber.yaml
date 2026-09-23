@@ -1,0 +1,10 @@
+# 09-22 02:55 사용자 지시: Adam 도 lr·Huber β 를 바꿔 본다(목표: 탐지기 전부 성립하되 SWIRL > UKF/EKF-TD > Adam, Adam 은 자기 최선값으로).
+#   U(0,9)·v4·정수보상·B256, lr {1e-4, 3e-4, 1e-3} × huber_beta {1, 5} 에서 (3e-4, 5) 는 n40 에 있으므로 제외 → 5셀 × 2시드 = 10런(CPU).
+#   판정(pick_adam.py): Adam greedy F1 2시드 평균 최대(후보 = n40 B256·3e-4·β5, n41 B128·3e-4·β5, n42 5셀). 교수 방침: 베이스라인은 관례값 안에서 최선, 망가뜨리지 않는다.
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n42_adam_lr_huber
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.range: [0.0, 9.0]},
+      axes: {cfg: [{_name: lr1e-4_b1, agent.adam.lr: 1.0e-4, agent.adam.huber_beta: 1.0}, {_name: lr1e-4_b5, agent.adam.lr: 1.0e-4, agent.adam.huber_beta: 5.0}, {_name: lr3e-4_b1, agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 1.0}, {_name: lr1e-3_b1, agent.adam.lr: 1.0e-3, agent.adam.huber_beta: 1.0}, {_name: lr1e-3_b5, agent.adam.lr: 1.0e-3, agent.adam.huber_beta: 5.0}]}}

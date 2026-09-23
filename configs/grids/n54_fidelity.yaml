@@ -1,0 +1,8 @@
+# 09-23 00:55 정합검증 핵심 2점만(KD-트리 가속본). Isaac s42 후반 공격F1: ui1R1 0.641 · ui1R05 0.781 (격차 0.14) · 참고 ui4R1 0.782.
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n54_fidelity
+seeds: [42]
+stages: {a: {}}
+learners:
+  k: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.q: 1.0e-3, agent.swirl.N: 6, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {agent.swirl.R: [1.0, 0.5]}}

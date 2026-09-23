@@ -1,0 +1,30 @@
+# n60 — 09-23 사용자 지시: 정합 통과 후 착수.
+#   보상 (1,3,1,6) 고정 · SWIRL R {0.5, 0.3} × pΔ {0.01, 0.05, 0.1} · N 10 · batch 128 · 2시드 · 160 에피
+#   = 6 설정 × 2시드 = 12 런.  셀당 약 55분(69분 × 160/200), 워커 6개 → 2라운드 ≈ 1.85 h
+#   ★09-23 10:10 사용자 결정: 2시 반 Isaac 마감에 맞춰 pΔ0.03 제외(0.01–0.05 사이라 보간 가능). 2시드는 유지 — 붕괴 시드 검출이 목적.
+#   α 는 α√pΔ ≈ 0.010–0.011 대역(사용자 지정 0.05@pΔ0.05 · 0.03@pΔ0.1 과 일치):
+#       0.01→0.10  ·  0.05→0.05  ·  0.10→0.03
+#   ★09-23 10:35 정합 수정 최종판(overlay v3: F1 _iq버그 · F4/F5 조건포화 · P0-a k256+캐시키버그 · P0-b 가산 에피효과 · P0-c 2성분 코퓰러).
+#     10:21 에 한 번 띄웠다가 종합진단이 F3 축소형 구현 오류(에피내 분산 −25%)를 지적해 중단·재작성했다. 구 결과는 old_n60_wrongF3.
+#     정합 전 결과는 R 축이 평평하게 나오므로 판정에 쓰지 말 것.
+#   ⚠ 실패 시드 경보: n57 pΔ0.05 s42=0.311 · n58 N8 s42=0.154. 붕괴(스테이지 중앙값의 0.5배 미만)가
+#     한 시드라도 있으면 평균과 무관하게 그 셀은 탈락시킨다.
+#   Adam 기준선 2런은 CPU 라 GPU 워커를 쓰지 않는다(같은 160에피·같은 보상에서 격차를 읽기 위함).
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v3.yaml]
+outdir: results/claudecodefortest/n60_RP_tune
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 160, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0,
+                         agent.swirl.q: 1.0e-3, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.N: 10,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000},
+      axes: {P: [{_name: p001, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.10},
+                 {_name: p005, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.05},
+                 {_name: p010, agent.swirl.p_delta: 0.10, agent.swirl.alpha: 0.03}],
+             agent.swirl.R: [0.5, 0.3]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 160, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0,
+                         agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000},
+      axes: {w: [{_name: ref1316}]}}

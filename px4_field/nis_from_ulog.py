@@ -28,7 +28,10 @@ import os
 import sys
 
 import numpy as np
-from pyulog import ULog
+try:
+    from pyulog import ULog
+except ImportError:            # ★09-22: f13 가 quat_to_euler_ned 만 쓰므로 pyulog 없이도 임포트되게(ulog 판독 때만 필요)
+    ULog = None
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from env.ukf_filter import DynamicsUKF, compute_nis_scaled, load_calibration, to_physical_u  # noqa: E402
@@ -53,6 +56,8 @@ def quat_to_euler_ned(q):
 
 
 def run_one(path, calib, offboard_only=True, label=None):
+    if ULog is None:
+        raise SystemExit('pyulog 가 없습니다: pip3 install pyulog')
     u = ULog(path, ['vehicle_gps_position', 'vehicle_local_position', 'vehicle_attitude',
                     'sensor_combined', 'vehicle_torque_setpoint', 'vehicle_thrust_setpoint',
                     'vehicle_status', 'vehicle_land_detected'])

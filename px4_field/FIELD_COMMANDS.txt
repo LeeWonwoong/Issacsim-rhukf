@@ -1,0 +1,208 @@
+══════════════════════════════════════════════════════════════════════════════
+ FIELD_COMMANDS.txt — 실시간 탐지 정책(NN inference) 리허설·실기 명령어 전부, 순서대로   (2026-09-22)
+══════════════════════════════════════════════════════════════════════════════
+ 목표: Isaac Sim 에서 조종기로 이륙 → 주행 패턴 선택 → 조종기 버튼으로 OFFBOARD → 학습된 NN 이 10 Hz 로
+       track/hover 결정 → 조종기 노브로 공격 주입 → 옆 창에서 12-D 관측·행동·3D 궤적을 실시간으로 본다.
+ 실기(젯슨)는 §7·§7b. GPU 서버·노트북 사용자 = acsl, 젯슨 오린나노 사용자 = quad. 서버 경로는 저장소 루트(/home/acsl/projects/Issacsim-rhukf) 기준.
+ 망: GPU 서버 = 학교 와이파이, 노트북–젯슨 = 핸드폰 핫스팟 → 서버↔노트북은 USB 로 옮긴다.
+
+──────────────────────────────────────────────────────────────────────────────
+ 0-1. ★ 반출·배포: GPU 서버 → USB → 노트북 → 젯슨   (모델이 바뀔 때마다 npz 만 다시 이 경로로)
+──────────────────────────────────────────────────────────────────────────────
+  [GPU 서버, acsl]  패키지 갱신(env·calibration·configs·px4_field·모델 한 폴더로) → USB 마운트 → 복사 → 안전 제거
+  cd ~/projects/Issacsim-rhukf
+  PKG=~/swirl_field_pkg bash px4_field/deploy_jetson.sh          # ~/swirl_field_pkg 갱신 (모델: px4_field/models/*.npz)
+  ls ~/swirl_field_pkg/px4_field/models/                         # swirl_v2_s42.npz  swirl_v5B_s42.npz (…A2…)
+  lsblk -o NAME,SIZE,MOUNTPOINT | grep sda                       # USB 장치 확인 (보통 sda1). 자동 마운트가 안 된다 → 아래로
+  sudo mkdir -p /media/acsl/usb
+  sudo mount -o uid=$(id -u),gid=$(id -g) /dev/sda1 /media/acsl/usb
+  cp -r ~/swirl_field_pkg /media/acsl/usb/ && sync
+  ls /media/acsl/usb/swirl_field_pkg/px4_field/models/
+  sudo umount /media/acsl/usb                                    # ★ 이거 뒤에 뽑는다
+  #   (콘솔에 앉아 있으면 sudo 없이:  udisksctl mount -b /dev/sda1  →  /media/acsl/<라벨>/ 에 복사  →  udisksctl unmount -b /dev/sda1)
+
+  [노트북, acsl]  USB → ~/Downloads → 젯슨(quad) ~/swirl_field  (옛 ~/px4_field 는 보관)
+  cp -r /media/acsl/00A3-D44E/swirl_field_pkg ~/Downloads/         # 노트북은 보통 자동 마운트. 안 되면 위와 같은 mount
+  ssh quad@172.20.10.4 'mv ~/px4_field ~/px4_field_old_0922 2>/dev/null; rm -rf ~/swirl_field'
+  scp -r ~/Downloads/swirl_field_pkg quad@172.20.10.4:~/swirl_field
+  ssh quad@172.20.10.4 'ls ~/swirl_field; ls ~/swirl_field/px4_field/models'
+  #   → env  calibration  configs  etc  px4_field  /  swirl_v2_s42.npz  swirl_v5B_s42.npz
+
+  [나중에 모델만]  서버에서 npz 를 USB 에 → 노트북에서:
+  scp ~/Downloads/swirl_v5A2_s42.npz quad@172.20.10.4:~/swirl_field/px4_field/models/
+  #   실행 시 --model models/<파일>.npz 만 바꾼다. 코드·설정은 그대로.
+
+  [실험 뒤 로그 회수]  젯슨 → 노트북 → USB → 서버
+  scp -r quad@172.20.10.4:~/swirl_field/px4_field/field_logs ~/Downloads/field_logs_$(date +%m%d)
+  #   USB 로 서버 ~/projects/Issacsim-rhukf/results/claudecodefortest/field_logs_<날짜>/ 에 넣으면 분석
+
+──────────────────────────────────────────────────────────────────────────────
+ 0. 한 번만 준비
+──────────────────────────────────────────────────────────────────────────────
+  # ROS2 + px4_msgs(ActuatorAttack 포함 재빌드본)
+  source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash
+
+  # PX4 SITL 이 공격 패치 빌드인지 (PX4 콘솔/QGC MAVLink 콘솔에서)
+  param show ATK_EN          # 떠야 한다. 안 뜨면: cd ~/PX4-Autopilot && make px4_sitl_default
+
+  # 조종기: USB 로 PC 연결 → 조종기 화면에서 "USB Joystick (HID)" 선택 (EdgeTX/OpenTX 팝업)
+  ls /dev/input/js*          # 잡혔는지
+
+  # 정책 모델(npz). 지금 있는 것: px4_field/models/swirl_v2_s42.npz
+  # 새 모델이 나오면:
+  python3 px4_field/export_policy.py <run_dir>/final_model.pt px4_field/models/<이름>.npz
+
+  # 잔재 정리 (이전 세션이 살아 있으면 런처가 거부한다)
+  pkill -f run_sim.py; pkill -9 -x px4; sleep 3
+
+──────────────────────────────────────────────────────────────────────────────
+ 1. 창 A — 엔진 + 정책 노드 (GUI, 실시간 1.0×)
+──────────────────────────────────────────────────────────────────────────────
+  # 패턴은 --pattern 으로 고른다: waypoint | circle | figure8 | aggressive | scurve | yaw_spin | accel_line
+  # 노브 최대 δ = ATK_TQ_MAX (PX4 파라미터) 와 같은 값을 --atk-tq-max 로 알려줘야 로그의 δ 가 맞는다.
+  bash px4_field/launch_isaac_manual.sh f13 1.0 --pattern circle --atk-aux-tq 2 --atk-tq-max 0.5
+  #   (SITL 조이스틱은 노브 축을 aux2 로 매핑하므로 --atk-aux-tq 2. 실기 08-10 방식(VRA 게이트·고정 크기)은 --atk-aux-tq 0)
+  #   다른 패턴:  ... f13 1.0 --pattern aggressive --atk-aux-tq 2 --atk-tq-max 0.5
+  #   다른 모델:  ... f13 1.0 --pattern waypoint --model models/<이름>.npz --atk-aux-tq 2 --atk-tq-max 0.5
+  #   결정만 기록(hover 안 걸기): ... --shadow
+  #   랩 수·설정:  --laps 2  --R 3.4  --omega 0.38 (circle),  --agg-R 2.24 (aggressive)
+  #
+  # 런처가 하는 일: 잔재 검사 → MicroXRCEAgent → run_sim.py(GUI) → /gt/odometry 로 준비 판정 → [PX4LIM] 확인
+  #                 → QGC 안내 출력 → px4_field 폴더에서 f13_policy.py 실행(WAIT 상태로 대기)
+  # 로그: px4_field/field_logs/f13_policy_<pattern>_<YYYYmmdd_HHMMSS>.csv (10 Hz)
+
+──────────────────────────────────────────────────────────────────────────────
+ 2. QGroundControl — 조종기·버튼·공격 파라미터
+──────────────────────────────────────────────────────────────────────────────
+  ~/QGroundControl-x86_64.AppImage &
+  # (자동 연결: UDP 14550. Disconnected 면 잔재 px4 → 0 절의 정리 후 재실행)
+
+  Vehicle Setup → Joystick
+    · Enable joystick input → Calibrate
+    · Button Assignment:  버튼1 = Offboard   버튼2 = Position   버튼3 = Arm
+      (QGC 버튼은 "누르면 그 모드"이지 토글이 아니다. 인계 = Position 버튼)
+    · 스위치·노브 축을 aux1(스위치)·aux2(노브) 로 매핑 (QGC 버전에 따라 가능/불가 — 3 절에서 확인)
+
+  Vehicle Setup → Parameters (또는 MAVLink 콘솔 param set)
+    ATK_AUX_SW   1        # 스위치 = aux1
+    ATK_AUX_TQ   2        # 노브   = aux2
+    ATK_TQ_AXIS  0        # roll
+    ATK_TQ_MAX   0.5      # 노브 최대 = δ 0.5 (현장 상한. 강공격 0.7+ 금지)
+    ATK_SW_THR   0.9      # 스위치 임계
+    # ATK_EN 은 SITL 에선 run_sim 이 매번 1 로 켠다. 실기는 지상에서 1 로.
+
+──────────────────────────────────────────────────────────────────────────────
+ 3. 노브가 PX4 까지 오는지 확인 (MAVLink 콘솔)
+──────────────────────────────────────────────────────────────────────────────
+  listener manual_control_setpoint
+  # aux1 이 스위치, aux2 가 노브를 따라 움직이면 OK → 4 절로.
+  # 안 움직이면(QGC 가 aux 를 안 보냄) 키보드 대체 — 창 B:
+  python3 etc/analysis/rc_attack_trigger.py --stdin --tq-max 0.5
+      on            # 스위치 무장
+      t 1.0         # δ 0.5   (t 0.5 → δ 0.25, t 0.3 → 0.15)
+      off           # 끔
+      q             # 종료
+  # 두 경로 모두 PX4 ControlAllocator::apply_attack() 의 같은 지점(c[0] 가산)으로 들어간다 = sim·실기 동치.
+
+──────────────────────────────────────────────────────────────────────────────
+ 4. 창 C·D — 실시간 그림 (비행 전에 미리 띄워 둔다)
+──────────────────────────────────────────────────────────────────────────────
+  # 12-D 관측(창 4×[vel,gyro,prev_action]) 히트맵 + 관측·δ + 정책 행동·hover·Q차, 1 s 갱신, 최근 30 s
+  python3 px4_field/plot_obs_live.py --latest px4_field/field_logs --live
+  #   창 60 s·0.5 s 갱신:  ... --live --window 60 --every 0.5
+
+  # 3D 궤적(파랑 track·주황 공격 중·빨강 hover) + 탑뷰 추종 RMSE + 타임라인, 0.5 s 갱신
+  python3 px4_field/plot_policy_log.py --latest px4_field/field_logs --live
+
+  # (선택) 명령 vs 실제 추종 감시
+  python3 px4_field/watch_offboard.py --hz 10
+
+──────────────────────────────────────────────────────────────────────────────
+ 5. 비행 순서
+──────────────────────────────────────────────────────────────────────────────
+  ① QGC/조종기: Position 모드, Arm, 스틱으로 이륙 → 2.5 m 안정 호버
+       창 A 에 nav_state 와 WAIT 가 보인다
+  ② [Offboard 버튼] → 창 A: "OFFBOARD 진입" → ENGAGED → 4 s settle → 패턴 자동 시작
+       정책이 10 Hz 로 결정, 창 C 히트맵이 흐르기 시작
+  ③ 공격: 스위치 up → 노브를 천천히 올림 (또는 창 B: on, t 0.5)
+       정책 hover 선언 → FailsafeParams engage → 현재 위치 사수 (창 C 아래 패널 빨강)
+  ④ 노브 down / off → 정책 track 복귀 → 최근접점 재접근(2 m) → 패턴 계속
+       (반복 가능. 다른 축·크기도 같은 방식)
+  ⑤ 인계: [Position 버튼] → 창 A WAIT(안전) → 스틱 착륙 → Disarm
+  ⑥ 창 A Ctrl-C → 엔진·px4 정리. 로그 파일명이 창 A 마지막 줄에 찍힌다
+
+──────────────────────────────────────────────────────────────────────────────
+ 6. 사후 그림·판독
+──────────────────────────────────────────────────────────────────────────────
+  F=px4_field/field_logs/f13_policy_circle_<시각>.csv
+  python3 px4_field/plot_obs_live.py  $F --out obs.png            # 12-D 관측·행동 전체
+  python3 px4_field/plot_policy_log.py $F --out traj.png          # 3D·탑뷰·타임라인
+  # CSV 열: t_wall,t_seq,k,state,nis_v_raw,nis_g_raw,obs_v,obs_g,q_track,q_hover,action,hovering,atk_active,delta,dir,
+  #         x,y,z,vx,vy,vz,gps_hz,ukf_ms,sp_x,sp_y,sp_z,sp_vx,sp_vy,stage,o0..o11(정책 입력 벡터)
+
+──────────────────────────────────────────────────────────────────────────────
+ 7. 실기(젯슨) — 바뀌는 것만
+──────────────────────────────────────────────────────────────────────────────
+  # 배포 (torch 불필요: numpy·yaml·pymavlink·rclpy·px4_msgs)
+  JETSON=quad@172.20.10.4 bash px4_field/deploy_jetson.sh   # (같은 망일 때만. 핫스팟 분리 시 §0-1 USB 경로)
+  # 송신기: 스위치 → RC_MAP_AUX1, 노브 → RC_MAP_AUX2. PX4 지상 파라미터: ATK_EN 1 + 2 절의 ATK_* 값
+  # 젯슨에서 (첫 비행은 --shadow 로 결정만 기록):
+  cd ~/swirl_field/px4_field
+  python3 f13_policy.py --model models/<이름>.npz --pattern circle --attack rc --fs-url /dev/ttyACM0 --atk-aux-tq 0 --atk-tq-max 0.5 --shadow
+  python3 plot_obs_live.py --latest field_logs --live
+  # 실기는 PX4 가 RC aux 를 직접 읽으므로 창 B(rc_attack_trigger) 는 필요 없다. 감시 창: python3 watch_ekf.py --hz 10 / python3 watch_offboard.py --hz 10
+  # 비행 뒤 ulog 회수·판정은 offboard_common.postflight() 가 자동(--no-fetch 로 끔).
+
+──────────────────────────────────────────────────────────────────────────────
+ 7b. ★ 프로펠러 제거 벤치 (젯슨 오린나노, 노트북 SSH) — 모델만 갈아끼워 파이프라인 검증
+──────────────────────────────────────────────────────────────────────────────
+  전제: 프로펠러 전부 제거. 기체는 GPS 픽스가 잡히는 곳(창가·실외 지상) — shadow UKF 가 GPS·IMU·추력/토크 setpoint 를
+        전부 받아야 돈다("UKF 입력 대기" 가 계속 뜨면 GPS/ref 없음). 젯슨 MicroXRCEAgent 는 systemd 서비스로 자동 기동(RUN_DETAIL §470).
+  ⚠ 벤치 한계: 노브 공격은 모터 속도만 바꾸고 기체는 안 움직인다 → NIS 가 안 뜨고 NN 은 hover 를 선언하지 않는다.
+             그건 정상. 대신 (a) 모터 변화 = RC→PX4 apply_attack 경로 확인, (b) 손으로 기체를 기울이면 gyro NIS 가 떠서
+             NN 이 hover 를 선언하는 것 = 관측→추론→행동→그림 경로 확인.
+
+  [노트북]  # 배포 (rsync, torch 불필요). 젯슨의 ~/swirl_field/ 에 코드·설정·모델이 들어간다
+  JETSON=quad@172.20.10.4 bash px4_field/deploy_jetson.sh   # (같은 망일 때만. 핫스팟 분리 시 §0-1 USB 경로)
+  #   새 모델(swirl_v5B_s42.npz 등)이 생기면 npz 만 다시:
+  scp px4_field/models/swirl_v5B_s42.npz quad@172.20.10.4:~/swirl_field/px4_field/models/
+
+  [젯슨 SSH 창 1]
+  cd ~/swirl_field/px4_field
+  source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash     # 젯슨의 px4_msgs(ActuatorAttack 포함)
+  sudo chmod 666 /dev/ttyACM0                                                 # FailsafeParams MAVLink (FC USB). 다른 프로세스가 물고 있으면 lsof 로 정리
+  ros2 topic hz /fmu/out/sensor_combined                                      # DDS 살아있는지 (없으면 에이전트 서비스 확인)
+  python3 f13_policy.py --model models/swirl_v5B_s42.npz --pattern circle --attack rc --fs-url /dev/ttyACM0 --atk-tq-max 0.5 --bench --no-fetch
+  #   (모델 교체 = --model 만 바꿈. 벤치는 attitude setpoint(추력 0.10)로 오프보드를 유지하고 착륙·ulog 회수를 건너뛴다)
+
+  [FC 파라미터, 지상 QGC] ── 08-10 실기 확정 설정 그대로 (RUN_DETAIL §F12) ──
+    전제: EKF2_RNG_CTRL 2 · EKF2_OF_CTRL 0 · MPC_XY_VEL_MAX 2.0   (08-10/08-11 고도·수평 발산 해결값)
+    ATK_EN 1 · ATK_AUX_SW 1 (VRA=CH9=aux1 게이트, 오른쪽 끝 = on) · ATK_SW_THR 0.9 · ATK_TQ_AXIS 0 (roll) · ATK_TH_MAX 0
+    크기 방식 둘 중 하나:
+      (a) 08-10 방식·권장: ATK_AUX_TQ 0 → VRA on = δ 고정 = ATK_TQ_MAX (예 0.3 / 0.5). 크기 바꾸려면 param 만 바꾼다.
+          f13 은 --atk-aux-tq 0 --atk-tq-max <같은 값>  (기본값이 0 이라 --atk-tq-max 만 맞추면 됨)
+      (b) VRB 노브(CH10=aux2)로 비율: ATK_AUX_TQ 2, δ = ATK_TQ_MAX × VRB.  f13 은 --atk-aux-tq 2 --atk-tq-max 0.5
+    ⚠ SWC 는 모드 스위치 그대로(오프보드 이탈 방지). 오프보드 진입/이탈 = SWB. SWD = 모터 종료(최후).
+    ⚠ 젯슨 사용자 quad 를 dialout 에(한 번): sudo usermod -aG dialout quad (재로그인) — 아니면 매번 chmod 666 /dev/ttyACM0
+
+  [젯슨 SSH 창 2 — 실시간 그림]  (a) X 포워딩:  ssh -X quad@172.20.10.4  →  cd ~/swirl_field/px4_field
+  python3 plot_obs_live.py --latest field_logs --live            # 12-D 관측·행동, 1 s 갱신
+  python3 plot_policy_log.py --latest field_logs --live          # (벤치는 궤적이 없어 타임라인만 의미)
+  #   (b) X 가 느리면 노트북에서 CSV 를 1 s 마다 끌어와 그린다:
+  #   while true; do rsync -q quad@172.20.10.4:~/swirl_field/px4_field/field_logs/ ./jetson_logs/; sleep 1; done &
+  #   python3 px4_field/plot_obs_live.py --latest ./jetson_logs --live
+
+  [조종기] 잔디(지면)에 놓고 전원 → EKF 수렴 30~60 s → Stabilized 에서 arm(프로펠러 없음) → 창 1 에 armed → SWB(오프보드) ON → ENGAGED
+           → 모터가 낮게 돈다(추력 0.10) → VRA 오른쪽 끝(공격 on) → roll 축 모터 두 개 ↑ 두 개 ↓ (공격 경로 OK)
+           → 노브 0 → 손으로 기체를 기울였다 놓기 → 창 2 에서 gyro 관측 상승 → 정책 행동 1(hover) 표시 → 복귀
+           → 오프보드 스위치 OFF → disarm → 창 1 Ctrl-C. 로그: field_logs/f13_policy_circle_<시각>.csv
+
+──────────────────────────────────────────────────────────────────────────────
+ 8. 문제가 나면
+──────────────────────────────────────────────────────────────────────────────
+  · 런처가 "/gt/odometry 가 이미 존재" → 0 절 정리 후 재실행
+  · QGC Disconnected → 고아 px4: pkill -9 -x px4
+  · 공격 켜도 기체 반응 없음 → ATK_EN=0 이거나 공격 패치 빌드가 아님 (param show ATK_EN)
+  · hover↔track 이 10 Hz 로 떨림 → --min-hover-steps 5 (기본) 확인
+  · 결정이 50 Hz 로 나옴 → --gps-hz 10 (기본) 확인
+  · 궤적이 학습과 다름 → --match-train 1 (기본: SPEED_MOD_AMP 0·ACCEL_FF 1) 확인

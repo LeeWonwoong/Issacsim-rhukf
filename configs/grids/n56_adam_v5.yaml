@@ -1,0 +1,8 @@
+# 09-23 01:25 누락 보완: n55 의 Adam 축은 ρ2·ρ3 만 있고 ρ1(v5) Adam 기준선이 없다. n50 의 v5 Adam 은 브루트포스 k-NN 이라 짝비교 불가 → KD-트리로 재실행(CPU 3시드).
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v2.yaml]
+outdir: results/claudecodefortest/n56_adam_v5
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 128, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 20, log.probe_n: 8},
+      axes: {agent.batch: [128]}}

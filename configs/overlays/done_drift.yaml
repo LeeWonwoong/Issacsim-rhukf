@@ -1,0 +1,19 @@
+# done_drift.yaml — 임무실패 종료(추종오차 기반)를 surrogate 추락 모델로 구현 (2026-09-21, Isaac capture_drift 116ep 로 보정)
+#   정의: 수평 추종오차 > 2.5 m 가 1.0 s(10스텝) 지속 → 임무실패(종료). Isaac 은 실제 gt_err 로 같은 판정
+#         (env.isaac.knobs.DRIFT_MAX_ERR: 2.5, drift_patience 10, ATK_COND_DONE 50 = 바람 단독 이탈은 종료 안 함).
+#   보정 근거(track 고정·ws<6, capture_drift): 발화율 평시 0/20 · 약(0.15–0.30) 0/15 · 전이(0.30–0.70) 1/11(9%) · 강(0.70–0.80) 12/18(67%)
+#                                              온셋→종료 지연 중앙 12스텝(강, 범위 9–18) / 14스텝(전이)
+#   ⇒ ploc 는 위 발화율을 δ 의 함수로 재현하고, dead_uniform 은 "미선언 track 노출 8–12스텝", lag 는 실측 9–18스텝.
+#   surrogate_knn.yaml **뒤에** 붙인다:  --config configs/newenv_v4.yaml --config configs/overlays/surrogate_knn.yaml --config configs/overlays/done_drift.yaml
+env:
+  surrogate:
+    crash:
+      lethal_delta: 0.30          # δ<0.30 은 PX4 가 흡수(실측 약·평시 발화 0)
+      ploc_delta: [0.30, 0.60, 0.70, 0.80]
+      ploc_prob:  [0.00, 0.05, 0.40, 0.95]   # 전이 평균 ≈0.08(실측 0.09) · 강 평균 ≈0.68(실측 0.67)
+      plateau_curve: false
+      dead_mode: uniform
+      dead_uniform: [8, 12]       # 미선언 track 노출 누적 [스텝]
+      lag: [9, 18]                # 온셋 → 종료 [스텝] (실측)
+      ploc_tiers: {}
+      dead_tiers: {}

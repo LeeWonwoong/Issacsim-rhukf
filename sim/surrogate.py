@@ -57,6 +57,32 @@ class SurrogateConfig:
     # ── k-NN 재생(풀 format=knn_v1, Isaac 실측 원시 NIS): 조건 = δ 이력·공격 종료 후 경과·직전 행동과 유지·풍속 ──
     knn_k: int = 32
     knn_rho_atk: float = 0.7           # 공격 중 조건부 잔차의 시간 상관(추세는 조건 특징이 설명) — 검증으로 보정
+    # ★09-23 정합수정 F3 — 에피소드 임의효과. Isaac 평시 gyro 분산의 42%(z 단위 55%)가 에피소드 단위
+    #   잠재변수(COM 편향 추첨·바람 방향·초기 트림)인데 k=32 이웃이 32개 서로 다른 에피에서 와 평균으로 날아갔다.
+    #   증거: 에피 오프셋 십분위별 이웃범위 이탈률 0.017→0.492 완전 단조, 오프셋을 알면 0.245→0.042.
+    #   z = m + a 로 두고 m 은 에피 상수, a 는 AR(1). 주변분포 N(0,1) 을 보존하도록 a 의 정상 sd = √(1−sd_m²).
+    knn_ep_off_g: float = 0.0          # 실측 0.745 (0 = 끔)
+    knn_ep_off_v: float = 0.0          # 실측 0.345
+    knn_ep_off_corr: float = 0.461     # corr(m_g, m_v) 실측
+    # ★09-23 정합수정 F6 — 채널별 ρ. 구 코드는 평시 ρ 를 풀 파일에서 읽어 설정 불가였고(52–54행이 죽은 값),
+    #   공격 중은 두 채널에 같은 knn_rho_atk 를 썼다. 실측 목표 ACF1: 공격 gyro 0.952 / vel 0.703.
+    knn_rho_g_atk: float = 0.0         # 0 = knn_rho_atk 사용
+    knn_rho_v_atk: float = 0.0
+    knn_rho_g_cln: float = 0.0         # 0 = 풀 파일 값 사용
+    knn_rho_v_cln: float = 0.0
+    # ★09-23 정합수정 F7 — 사건 수준 랜덤효과. 강제 재생에서 공격 구간 실현 sd 가 Isaac 대비
+    #   전이 0.78 · 강 0.57 배로 너무 좁았다(이웃이 희소해 코퓰러가 좁은 구간만 훑는다).
+    #   실측 사건 ICC ≈ 0.45, 사건 총 z-SD 1.3–1.4. 사건 온셋에서 ζ 를 뽑아 사건 내내 유지한다.
+    knn_atk_sd: float = 1.0            # 공격 중 코퓰러 z 의 총 sd (1.0 = 끔). 채널별 값이 0 이면 이 값을 쓴다
+    knn_atk_sd_g: float = 0.0          # ★09-23 P0-c: 채널 분리(실측 사건 피크 sd gyro 0.654 / vel 1.078 — 공유는 틀렸다)
+    knn_atk_sd_v: float = 0.0
+    knn_ev_icc: float = 0.45           # 그중 사건 상수 성분의 분산 비중
+    # ★09-23 P0-c 평시 코퓰러: 단일 AR(1) 로는 lag1 과 lag10 을 동시에 못 맞춘다.
+    #   실측 적합(5 lag 오차 ≤0.01): gyro = 너겟 0.15 + AR(0.73)·0.44 + AR(0.961)·0.41
+    #                                vel  = 너겟 0.27 + AR(0.930)·0.73
+    #   모든 가중이 0 이면 구 단일 AR(1) 경로(비트 동일)를 쓴다.
+    knn_c2_g: Tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)   # (nugget, w1, rho1, w2, rho2)
+    knn_c2_v: Tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)
     crash: CrashConfig = field(default_factory=CrashConfig)
 
     def __post_init__(self):
@@ -69,15 +95,25 @@ _BASE = ['track_clean', 'hover_entry', 'hover_settled', 'post_track', 'post_hove
         [f'{h}_atk_b{i}' for h in ('track', 'hover') for i in range(8)] + [f'{h}_atk_s{i}' for h in ('track', 'hover') for i in range(3)]
 _POOL_CACHE: Dict[str, dict] = {}
 
+# ★09-23 정합수정 F4/F5 — 조건 특징의 포화 지점.
+#   SINCE_CAP 15→60: 공격 종료 16 스텝 뒤부터 '한 번도 공격 없던 평시'와 같은 질의점이 되던 결함.
+#     Isaac 실측 사후 잔류 gyro 는 since 61–98 에서도 평시의 2.16 배이고 에피 끝까지 안 돌아온다.
+#     홀드아웃 행의 15.3%(16,769)가 진짜 평시와 뒤섞여 양쪽을 동시에 망치고 있었다.
+#   DWELL_CAP 5→12: 행동→관측 되먹임이 5 스텝에서 절단돼 정책이 상태분포를 못 움직였다
+#     (hover 비율 0→0.2 일 때 평시 관측 이동 Isaac +0.228 vs surrogate +0.045).
+#   거리 스케일은 나누기로 유지(각각 최대 15·6 기여) — 이웃 희석 없이 해상도만 올린다.
+SINCE_CAP = 60.0
+DWELL_CAP = 12.0
+
 
 def load_pool(cfg: SurrogateConfig) -> dict:
     key = (cfg.pool, cfg.pool_format, cfg.pool_compress, cfg.pool_clip)
     if key in _POOL_CACHE:
         return _POOL_CACHE[key]
     d = np.load(cfg.pool)
-    if 'format' in d.files and str(d['format']) == 'knn_v2':      # Isaac 실측 k-NN 풀
+    if 'format' in d.files and str(d['format']) in ('knn_v2', 'knn_v3'):      # Isaac 실측 k-NN 풀 (v3 = +패턴 열)
         X = np.asarray(d['X'], float); rho = json.loads(str(d['rho']))
-        Q = dict(_knn=True, X=X, rho=rho, _tiers=[], _has_s=False, _format='knn_v2')
+        Q = dict(_knn=True, X=X, rho=rho, _tiers=[], _has_s=False, _format=str(d['format']), _has_pat=(str(d['format']) == 'knn_v3' and X.shape[1] >= 12))
         _POOL_CACHE[key] = Q
         return Q
     fmt = cfg.pool_format
@@ -128,9 +164,21 @@ def _phi(z):
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
 
+_IQ_GRID: Dict[int, np.ndarray] = {}
+
+
 def _iq(S, u):
-    i = int(u * (len(S) - 1))
-    return float(S[min(max(i, 0), len(S) - 1)])
+    """★09-23 정합수정 F1: 구 `i = int(u*(k-1))` 는 최상위 순서통계량 S[k-1] 을 영원히 못 뽑아
+    (u=1 필요) 재생분포가 '하위 k-1 개 위의 이산 균등'이 됐다. 실측 왜곡: 평균 −30% · 분산 −73% ·
+    >p99 꼬리 6.7배 과소. 표준 plug-in 경험분위(중점 보간)로 교체 — 무편향, 분산 (k−1)/k."""
+    k = len(S)
+    if k <= 1:
+        return float(S[0]) if k else 0.0
+    g = _IQ_GRID.get(k)
+    if g is None:
+        g = (np.arange(k) + 0.5) / k
+        _IQ_GRID[k] = g
+    return float(np.interp(u, g, S))
 
 
 def _tier_curve(tiers: Dict[int, List[float]], ws: int, outer: bool):
@@ -156,18 +204,31 @@ class SurrogateEnv:
         self.ep_idx = -1
         self.knn = bool(self.Q.get('_knn'))
         if self.knn:
-            X = self.Q['X']                                # [d0,d1,d3,d6,since_end,act,dwell,ws,dlast,nis_v,nis_g]
-            self._F = self._feat(X[:, 0], X[:, 1], X[:, 2], X[:, 3], X[:, 4], X[:, 5], X[:, 6], X[:, 7], X[:, 8])
+            X = self.Q['X']                                # [d0,d1,d3,d6,since_end,act,dwell,ws,dlast,nis_v,nis_g(,pat)]
+            self._has_pat = bool(self.Q.get('_has_pat'))
+            self._F = self._feat(X[:, 0], X[:, 1], X[:, 2], X[:, 3], X[:, 4], X[:, 5], X[:, 6], X[:, 7], X[:, 8], X[:, 11] if self._has_pat else None)
+            self.pat = 0
             self._V, self._G = X[:, 9], X[:, 10]
             self._nn_cache = {}
+            self._kdt = None                                   # ★09-23 풀 v2(758k)에서 전수탐색이 3.5 ms/스텝 병목 → KD-트리(같은 유클리드 거리 = 같은 이웃)
+            if len(self._F) > 200000:
+                try:
+                    from scipy.spatial import cKDTree
+                    self._kdt = cKDTree(np.ascontiguousarray(self._F), balanced_tree=False, compact_nodes=False)
+                except Exception:
+                    self._kdt = None
 
     @staticmethod
-    def _feat(d0, d1, d3, d6, since, act, dwell, ws, dlast):
+    def _feat(d0, d1, d3, d6, since, act, dwell, ws, dlast, pat=None):
         """k-NN 거리 척도: δ 0.05 = 1, 공격 종료 후 1 스텝 = 1(15 에서 포화), 행동 불일치 = 100(사실상 정확 일치),
         유지 1 스텝 = 1(5 에서 포화), 풍속 2 m/s = 1, 직전 사건 최대 세기 0.05 = 1(공격 종료 후 15 스텝 동안만 의미)."""
-        since = np.asarray(since, float); dl = np.where(since <= 15, np.asarray(dlast, float), 0.0)
-        return np.c_[np.asarray(d0) / 0.05, np.asarray(d1) / 0.05, np.asarray(d3) / 0.05, np.asarray(d6) / 0.05,
-                     np.minimum(since, 15), np.asarray(act) * 100.0, np.minimum(dwell, 5), np.asarray(ws) / 2.0, dl / 0.05]
+        since = np.asarray(since, float); dl = np.where(since <= SINCE_CAP, np.asarray(dlast, float), 0.0)
+        F = np.c_[np.asarray(d0) / 0.05, np.asarray(d1) / 0.05, np.asarray(d3) / 0.05, np.asarray(d6) / 0.05,
+                  np.minimum(since, SINCE_CAP) / (SINCE_CAP / 15.0), np.asarray(act) * 100.0,
+                  np.minimum(dwell, DWELL_CAP) / (DWELL_CAP / 6.0), np.asarray(ws) / 2.0, dl / 0.05]
+        if pat is not None:                                # ★09-22 v3 풀: 기동 패턴 불일치 = 1000(사실상 같은 패턴 안에서만 이웃)
+            F = np.c_[F, np.asarray(pat, float) * 1000.0]
+        return F
 
     # ── 에피소드 ─────────────────────────────────────────────────────────────
     def reset(self, plan: Optional[AttackPlan] = None, ws: Optional[float] = None):
@@ -175,7 +236,7 @@ class SurrogateEnv:
         if self.reseed:
             self.rng = np.random.default_rng([self.seed0 & 0xFFFFFFFF, self.ep_idx + 1])
         self.ep_idx += 1
-        n, rng, cc = self.ep_steps, self.rng, self.cfg.crash
+        n, rng, cc, c_ = self.ep_steps, self.rng, self.cfg.crash, self.cfg
         self.t = 0; self.crashed = False
         w = sample_wind(rng, self.wcfg, self.ep_idx) if ws is None else ws   # ep_idx: 0 기준(축 B 스케줄)
         av = self.Q['_tiers']
@@ -184,7 +245,18 @@ class SurrogateEnv:
         self.ws = wi; self.sfx = f'_ws{wi}' if wi > 0 else ''
         if self.knn:
             self.ws = float(w); self._act_prev = None; self._act_dwell = 0; self._last_atk = None; self._dlast = 0.0
-        self.sg = rng.normal(); self.sv = rng.normal()
+        # ★09-23 F3: 에피소드 임의효과 m 을 먼저 뽑고, AR(1) 잔차 a 는 √(1−sd_m²) 로 줄여 주변분포를 보존한다.
+        og, ov, rc = float(c_.knn_ep_off_g), float(c_.knn_ep_off_v), float(c_.knn_ep_off_corr)
+        if og > 0 or ov > 0:
+            z1, z2 = rng.normal(), rng.normal()
+            self.mg = og * z1
+            self.mv = ov * (rc * z1 + math.sqrt(max(0.0, 1.0 - rc * rc)) * z2)
+            # ★09-23 P0-b: 가산형. AR 잔차를 깎지 않는다(구 축소형은 에피내 분산을 25% 잃었다).
+            self._sag = self._sav = 1.0
+        else:
+            self.mg = self.mv = 0.0; self._sag = self._sav = 1.0
+        self.sg = self._sag * rng.normal(); self.sv = self._sav * rng.normal()
+        self.sg2 = rng.normal(); self.sv2 = rng.normal()     # ★09-23 P0-c 2성분 코퓰러의 느린 성분
         self.plan = sample_attack(rng, self.acfg, n) if plan is None else plan
         dm = self.plan.dmax
         self.lethal = self.plan.has_attack and dm >= cc.lethal_delta
@@ -212,6 +284,8 @@ class SurrogateEnv:
         sh = getattr(self.wcfg, 'shift', None)
         if self.knn and sh and rng.random() < float(sh.get('p', 1.0)):
             self._t_shift = int(rng.integers(int(sh['t'][0]), int(sh['t'][1]) + 1)); self._ws2 = float(rng.uniform(*sh['range']))
+        if self.knn and getattr(self, '_has_pat', False):   # ★09-22 v3 풀: 에피마다 기동 패턴 추첨(Isaac 과 같이 5패턴 균등) — 맨 끝이라 앞 난수 불변
+            self.pat = int(rng.integers(0, 5))
         return self
 
     def _bin(self, d): return min(7, max(0, int((d - 0.1) / 0.1)))
@@ -246,21 +320,64 @@ class SurrogateEnv:
             if self._doom is not None and t >= self._doom:
                 self.crashed = True
         ws_now = self._ws2 if (self._t_shift is not None and tt >= self._t_shift) else self.ws   # ★09-20 중간 전환 반영
-        q = self._feat(dl(0), dl(1), dl(3), dl(6), since, prev_action, self._act_dwell, ws_now, self._dlast)[0]
-        key = tuple(np.round(q, 1))
+        q = self._feat(dl(0), dl(1), dl(3), dl(6), since, prev_action, self._act_dwell, ws_now, self._dlast, self.pat if getattr(self, '_has_pat', False) else None)[0]
+        key = (c.knn_k,) + tuple(np.round(q, 1))   # ★09-23 P0-a 버그수정: k 가 키에 없어 k 변경이 조용히 무시됐다
         nn = self._nn_cache.get(key)
         if nn is None:
-            dist = ((self._F - q) ** 2).sum(1)
-            idx = np.argpartition(dist, c.knn_k)[:c.knn_k]
+            if getattr(self, '_kdt', None) is not None:
+                idx = self._kdt.query(q, k=c.knn_k, workers=1)[1]
+            else:
+                dist = ((self._F - q) ** 2).sum(1)
+                idx = np.argpartition(dist, c.knn_k)[:c.knn_k]
             nn = (np.sort(self._V[idx]), np.sort(self._G[idx]))
             if len(self._nn_cache) < 200000: self._nn_cache[key] = nn
         rho = self.Q['rho']
-        rg = c.knn_rho_atk if a else rho.get('rho_g_cln', 0.5)
-        rv = c.knn_rho_atk if a else max(rho.get('rho_v_cln', 0.0), 0.0)
-        self.sg = rg * self.sg + math.sqrt(1 - rg * rg) * rng.normal()
-        self.sv = rv * self.sv + math.sqrt(1 - rv * rv) * rng.normal()
+        if a:                                                   # ★09-23 F6: 공격 중도 채널별
+            rg = c.knn_rho_g_atk or c.knn_rho_atk
+            rv = c.knn_rho_v_atk or c.knn_rho_atk
+        else:
+            rg = c.knn_rho_g_cln or rho.get('rho_g_cln', 0.5)
+            rv = c.knn_rho_v_cln or max(rho.get('rho_v_cln', 0.0), 0.0)
+        # ★09-23 F7: 사건 온셋에서 사건 상수 ζ 추첨, 사건 내내 유지(종료 시 해제)
+        T = float(c.knn_atk_sd)
+        if a:
+            if not getattr(self, '_in_ev', False):
+                self._in_ev = True
+                ic = math.sqrt(max(0.0, c.knn_ev_icc))
+                self._evg = (c.knn_atk_sd_g or T) * ic * rng.normal()
+                self._evv = (c.knn_atk_sd_v or T) * ic * rng.normal()
+            vm = getattr(self, 'mg', 0.0) ** 2
+            sar = math.sqrt(max(0.0, (1.0 - c.knn_ev_icc) * T * T - vm))
+        else:
+            self._in_ev = False; self._evg = self._evv = 0.0
+            sar = None
+        c2g, c2v = c.knn_c2_g, c.knn_c2_v
+        if (not a) and (c2g[1] or c2g[3]):            # ★09-23 P0-c 평시 2성분 (공격 중은 기존 경로)
+            self.sg = c2g[2] * self.sg + math.sqrt(1 - c2g[2] ** 2) * rng.normal()
+            self.sg2 = c2g[4] * self.sg2 + math.sqrt(1 - c2g[4] ** 2) * rng.normal()
+            zg = c2g[0] * rng.normal() + c2g[1] * self.sg + c2g[3] * self.sg2
+        else:
+            sag = sar if sar is not None else getattr(self, '_sag', 1.0)
+            if a and (c.knn_atk_sd_g or c.knn_atk_sd):
+                T_g = c.knn_atk_sd_g or c.knn_atk_sd
+                sag = math.sqrt(max(0.0, (1.0 - c.knn_ev_icc) * T_g * T_g - getattr(self, 'mg', 0.0) ** 2))
+            self.sg = rg * self.sg + sag * math.sqrt(1 - rg * rg) * rng.normal()
+            zg = self.sg
+        if (not a) and (c2v[1] or c2v[3]):
+            self.sv = c2v[2] * self.sv + math.sqrt(1 - c2v[2] ** 2) * rng.normal()
+            self.sv2 = c2v[4] * self.sv2 + math.sqrt(1 - c2v[4] ** 2) * rng.normal()
+            zv = c2v[0] * rng.normal() + c2v[1] * self.sv + c2v[3] * self.sv2
+        else:
+            sav = sar if sar is not None else getattr(self, '_sav', 1.0)
+            if a and (c.knn_atk_sd_v or c.knn_atk_sd):
+                T_v = c.knn_atk_sd_v or c.knn_atk_sd
+                sav = math.sqrt(max(0.0, (1.0 - c.knn_ev_icc) * T_v * T_v - getattr(self, 'mv', 0.0) ** 2))
+            self.sv = rv * self.sv + sav * math.sqrt(1 - rv * rv) * rng.normal()
+            zv = self.sv
         self._deadline(a, prev_action == 1)
-        return _iq(nn[0], _phi(self.sv)), _iq(nn[1], _phi(self.sg)), a
+        # ★09-23 F3/F7: 코퓰러 위치 = 에피 오프셋 + 사건 효과 + AR(1) 잔차
+        return (_iq(nn[0], _phi(zv + getattr(self, 'mv', 0.0) + getattr(self, '_evv', 0.0))),
+                _iq(nn[1], _phi(zg + getattr(self, 'mg', 0.0) + getattr(self, '_evg', 0.0))), a)
 
     def _deadline(self, a: bool, hov: bool):
         """★09-21 선언 마감: 공격 활성 스텝에서 track 이면 연속 미선언 +1, hover 면 0; 비활성이면 0. L 에 이르면 종료(crashed 경로 재사용, 기본 L=0 끔)."""

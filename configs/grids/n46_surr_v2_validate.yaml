@@ -1,0 +1,13 @@
+# 09-22 19:55 surrogate v2 정합 검증: Isaac s42 에서 본 순위(SWIRL B 0.782 > B-ui1 0.641 > A′ 0.575, Adam 0.792 ≈ B)를 v2 풀이 재현하는가.
+#   v5 무대, 시드 42, CPU. v2 = pool_knn_v2 + knn_rho_atk 0.85 / v1 = 기존 풀(대조; B·Adam 은 n45 s42 에 있음 0.871/0.847).
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n46_surr_v2_validate
+seeds: [42]
+stages: {a: {}}
+learners:
+  v2s: {device: cpu, set: {agent.type: swirl, run.device: cpu, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.q: 1.0e-3, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, env.surrogate.pool: results/claudecodefortest/pools/pool_knn_v2.npz, env.surrogate.knn_rho_atk: 0.85},
+        axes: {k: [{_name: B, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.02, agent.update_interval: 4}, {_name: Bui1, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.005, agent.update_interval: 1}, {_name: A2, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.05, agent.tau: 0.005, agent.update_interval: 1, agent.swirl.R: 2.0}]}}
+  v2a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, env.surrogate.pool: results/claudecodefortest/pools/pool_knn_v2.npz, env.surrogate.knn_rho_atk: 0.85},
+        axes: {agent.batch: [256]}}
+  v1s: {device: cpu, set: {agent.type: swirl, run.device: cpu, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.q: 1.0e-3, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+        axes: {k: [{_name: Bui1, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.005, agent.update_interval: 1}, {_name: A2, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.05, agent.tau: 0.005, agent.update_interval: 1, agent.swirl.R: 2.0}]}}

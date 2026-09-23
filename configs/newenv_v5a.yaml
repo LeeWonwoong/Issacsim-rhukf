@@ -1,0 +1,13 @@
+# configs/newenv_v5a.yaml — v5 + "정보 있는 약공격" 변형 (09-22 사용자 지시 ④): 약 persistent 성장 스텝 3–6 → 2–4, 클래스 가중 약 0.30 / 전이 0.40 / 강 0.30.
+#   나머지(밴드·δ 0.80 클립·보상 (1,1.5,1.5,4)·바람 U(0,7))는 v5 와 동일.
+extends: newenv_v5.yaml
+run: {name: newenv_v5a}
+scenario:
+  attack:
+    classes:
+      - {name: weak_burst,     weight: 0.15,  delta: [0.15, 0.30], kind: burst,      dur: [4, 8]}
+      - {name: weak_persist,   weight: 0.15,  delta: [0.15, 0.30], kind: persistent, dur: [15, 30], grow: [1.8, 2.2], grow_steps: [2, 4]}
+      - {name: trans_burst,    weight: 0.20,  delta: [0.30, 0.70], kind: burst,      dur: [4, 8]}
+      - {name: trans_persist,  weight: 0.20,  delta: [0.30, 0.70], kind: persistent, dur: [15, 30], grow: [1.3, 1.5], grow_steps: [3, 6]}
+      - {name: strong_burst,   weight: 0.15,  delta: [0.70, 0.80], kind: burst,      dur: [4, 8]}
+      - {name: strong_persist, weight: 0.15,  delta: [0.70, 0.80], kind: persistent, dur: [25, 40]}

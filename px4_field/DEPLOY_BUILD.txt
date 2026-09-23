@@ -1,0 +1,77 @@
+══════════════════════════════════════════════════════════════════════════════
+ DEPLOY_BUILD.txt — 빌드·배포 (GPU 서버 → USB → 노트북 → 젯슨)  ※ 현장 사용 명령은 FLIGHT_RUN.txt
+══════════════════════════════════════════════════════════════════════════════
+ 사용자: GPU 서버·노트북 = acsl / 젯슨 오린나노 = quad.  망: 서버 = 학교 와이파이, 노트북–젯슨 = 핸드폰 핫스팟.
+ 젯슨 설치 위치: ~/swirl_field/ (env · calibration · configs · etc · px4_field)   ← px4_field 만 옮기면 안 됨(env/configs 필요)
+
+──────────────────────────────────────────────────────────────────────────────
+ 1. [GPU 서버, acsl] 모델 export → 패키지 → USB(라벨 00A3-D44E)
+──────────────────────────────────────────────────────────────────────────────
+  cd ~/projects/Issacsim-rhukf
+  # (새 학습 결과가 있을 때) .pt → npz
+  python3 px4_field/export_policy.py results/claudecodefortest/isaac_v7/swirlB_s42/final_model.pt px4_field/models/swirl_v5B_s42.npz
+  # 패키지 갱신 (env·calibration·configs·px4_field 코드·models·매뉴얼 → ~/swirl_field_pkg)
+  PKG=~/swirl_field_pkg bash px4_field/deploy_jetson.sh
+  rm -rf ~/swirl_field_pkg/px4_field/__pycache__ ~/swirl_field_pkg/env/__pycache__
+  ls ~/swirl_field_pkg/px4_field/models/
+  # USB 마운트(서버는 자동 마운트가 안 됨) → 복사 → 안전 제거
+  sudo mkdir -p /media/acsl/usb
+  sudo mount -o uid=$(id -u),gid=$(id -g) /dev/sda1 /media/acsl/usb        # lsblk 로 sda1 인지 확인
+  rm -rf /media/acsl/usb/swirl_field_pkg
+  cp -r ~/swirl_field_pkg /media/acsl/usb/ && sync
+  ls /media/acsl/usb/swirl_field_pkg/px4_field/models/
+  sudo umount /media/acsl/usb                                              # ★ 뒤에 뽑는다
+  #   (콘솔에 앉아 있으면: udisksctl mount -b /dev/sda1 → /media/acsl/00A3-D44E/ 에 복사 → udisksctl unmount -b /dev/sda1)
+
+──────────────────────────────────────────────────────────────────────────────
+ 2. [노트북, acsl] USB → ~/Downloads → 젯슨 quad@172.20.10.4:~/swirl_field  (처음 또는 코드가 바뀐 경우)
+──────────────────────────────────────────────────────────────────────────────
+  ls /media/acsl/00A3-D44E/swirl_field_pkg/px4_field/models/                # USB 자동 마운트 확인
+  rm -rf ~/Downloads/swirl_field_pkg
+  cp -r /media/acsl/00A3-D44E/swirl_field_pkg ~/Downloads/
+  ssh-copy-id quad@172.20.10.4                                              # (한 번) 비밀번호 반복 방지
+  ssh quad@172.20.10.4 'mv ~/px4_field ~/px4_field_old_0922 2>/dev/null; rm -rf ~/swirl_field'
+  scp -r ~/Downloads/swirl_field_pkg quad@172.20.10.4:~/swirl_field
+  ssh quad@172.20.10.4 'ls ~/swirl_field; ls ~/swirl_field/px4_field/models'
+  #   → env  calibration  configs  etc  px4_field   /   swirl_v2_s42.npz  swirl_v5B_s42.npz ...
+  #   (rsync 가 있으면 전체 재설치 대신:  rsync -av --delete ~/Downloads/swirl_field_pkg/ quad@172.20.10.4:~/swirl_field/ )
+
+──────────────────────────────────────────────────────────────────────────────
+ 3. [노트북 → 젯슨] 파일 몇 개만 갱신 (모델 / 그림 스크립트 / 노드)
+──────────────────────────────────────────────────────────────────────────────
+  cd ~/Downloads/swirl_field_pkg/px4_field
+  scp models/swirl_v5B_s42.npz                       quad@172.20.10.4:~/swirl_field/px4_field/models/
+  scp plot_obs_live.py plot_policy_log.py             quad@172.20.10.4:~/swirl_field/px4_field/
+  scp f13_policy.py nis_from_ulog.py                  quad@172.20.10.4:~/swirl_field/px4_field/
+  scp FLIGHT_RUN.txt DEPLOY_BUILD.txt                 quad@172.20.10.4:~/swirl_field/px4_field/
+  # 실행 시 --model models/<파일>.npz 만 바꾼다.
+
+──────────────────────────────────────────────────────────────────────────────
+ 4. [젯슨] 의존성 확인·문제 해결 (처음 한 번)
+──────────────────────────────────────────────────────────────────────────────
+  source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash
+  python3 -c "import numpy, rclpy, yaml, pymavlink; import px4_msgs.msg; print('OK', numpy.__version__)"
+  sudo usermod -aG dialout quad          # (한 번, 재로그인) FC USB /dev/ttyACM0 권한. 급하면 sudo chmod 666 /dev/ttyACM0
+  # ▶ ModuleNotFoundError: pyulog   → pip3 install --no-deps pyulog   (ulog 판정용. f13 자체는 없어도 뜸)
+  # ▶ numpy.core.multiarray failed to import → pip 가 numpy 2 를 올린 것:
+  #      pip3 uninstall -y numpy ; python3 -c "import numpy; print(numpy.__version__, numpy.__file__)"  → 1.2x /usr/lib/...
+  #      (없으면 sudo apt install python3-numpy). pip 로는 항상 --no-deps 또는 "numpy<2".
+  # ▶ 그림 창이 안 뜸 → DISPLAY 없음: ssh -X 로 접속하거나 노트북에서 그린다(FLIGHT_RUN.txt §3)
+
+──────────────────────────────────────────────────────────────────────────────
+ 5. [젯슨] 벤치 검증 (프로펠러 제거) — 새 모델 올린 직후 한 번
+──────────────────────────────────────────────────────────────────────────────
+  cd ~/swirl_field/px4_field; source /opt/ros/humble/setup.bash; source ~/colcon_ws/install/setup.bash
+  ros2 topic hz /fmu/out/sensor_combined                        # DDS (에이전트 systemd 자동)
+  python3 f13_policy.py --model models/swirl_v5B_s42.npz --pattern circle --attack rc --fs-url /dev/ttyACM0 \
+          --atk-aux-tq 0 --atk-tq-max 0.5 --bench --no-fetch [--fake-gps]
+  #  실내(GPS 픽스 없음)면 --fake-gps 를 붙인다(위치·속도 0, gyro 만 유효). 실비행엔 절대 금지.
+  #  확인 3가지: "UKF 초기화" 로그 · CSV 의 ukf_ms < 40 · VRA on 때 CSV delta = 0.5
+  #  벤치 한계: 노브 공격은 모터만 바꾸고 NIS 는 안 뜸 → 손으로 10~20° 기울여 hover 선언 확인 (FIELD_COMMANDS.txt §7b)
+
+──────────────────────────────────────────────────────────────────────────────
+ 6. [실험 뒤] 로그 회수·분석
+──────────────────────────────────────────────────────────────────────────────
+  [노트북] scp -r quad@<젯슨IP>:~/swirl_field/px4_field/field_logs ~/Downloads/field_logs_$(date +%m%d)
+           scp -r quad@<젯슨IP>:~/swirl_field/px4_field/ulog_* ~/Downloads/ 2>/dev/null
+  → USB → [서버] ~/projects/Issacsim-rhukf/results/claudecodefortest/field_logs_<날짜>/  (Claude 가 판독)

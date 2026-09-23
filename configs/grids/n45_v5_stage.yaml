@@ -1,0 +1,12 @@
+# 09-22 14:00 사용자 확정 무대 v5(v2 공격+성장, δ 상한 0.80 버그 수정, 보상 (1,1.5,1.5,4), 바람 U(0,7)) 에서 SWIRL vs Adam surrogate 3시드.
+#   SWIRL 후보 2: A = pΔ0.05·α0.05·ui1·τ0.005 (K 를 v2 수준으로 앉히는 제안), B = pΔ0.01·α0.1·ui4·τ0.02 (Isaac v2 검증본). R1·q1e-3·N6·B256.
+#   Adam 3e-4·β5·clip10·ui1·τ0.005·B256(같은 batch).
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n45_v5_stage
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.q: 1.0e-3, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {k: [{_name: A_pd05, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.05, agent.tau: 0.005, agent.update_interval: 1}, {_name: B_v2, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.02, agent.update_interval: 4}]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16},
+      axes: {agent.batch: [256]}}

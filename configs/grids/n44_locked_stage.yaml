@@ -1,0 +1,13 @@
+# 09-22 12:45 확정 무대(사용자 12:30 조건: 정수 보상 (1,2,3,10)·R1·B256·바람 U(0,7)·v4 공격) 에서 4학습기 surrogate 3시드.
+#   SWIRL 저-K(v2 노브 pΔ0.01·α0.1·ui4·τ0.02, Isaac 검증본) / 저-K·ui1(pΔ0.01·α0.1·ui1·τ0.005) / 현 노브(pΔ0.1·α0.05·ui1·τ0.005) / Adam 3e-4·β5·clip10 / EKF·UKF 표준판(act=active·P 지속, SWIRL 저-K 와 같은 노브, n1_ktd_std 방식).
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n44_locked_stage
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.batch: 256, agent.hidden: [24, 24], agent.swirl.N: 6, agent.swirl.q: 1.0e-3, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.range: [0.0, 7.0]},
+      axes: {k: [{_name: lowK, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.02, agent.update_interval: 4}, {_name: lowKui1, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.tau: 0.005, agent.update_interval: 1}, {_name: cur, agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, agent.tau: 0.005, agent.update_interval: 1}]}}
+  k: {device: gpu, set: {run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.act: active, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.q: 1.0e-3, agent.tau: 0.02, agent.update_interval: 4, agent.batch: 256, agent.hidden: [24, 24], agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.range: [0.0, 7.0]},
+      axes: {agent.type: [ekf, ukf]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 256, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.range: [0.0, 7.0]},
+      axes: {agent.batch: [256]}}

@@ -1,0 +1,9 @@
+# 09-22 02:50 사용자 지시: pΔ0.1 에서 SWIRL batch 128 × N {10,12}, Adam 도 batch 128 → n40 U(0,9)(B256·N6 / Adam B256) 와 비교해 최선으로 Isaac 3시드.
+#   바람 U(0,9)(02:45 결정), v4·정수보상, 2시드(42·43). 판정 규칙: SWIRL greedy F1 2시드 평균 최대(동률이면 FA 에피 낮은 쪽), Adam 은 SWIRL 과 같은 batch(공정 비교).
+base: [configs/newenv_v4.yaml, configs/overlays/surrogate_knn.yaml]
+outdir: results/claudecodefortest/n41_batch128
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, log.eval_n: 100, agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.tau: 0.005, agent.update_interval: 1, agent.batch: 128, agent.hidden: [24, 24], agent.swirl.p_delta: 0.1, agent.swirl.alpha: 0.05, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.range: [0.0, 9.0]}, axes: {agent.swirl.N: [10, 12]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, log.eval_n: 100, agent.batch: 128, agent.hidden: [24, 24], agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, log.probe_every: 5, log.probe_n: 16, reward.scale: 1.0, reward.alive: 1.0, reward.c_fa: 2.0, reward.c_d: 3.0, reward.bonus: 10.0, reward.terminal_penalty: 0.0, scenario.wind.range: [0.0, 9.0]}, axes: {agent.batch: [128]}}

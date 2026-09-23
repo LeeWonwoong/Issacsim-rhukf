@@ -1,8 +1,10 @@
+# configs/overlays/surrogate_knn_v2.yaml — surrogate 재정합 v2 (09-22). surrogate_knn.yaml 과 풀·knn_rho_atk 만 다르다.
 # surrogate k-NN(Isaac 실측) 덮어쓰기 — 실험 설정 뒤에 --config 로 붙인다
 env:
   kind: surrogate
   surrogate:
-    pool: results/claudecodefortest/pools/pool_knn_v1.npz     # v1: 분기·Adam 학습·풀 A·B (167k 행)
+    pool: results/claudecodefortest/pools/pool_knn_v2.npz     # ★v2(09-22): 구 658ep + 오늘 Isaac v4/v5/v7 ≈2,400ep, 기동 패턴 열(knn_v3) — 에피마다 패턴 추첨·패턴 일치 이웃만
+    knn_rho_atk: 0.85          # ★v2: 공격 중 코퓰러 시간상관 0.7 → 0.85 (풀 측정 0.96 은 추세 포함이라 중간값; Isaac 순위 재현으로 검증)
     # 추락: Isaac 실측 보정 (09-18). δ≥0.7 공격을 20스텝+ track 으로 버틴 사건 52건 중 추락 2건
     # (δ 0.82 노출 27 스텝 · δ 0.84 노출 32 스텝, 둘 다 crash_drift), δ<0.80 은 0/12.
     # 구 곡선(δ0.78 에서 p≈0.95)은 Isaac 보다 훨씬 치명적이었다.

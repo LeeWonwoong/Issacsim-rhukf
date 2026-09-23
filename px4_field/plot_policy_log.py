@@ -70,24 +70,52 @@ def main():
     ap.add_argument('csv', nargs='?'); ap.add_argument('--latest', help='폴더에서 가장 새 f13_policy_*.csv')
     ap.add_argument('--live', action='store_true'); ap.add_argument('--out', default=None); ap.add_argument('--every', type=float, default=0.5)
     a = ap.parse_args()
-    path = a.csv or sorted(glob.glob(os.path.join(a.latest, 'f13_policy_*.csv')), key=os.path.getmtime)[-1]
+    def latest():
+        fs = sorted(glob.glob(os.path.join(a.latest or 'field_logs', 'f13_policy_*.csv')), key=os.path.getmtime)
+        return fs[-1] if fs else None
+    path = a.csv or latest()
+    if path is None: sys.exit('f13_policy_*.csv 없음')
     import matplotlib
     if a.out and not a.live: matplotlib.use('Agg')
+    else:
+        for _bk in ('TkAgg', 'Qt5Agg', 'GTK3Agg'):      # ★ 화면 백엔드를 명시적으로 고른다(ssh -X 에서 Agg 로 떨어지는 것 방지)
+            try:
+                matplotlib.use(_bk); import matplotlib.pyplot as _plt; _plt.figure(); _plt.close('all'); break
+            except Exception:
+                continue
     import matplotlib.pyplot as plt
+    print('matplotlib backend:', matplotlib.get_backend())
+    if not a.out and matplotlib.get_backend().lower().startswith('agg'):   # ★09-22: DISPLAY 없이 띄우면 창이 안 뜨고 조용히 돈다
+        sys.exit('화면 백엔드 없음(DISPLAY 미설정) — ssh -X 로 접속하거나, 노트북에서 rsync 로 로그를 받아 그리거나, --out 파일로 저장하세요')
     from matplotlib import font_manager
     for f in font_manager.findSystemFonts():
         if 'NotoSansCJK' in f: font_manager.fontManager.addfont(f)
     plt.rcParams['font.family'] = ['Noto Sans CJK JP', 'DejaVu Sans']; plt.rcParams['axes.unicode_minus'] = False
     fig = plt.figure(figsize=(14, 7))
     if a.live:
-        plt.ion(); last = 0
-        while plt.fignum_exists(fig.number):
-            n = os.path.getsize(path)
-            if n != last:
-                d = load(path)
-                if d is not None: draw(fig, d, os.path.basename(path)); fig.canvas.draw_idle()
-                last = n
-            plt.pause(a.every)
+        from matplotlib.animation import FuncAnimation
+        st = {'path': path, 'last': -1}
+        def update(_frame):
+            try:
+                if not a.csv:
+                    p2 = latest()
+                    if p2 and p2 != st['path']: st['path'] = p2; st['last'] = -1
+                n = os.path.getsize(st['path'])
+                if n != st['last']:
+                    nrows = sum(1 for _ in open(st['path'])) - 1
+                    if nrows < 2:                              # ★ 노드가 아직 행을 안 씀(UKF 입력 대기 등) → 흰 창 대신 안내
+                        fig.clf(); fig.text(0.5, 0.5, f'로그 대기 중: {os.path.basename(st["path"])}\n행 {max(nrows, 0)} — 노드가 "UKF 초기화" 뒤 10 Hz 로 씁니다', ha='center', va='center', fontsize=12)
+                        print(f'로그 대기 중: {st["path"]} 행 {max(nrows, 0)}', flush=True); st['last'] = n; return []
+                    d = load(st['path'])
+                    if d is not None: draw(fig, d, os.path.basename(st['path']))
+                    st['last'] = n
+                    if not st.get('shown'): st['shown'] = True; print('첫 그림 완료:', os.path.basename(st['path']), '스텝', 0 if d is None else len(d['t']), flush=True)
+            except Exception as e:
+                print('갱신 건너뜀:', e)
+            return []
+        update(0)
+        anim = FuncAnimation(fig, update, interval=int(a.every * 1000), cache_frame_data=False)
+        plt.show()
         return
     d = load(path)
     if d is None: sys.exit('빈 로그')

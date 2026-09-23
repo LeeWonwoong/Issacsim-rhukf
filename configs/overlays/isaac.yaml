@@ -23,4 +23,4 @@ env:
       UKF_R_VEL: 0.1
       FAILSAFE_PARAMS: "MC_RR_INT_LIM=1.0,MC_PR_INT_LIM=1.0,MC_ROLLRATE_I=0.8,MC_PITCHRATE_I=0.8"
 scenario:
-  wind: {mode: uniform, range: [0.0, 6.0]}
+  wind: {mode: uniform}                       # ★09-22: range 는 무대 YAML 이 정한다

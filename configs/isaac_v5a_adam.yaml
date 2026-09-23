@@ -1,0 +1,11 @@
+# configs/isaac_v5a_adam.yaml — 확정 무대 v5 Isaac Adam 표준(lr 3e-4·β5·clip10·B256·ui1·τ0.005). SWIRL 과 같은 무대·보상·바람(newenv_v5).
+extends: newenv_v5a.yaml
+run: {name: isaac_v5a_adam, outdir: results/claudecodefortest/isaac_v8/adam_v5a_s42, seed: 42, episodes: 200, ep_steps: 300, device: cpu}
+agent:
+  type: adam
+  batch: 256
+  hidden: [24, 24]
+  tau: 0.005
+  update_interval: 1
+  adam: {lr: 3.0e-4, huber_beta: 5.0, grad_clip: 10.0}
+log: {steps: true, eval_n: 0}
