@@ -1,0 +1,31 @@
+# n66 — 09-24 밤샘 원격 격자 (n64·n65 를 하나로 합침: GPU 8 슬롯을 끊김 없이 쓰려고).
+#   ① P2′ 확인(sP·aP): 사용자 "LL 형태(P2′)는 잘 안 되면 굳이 하지 마" → λ4 한 칸만 10시드로 빠르게 본다.
+#      λ0 대조 = n63 c_sw0 (θ 채널은 NIS 에 영향 없음 → θ 를 켠 λ0 과 학습이 비트 동일, test_surrogate_theta) — 따로 안 돌린다.
+#      격차가 n63 c_sw0 대비 커지지 않으면 P2′ 는 접는다.
+#   ② Isaac 정합(sM·aM): Isaac 본선 SWIRL-M(pΔ0.01·α0.1·R0.5·N5·ui1·τ0.005·B256)을 surrogate 에 그대로 옮겨
+#      Isaac v12 짝을 재현하는지: 1316 보상(Isaac s42: ep100–149 F1 0.809 vs 0.540, F1≥0.8 도달 ep115 vs ep180) · v5 보상.
+#      정합 판정 = 격차 부호·크기·도달 에피 재현. 튜닝에는 쓰지 않는다.
+#   풀 v4clean(θ 채널, 코퓰러 = v12 1316 짝 적합) · 무대 v5 · 200 에피 · 10 시드 · Adam 표준 B128.
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n66_night_0924
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  sM: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                          agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                          agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 0.5, agent.swirl.N: 5, agent.swirl.q: 1.0e-3,
+                          agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+       axes: {rw: [{_name: r1316, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}, {_name: v5}]}}
+  sP: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                          agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.02, agent.update_interval: 4, agent.buffer: 50000,
+                          agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0, agent.swirl.N: 6, agent.swirl.q: 1.0e-3,
+                          agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+       axes: {reward.shape_tilt: [4.0]}}
+  aM: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                          agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                          agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+       axes: {rw: [{_name: r1316, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}, {_name: v5}]}}
+  aP: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                          agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                          agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+       axes: {reward.shape_tilt: [4.0]}}
