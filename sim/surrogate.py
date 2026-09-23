@@ -92,7 +92,9 @@ class SurrogateConfig:
     theta_k1: int = 1024
     theta_m: int = 32
     theta_abits_w: float = 4.0         # 행동 비트 1개 불일치 = 거리 4 (δ 0.2 차와 같음). 0 = 비트 조건 끔
-    theta_copula: Tuple[float, float, float, float, float] = (0.054, 0.159, 0.201, 0.787, 0.868)   # P2S J32a 적합값
+    # ★09-24 코퓰러 우선순위: 설정 명시값 > 풀 npz 저장값(scripts/fit_theta_copula.py fit --write) > J32a 기본값(경고).
+    #   J32a = P2S p6_joint 32a 적합값(타이밍 수정 전 v2clean 풀·Isaac 홀드아웃 run2 한 런) — 새 풀엔 다시 적합할 것.
+    theta_copula: Optional[Tuple[float, float, float, float, float]] = None
     crash: CrashConfig = field(default_factory=CrashConfig)
 
     def __post_init__(self):
@@ -100,6 +102,8 @@ class SurrogateConfig:
         self.crash.ploc_tiers = {int(k): list(v) for k, v in self.crash.ploc_tiers.items()}
         self.crash.dead_tiers = {int(k): list(v) for k, v in self.crash.dead_tiers.items()}
 
+
+THETA_COPULA_J32A = (0.054, 0.159, 0.201, 0.787, 0.868)   # (s_m², w1, ρ1, w2, ρ2) — P2S J32a (풀에 적합값이 없을 때만)
 
 _BASE = ['track_clean', 'hover_entry', 'hover_settled', 'post_track', 'post_hover'] + \
         [f'{h}_atk_b{i}' for h in ('track', 'hover') for i in range(8)] + [f'{h}_atk_s{i}' for h in ('track', 'hover') for i in range(3)]
@@ -129,6 +133,9 @@ def load_pool(cfg: SurrogateConfig) -> dict:
         if 'theta' in names:                                   # ★09-23 θ 열(knn_v4, 또는 P2S 스크래치 knn_v3+theta)
             Q['_theta_col'] = X[:, names.index('theta')].copy()
             Q['_ep'] = np.asarray(d['ep']) if 'ep' in d.files else None
+            if 'theta_copula' in d.files:                      # ★09-24 풀에 저장된 코퓰러 적합값(fit_theta_copula.py)
+                Q['_theta_copula'] = tuple(float(x) for x in np.asarray(d['theta_copula'], float).ravel())
+                Q['_theta_fit_meta'] = str(d['theta_fit_meta']) if 'theta_fit_meta' in d.files else ''
         _POOL_CACHE[key] = Q
         return Q
     fmt = cfg.pool_format
@@ -277,14 +284,37 @@ class SurrogateEnv:
                 F = np.c_[F, _pool_abits(X[:, 5], ep) * key]
             WP = _pool_windows(X[:, 9], X[:, 10], ep)
             T = dict(abw=key, tree=cKDTree(np.ascontiguousarray(F), balanced_tree=False, compact_nodes=False),
-                     WP=WP, WS=WP.std(0) + 1e-9, TH=self.Q['_theta_col'], c1={})
+                     WP=WP, WS=WP.std(0) + 1e-9, TH=self.Q['_theta_col'])
             self.Q['_theta'] = T
         self._TH = T
+        # ★09-24 1단 이웃 캐시는 인스턴스 소유(NIS 경로 _nn_cache 와 같은 규칙) — 풀 캐시에 두면 다른 인스턴스의
+        #   이력이 같은 시드의 θ 를 바꾸고, 키에 theta_k1 이 없어 k1 변경이 조용히 무시됐다(리뷰 3).
+        self._theta_c1 = {}
+        self._theta_cop = self._resolve_copula()
+
+    def _resolve_copula(self):
+        """코퓰러 (s_m², w1, ρ1, w2, ρ2): 설정 명시값 > 풀 저장값 > J32a 기본값(경고)."""
+        c = self.cfg.theta_copula
+        if c is not None:
+            src, cop = 'config', tuple(float(x) for x in c)
+        elif self.Q.get('_theta_copula') is not None:
+            src, cop = 'pool', self.Q['_theta_copula']
+        else:
+            src, cop = 'J32a', THETA_COPULA_J32A
+            if not self.Q.get('_warned_cop'):
+                import warnings
+                warnings.warn(f'surrogate θ: 풀 {self.cfg.pool} 에 theta_copula 가 없어 P2S J32a 기본값 {cop} 을 쓴다 — '
+                              f'새 풀이면 scripts/fit_theta_copula.py fit --write 로 적합할 것', stacklevel=3)
+                self.Q['_warned_cop'] = True
+        if len(cop) != 5 or cop[0] + cop[1] + cop[3] > 1.0 + 1e-9 or not (0 <= cop[2] < 1 and 0 <= cop[4] < 1):
+            raise ValueError(f'theta_copula={cop} ({src}): (s_m², w1, ρ1, w2, ρ2), 분산 합 ≤ 1, 0 ≤ ρ < 1')
+        self.theta_copula_src = src
+        return cop
 
     def _theta_reset(self):
         """θ 전용 난수 스트림(주 rng 는 건드리지 않는다 → NIS 비트 동일)과 에피 상태."""
         self._rt = np.random.default_rng([self.seed0 & 0xFFFFFFFF, self.ep_idx + 1, 0x7E7A])
-        sm2 = float(self.cfg.theta_copula[0])
+        sm2 = float(self._theta_cop[0])
         self._tm = math.sqrt(max(sm2, 0.0)) * self._rt.normal(); self._t1 = self._rt.normal(); self._t2 = self._rt.normal()
         self._twv = []; self._twg = []; self._tah = [0] * 6
         self.theta = None
@@ -295,11 +325,12 @@ class SurrogateEnv:
         if c.theta_abits_w > 0:
             q = np.r_[q, np.array(self._tah[::-1], float) * float(c.theta_abits_w)]
         self._tah = self._tah[1:] + [int(prev_action)]
-        key = tuple(np.round(q, 1))
-        nb = T['c1'].get(key)
+        k1 = min(int(c.theta_k1), len(T['TH']))
+        key = (k1,) + tuple(np.round(q, 1))
+        nb = self._theta_c1.get(key)
         if nb is None:
-            nb = T['tree'].query(q, k=min(int(c.theta_k1), len(T['TH'])), workers=1)[1]
-            if len(T['c1']) < 20000: T['c1'][key] = nb
+            nb = T['tree'].query(q, k=k1, workers=1)[1]
+            if len(self._theta_c1) < 20000: self._theta_c1[key] = nb
         self._twv.append(float(_comp_theta(v))); self._twg.append(float(_comp_theta(g)))
         self._twv = self._twv[-4:]; self._twg = self._twg[-4:]
         pad = lambda L: [L[0]] * (4 - len(L)) + L
@@ -308,7 +339,7 @@ class SurrogateEnv:
         M = int(c.theta_m)
         sel = nb[np.argpartition(d, M)[:M]] if M < len(nb) else nb
         S = np.sort(T['TH'][sel])
-        sm2, w1, r1, w2, r2 = (float(x) for x in c.theta_copula)
+        sm2, w1, r1, w2, r2 = (float(x) for x in self._theta_cop)
         nug2 = max(0.0, 1.0 - sm2 - w1 - w2)
         rt = self._rt
         self._t1 = r1 * self._t1 + math.sqrt(1 - r1 * r1) * rt.normal()

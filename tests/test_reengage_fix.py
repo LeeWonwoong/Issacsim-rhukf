@@ -9,6 +9,13 @@
   (e) SIMCLOCK 통합 스모크: REENGAGE_FIX + P2′ 성형(λ4) 켜고 노드 구동 → steps 열(reward_train·theta_eff·phi)·타이밍 열 불변식·
       F = γΦ_t − Φ_{t−1} 을 steps 로 재구성
   (f) 기본값(노브 0·성형 0): SIMCLOCK 인라인 경로가 7f77609 와 비트 동일(구 벽시계 경로는 test_isaac_node_offline 이 d089dc5 기준으로 본다)
+  ── 09-24 리뷰 반영 ──
+  (g) 기본값: _learning_setpoint 를 7f77609 와 같은 각본(5 패턴 × 구/SIMCLOCK dt; 근접·원거리 해제, 재접근 중 재-hover,
+      도달 직후 재-hover)으로 구동 → 매 틱 control_sp·trajectory_sp·시계·은닉 상태 비트 동일
+  (h) FIX ② 판정 기준 = 재개 설정점(동결 위상): 곡선엔 가깝지만 동결점에선 먼 해제(앵커 비재캡처·hover 중 궤적 따라 밀림)
+      → 해제 첫 틱 |control_sp − 기체| 가 작다(구 FIX 는 3.4–4.8 m 계단)
+  (i) FIX 는 해제 때 한 번만 판정 → 이후 track 중 이탈에는 정상 지오펜스(구 코드: 은닉 상태가 판정 설정점을 현재 위치로)
+  (j) 재동기 위상 tie-break: aggressive·scurve 에서 기체가 궤적 위에 있으면 동결 위상에서 가까운 위상을 고른다(반대 레그 금지)
 """
 import glob
 import math
@@ -55,9 +62,9 @@ class Drive:
         self.resync_calls = 0; self.dts = []
         orig = node._reengage_nearest
 
-        def _wrap(resync=True):
+        def _wrap(resync=True, **kw):
             before = (node._sim_flight_t, node._wp_s)
-            out = orig(resync) if 'resync' in orig.__code__.co_varnames else orig()
+            out = orig(resync, **kw) if 'resync' in orig.__code__.co_varnames else orig()
             if (node._sim_flight_t, node._wp_s) != before:
                 self.resync_calls += 1
             return out
@@ -213,7 +220,8 @@ def test_simclock_integration_shaping_and_fix():
     n_rows = n_hov = 0
     for f in files:
         z = np.load(f); cols = [str(c) for c in z['cols']]; R = z['rows']; c = {n: i for i, n in enumerate(cols)}
-        assert cols[-3:] == ['reward_train', 'theta_eff', 'phi']
+        assert cols[-4:] == ['reward_train', 'theta_eff', 'phi', 'reengage']   # ★09-24 REENGAGE_FIX 재접근 플래그 열(노브 켰을 때만)
+        assert set(np.unique(R[:, c['reengage']])) <= {0.0, 1.0}
         i0 = cols.index('t_gps_us')
         assert np.all(R[:, c['n_pred']] == 5) and np.all(R[:, c['dt_gps_us']] == 100000)   # 타이밍 열이 제자리(행 끝 기준 아님)
         assert np.all(np.isfinite(R[:-1, c['act_wait_ms']]))
@@ -234,6 +242,7 @@ def test_simclock_integration_shaping_and_fix():
     with open(os.path.join(out, 'metrics_adam.csv')) as fh:
         head = fh.readline().strip().split(',')
     assert 'reward_train' in head and 'shape_F' in head and head.index('reward') < head.index('reward_train')
+    assert {'n_release_near', 'n_reengage', 'n_resync'} <= set(head)          # ★09-24 REENGAGE_FIX 에피 계측
 
 
 @pytest.mark.parametrize('kind', ['adam', 'swirl'])
@@ -266,3 +275,167 @@ def test_simclock_default_bit_identical_to_7f77609(kind):
         assert int(ra[:, ca.index('prev_action')].sum()) > 0                      # hover·재접근 경로를 실제로 탔다
         keep = [i for i, n in enumerate(ca) if n not in TO._WALL]
         assert ca == cb and np.array_equal(ra[:, keep], rb[:, keep], equal_nan=True), k
+
+
+# ══════════════════════════ 09-24 리뷰 반영 시험 ══════════════════════════
+class Drive2:
+    def __init__(self, node, legacy):
+        self.n = node; self.legacy = legacy; self.sim_t = 0.0; self.rec = []
+
+    def tick(self, hover, teleport=None):
+        n = self.n
+        self.sim_t += DT
+        n._gt_sim_time = self.sim_t
+        td = n._legacy_track_dt if self.legacy else (lambda: DT)
+        self.pre = (float(n.cur_pos[0]), float(n.cur_pos[1]))
+        c, t = n._learning_setpoint(hover, td)
+        k = 1.0 - math.exp(-DT / 0.15)
+        n.cur_pos[0] += k * (c[0] - n.cur_pos[0]); n.cur_pos[1] += k * (c[1] - n.cur_pos[1])
+        if teleport is not None:
+            n.cur_pos[0], n.cur_pos[1] = teleport
+        self.rec.append((bool(hover), tuple(map(float, c)), tuple(map(float, t)), float(n._sim_flight_t), float(n._wp_s),
+                         bool(getattr(n, '_did_hover', False)), bool(getattr(n, '_reengaging', False)),
+                         float(n.cur_pos[0]), float(n.cur_pos[1]), int(n.tick_count)))
+        return c, t
+
+
+def _node2(mod, knobs, pattern, tag):
+    node = _node(mod, knobs, tag=tag)
+    node.scenario = {'pattern': pattern}
+    return node
+
+
+def _script(d):
+    """근접 해제 → 원거리 해제(재접근 중 재-hover 포함) → 도달 직후 재-hover → 근접 해제."""
+    n = d.n
+    for _ in range(150): d.tick(False)
+    for _ in range(12): d.tick(True)
+    for _ in range(60): d.tick(False)
+    x, y = float(n.cur_pos[0]), float(n.cur_pos[1])
+    n.cur_pos[0], n.cur_pos[1] = x + 5.0, y + 5.0
+    n._hover_anchor = None
+    for _ in range(11): d.tick(True)
+    for _ in range(8): d.tick(False)
+    for _ in range(5): d.tick(True)
+    reached = None
+    for i in range(500):
+        d.tick(False)
+        if not d.rec[-1][5] and not d.rec[-1][6]:
+            reached = i; break
+    for _ in range(3): d.tick(True)
+    for _ in range(80): d.tick(False)
+    return reached
+
+
+def _ref_path():
+    import subprocess
+    ref = os.path.join(_TMP, 'orm_7f77609_script.py')
+    if not os.path.exists(ref):
+        with open(ref, 'wb') as f:
+            f.write(subprocess.check_output(['git', 'show', '7f77609:online_rl_main.py'], cwd=ROOT))
+    return ref
+
+
+@pytest.mark.parametrize('pattern', ['circle', 'waypoint', 'figure8', 'aggressive', 'scurve'])
+@pytest.mark.parametrize('legacy', [True, False])
+def test_default_setpoint_script_bit_identical_to_7f77609(pattern, legacy):
+    out = []
+    for path, tag in ((_ref_path(), 'ref'), (os.path.join(ROOT, 'online_rl_main.py'), 'new')):
+        mod = load_module(path, f'orm_g_{tag}_{pattern}_{int(legacy)}')
+        with patched_ros(mod, []):
+            node = _node2(mod, {}, pattern, f'g_{tag}_{pattern}_{int(legacy)}')
+            d = Drive2(node, legacy)
+            reached = _script(d)
+        out.append((reached, d.rec))
+    (ra, a), (rb, b) = out
+    assert ra == rb and len(a) == len(b)
+    for i, (x, y) in enumerate(zip(a, b)):
+        assert x == y, (i, x, y)
+    assert any(r[6] for r in a), 'reengage branch not exercised'
+
+
+def _jump_case(fix, mode):
+    mod = load_module(os.path.join(ROOT, 'online_rl_main.py'), f'orm_h_{mode}_{fix}')
+    with patched_ros(mod, []):
+        node = _node2(mod, {'REENGAGE_FIX': 1} if fix else {}, 'circle', f'h_{mode}_{fix}')
+        d = Drive2(node, legacy=False)
+        for _ in range(150): d.tick(False)
+        if mode == 'anchor_persist':
+            for _ in range(10): d.tick(True)               # 첫 hover: 앵커 A
+            for _ in range(200): d.tick(False)             # 원을 따라 4 s 전진
+            for _ in range(150): d.tick(True)              # 두 번째 hover: 앵커 A 로 되돌아감(재캡처 없음)
+        else:                                              # along_track: 앵커 재캡처 + hover 중 궤적을 따라 밀림
+            node._hover_anchor = None
+            for _ in range(10): d.tick(True)
+            R = node.cfg.flight_radius; th = math.atan2(node.cur_pos[1], node.cur_pos[0] + R) - 1.0
+            d.tick(True, teleport=(R * math.cos(th) - R, R * math.sin(th)))
+        pos_rel = np.array(node.cur_pos[:2], float)
+        n_sync0 = node._re_stats['n_resync']
+        c, t = d.tick(False)
+        jump0 = float(np.hypot(c[0] - pos_rel[0], c[1] - pos_rel[1]))
+        errs = []
+        for _ in range(60):
+            c, t = d.tick(False)
+            errs.append(float(np.hypot(d.pre[0] - t[0], d.pre[1] - t[1])))
+        return jump0, max(errs), bool(node._did_hover), node._re_stats['n_resync'] - n_sync0, dict(node._re_stats)
+
+
+@pytest.mark.parametrize('mode', ['anchor_persist', 'along_track'])
+def test_fix_release_judged_on_resume_setpoint(mode):
+    j_fix, e_fix, dh, n_sync, st = _jump_case(1, mode)
+    assert j_fix < 0.5, j_fix                              # 해제 첫 틱 기체 기준 계단 없음 (구 FIX: 3.4–4.8 m)
+    assert e_fix < 0.5 and not dh
+    assert n_sync == 1                                     # 곡선 근처라 같은 틱에 1회 재동기(재접근 기동 없음)
+    assert st['n_reengage'] >= 1
+
+
+@pytest.mark.parametrize('fix', [0, 1])
+def test_geofence_after_release(fix):
+    mod = _mod(f'gf{fix}')
+    with patched_ros(mod, []):
+        node = _node2(mod, {'REENGAGE_FIX': 1} if fix else {}, 'circle', f'gf_{fix}')
+        d = Drive2(node, legacy=False)
+        for _ in range(150): d.tick(False)
+        for _ in range(10): d.tick(True)
+        for _ in range(100): d.tick(False)
+        x, y = float(node.cur_pos[0]), float(node.cur_pos[1]); R = node.cfg.flight_radius
+        cx, cy = x + R, y; r = math.hypot(cx, cy)
+        d.tick(False, teleport=(x + 3.0 * cx / r, y + 3.0 * cy / r))
+        c, t = d.tick(False)
+        dist = float(np.hypot(d.pre[0] - t[0], d.pre[1] - t[1]))
+    if fix:
+        assert not node._reengaging and dist > 2.0           # 해제 뒤 이탈엔 정상 지오펜스
+    else:
+        assert node._reengaging and dist < 1e-9              # 구: 은닉 상태가 판정 설정점을 현재 위치로(지오펜스 무력)
+
+
+def _phase_period(node, pattern):
+    if pattern == 'aggressive':
+        return 4.0 * float(getattr(node.cfg, 'agg_phase_s', 5.0))
+    Rs = getattr(node.cfg, 'scurve_radius', 1.1); v = node.cfg.flight_radius * node.cfg.flight_omega
+    return 2 * (math.pi * Rs * int(getattr(node.cfg, 'scurve_arcs', 4))) / max(v, 1e-6)
+
+
+@pytest.mark.parametrize('pattern', ['aggressive', 'scurve'])
+def test_resync_phase_tiebreak_keeps_direction(pattern):
+    mod = _mod(f'tb_{pattern}')
+    with patched_ros(mod, []):
+        node = _node2(mod, {'REENGAGE_FIX': 1}, pattern, f'tb_{pattern}')
+        P = _phase_period(node, pattern)
+        bad_fix = bad_old = n = 0
+        for t0 in np.linspace(0.3, P - 0.3, 37):
+            node._sim_flight_t = float(t0); node._dt_sim_last = 0.0
+            sp = node._compute_setpoint()
+            node.cur_pos[0], node.cur_pos[1] = sp[0], sp[1]
+            node._sim_flight_t = float(t0)
+
+            def pd(c):
+                a = abs((c - t0) % P); return min(a, P - a)
+            node._reengage_nearest(resync=False, near_r=2.0)
+            bad_fix += pd(node._nearest_phase[1]) > 0.5
+            node._reengage_nearest(resync=False)
+            bad_old += pd(node._nearest_phase[1]) > 0.5
+            assert node._sim_flight_t == float(t0)          # 프로브는 시계를 안 바꾼다
+            n += 1
+    print(f'\n[tiebreak {pattern}] 반대/먼 위상 선택: FIX {bad_fix}/{n}  xy 최근접만 {bad_old}/{n}')
+    assert bad_fix == 0, (bad_fix, bad_old, n)            # 궤적 위 기체 → 동결 위상 근처(진행 방향 유지)

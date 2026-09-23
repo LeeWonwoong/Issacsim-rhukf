@@ -124,6 +124,8 @@ def run_surrogate(exp, log=print):
     agent = make_agent(exp)
     ep_steps = cfg.episode_max_steps
     genv = SurrogateEnv(exp.surrogate, exp.scenario.attack, exp.scenario.wind, ep_steps, cfg.seed + 777)
+    if genv.cfg.theta:                                      # ★09-24 θ 코퓰러 출처 기록(config / pool / J32a 기본값)
+        log(f'[θ] surrogate θ 채널 코퓰러 {tuple(round(x, 4) for x in genv._theta_cop)} (출처 {genv.theta_copula_src})')
     dwell = int(cfg.hover_dwell)
     pe, pn = int(exp.log['probe_every']), int(exp.log['probe_n'])
     hist = []

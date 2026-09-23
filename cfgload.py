@@ -202,16 +202,6 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
         if k in ad: setattr(cfg, a, ad[k])
     cfg.r_inv_sqrt = 1.0 / cfg.r_init; cfg.r_inv = 1.0 / (cfg.r_init ** 2)
 
-    # ★09-23 P2′ 성형 검증: F 의 γ 는 학습기 γ 와 같아야 정책 불변(n-step 망원 포함) · θ 입력이 있어야 한다
-    if float(reward.shape_tilt) > 0:
-        g = float(cfg.gamma)
-        if float(reward.shape_gamma) <= 0:
-            reward.shape_gamma = g
-        elif abs(float(reward.shape_gamma) - g) > 1e-12:
-            raise ValueError(f'reward.shape_gamma={reward.shape_gamma} ≠ agent.gamma={g} — 퍼텐셜 성형은 같은 γ 여야 정책 불변')
-        if kind == 'surrogate' and not surrogate.theta:
-            raise ValueError('reward.shape_tilt>0 (surrogate) 은 θ 입력이 필요하다 — env.surrogate.theta: true (knn_v4 풀)')
-
     # 관측·보상은 공용 모듈이 담당 — 평면 Config 에는 차원·보상 객체만 맞춘다(구 reward_scale 는 1 로 고정: 이중 적용 방지)
     cfg.gyro_only = cfg._gyro_only = (obs.features == ['gyro', 'action'])
     cfg.window_size = obs.window; cfg.dimS = obs.dim; cfg.obs_scale = [1.0] * obs.dim
@@ -226,6 +216,16 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
             raise KeyError(f'설정 env.isaac.cfg.{k}: Config 에 없는 필드')
         cur = getattr(cfg, k)
         setattr(cfg, k, tuple(v) if isinstance(cur, tuple) and isinstance(v, list) else v)
+
+    # ★09-23 P2′ 성형 검증 (env.isaac.cfg 덮어쓰기 뒤 — cfg.gamma 최종값 기준): F 의 γ 는 학습기 γ 와 같아야 정책 불변(n-step 망원 포함) · θ 입력이 있어야 한다
+    if float(reward.shape_tilt) > 0:
+        g = float(cfg.gamma)
+        if float(reward.shape_gamma) <= 0:
+            reward.shape_gamma = g
+        elif abs(float(reward.shape_gamma) - g) > 1e-12:
+            raise ValueError(f'reward.shape_gamma={reward.shape_gamma} ≠ agent.gamma={g} — 퍼텐셜 성형은 같은 γ 여야 정책 불변')
+        if kind == 'surrogate' and not surrogate.theta:
+            raise ValueError('reward.shape_tilt>0 (surrogate) 은 θ 입력이 필요하다 — env.surrogate.theta: true (knn_v4 풀)')
 
     resolved = _deep_merge(d, {'run': run, 'log': log, 'env': {'kind': kind, 'isaac': isaac}})
     if float(reward.shape_tilt) > 0:

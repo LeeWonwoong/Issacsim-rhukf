@@ -21,6 +21,9 @@
   · 종료: terminated 면 흡수상태 Φ=0 → F = −Φ_{T−1}.  timeout(절단)은 정상 계산
   · γ = shape_gamma (cfgload 가 agent.gamma 로 채우고 다르면 거부) → n-step 합이 γⁿΦ_{t+n} − Φ_t 로 망원
   · 정책 불변(Ng·Harada·Russell 1999). 지표·보고는 r^G 만(last_rG) — 반환값은 학습 보상(r^G+F)
+  · ⚠ 학습 척도 지표(loss·TD 첨도·Qmax·Qavg)는 성형 타깃 척도(Q′ = Q − E[Φ|h], λ4 에서 약 +4–5 이동) — 성형 유무가
+    다른 조건끼리 나란히 비교하지 말 것. 조건 간 비교는 F1·사건탐지·지연·r^G 리턴만.
+  · 호출부 불변식: 첫 호출 행은 push 하지 않는다(Isaac prev_state=None, surrogate prev_s=None) — tests/test_pbrs_alignment.py
 """
 from __future__ import annotations
 
