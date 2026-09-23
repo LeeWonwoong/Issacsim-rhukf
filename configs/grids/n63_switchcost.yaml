@@ -1,0 +1,20 @@
+# n63 — 09-23 밤 사용자: "관점 1(모드 전환 비용·알람 채터링)이 유망, surrogate 로 해봐".
+#   보상 v5 (1,1.5,1.5,4) + 모드 전환 비용 c_sw ∈ {0, 0.5, 1, 2} (track↔hover 실행 행동이 바뀐 스텝마다, 양방향).
+#   가설: 전환 비용은 ΔQ 추정의 '분산'(결정 경계 근처 흔들림)을 비용화 — 평균 문턱 이동으로는 줄지 않고 히스테리시스를 넓히면 지연이 는다.
+#         SWIRL 의 결정 안정성(Isaac: 공격 중 끊김 0.5 vs 2.2/사건, flap 에피 0.04 vs 0.48) 이 보상 격차로 증폭되는가.
+#   n62 와 같은 무대·학습기(SWIRL-B ui4·τ0.02·R1 / Adam 표준·B128)·오염 제거 풀, 10 시드. c_sw=0 은 새 평가 열(ret·sw_per_ep·relapse) 기준용.
+#   ⚠ surrogate 는 Isaac 과 2차 구조 정합 미완 — 방향·용량-반응 확인용, 최종 판정은 Isaac.
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v3clean.yaml]
+outdir: results/claudecodefortest/n63_switchcost
+seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.02, agent.update_interval: 4, agent.buffer: 50000,
+                         agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0, agent.swirl.N: 6, agent.swirl.q: 1.0e-3,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {reward.c_sw: [0.0, 0.5, 1.0, 2.0]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {reward.c_sw: [0.0, 0.5, 1.0, 2.0]}}

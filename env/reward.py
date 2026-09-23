@@ -8,7 +8,9 @@
              평시 track +r_tn / hover r_fp,  공격 hover +r_tp / track FN(d)
              FN(d) = (fn_base + fn_per_step·min(d, delay_cap)) × (fn_onset_mult if 1≤d≤fn_onset_window)
   cost   : 탐지기형 (2026-09-18 확정) — 오경보 비용 · 탐지 지연 비용 · 탐지 사건 보상
-             r = alive − c_fa·1{평시 hover} − c_d·1{공격 중 track} + bonus·1{사건별 첫 hover}
+             r = alive − c_fa·1{평시 hover} − c_d·1{공격 중 track} + bonus·1{사건별 첫 hover} − c_sw·1{모드 전환}
+             · c_sw(★09-23, 기본 0): 실행 행동이 바뀐 스텝마다(track↔hover, 양방향) 모드 전환 비용.
+               failsafe 진입·해제는 PX4 모드·파라미터 전환·임무 중단을 일으키는 운용 사건 = 알람 채터링(ISA-18.2) 비용.
              · 지연 비용은 놓친 스텝마다 상수 → 누적 비용 = c_d × 탐지 지연 (고전 QCD 지연 비용)
              · bonus: 사건(버스트)마다 처음 hover 가 켜진 스텝 1회(이미 hover 중에 온셋이어도 지급) — 모든 공격을 잡는 감지기
              · alive: 모든 스텝 공통 상수(정책 불변, 종료 시에만 효과 = 추락 비용)
@@ -52,6 +54,7 @@ class RewardConfig:
     c_d: float = 0.3
     bonus: float = 1.0
     alive: float = 0.0
+    c_sw: float = 0.0              # ★09-23 모드 전환 비용(track↔hover 스텝마다). 0 = 끔(이전과 비트 동일)
     # ── ★09-23 P2′ 자세 퍼텐셜 성형 (0 = 끔) ──
     shape_tilt: float = 0.0        # λ
     tilt_ref: float = 0.1          # θ0 [rad]
@@ -100,6 +103,7 @@ class RewardTracker:
         self._paid = False
         self._pprev_action = 0
         self._fp_run = 0
+        self.n_switch = 0                          # 이 에피소드 모드 전환 수(로깅; c_sw 와 무관하게 셈)
         # P2′ 성형 상태 (에피소드 시작: Φ_prev 미정 → 첫 호출 행에서 초기화)
         self._phi_prev = None
         self._th_prev = None
@@ -153,6 +157,10 @@ class RewardTracker:
             elif not self._paid:
                 r += rc.bonus
                 self._paid = True
+        if prev_action != self._pprev_action:
+            self.n_switch += 1
+            if rc.mode == 'cost' and rc.c_sw:
+                r -= rc.c_sw
         if terminated:
             r -= rc.terminal_penalty
         self._prev_atk = attack
