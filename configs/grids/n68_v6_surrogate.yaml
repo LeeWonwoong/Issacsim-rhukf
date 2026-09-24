@@ -1,13 +1,13 @@
 # n68 — 09-24 오전. 최종 공격 무대 v6(configs/newenv_v6.yaml)을 surrogate 10시드로 — Isaac v6 s42 짝과 병행 확인.
 #   v6 = v5 공격 가족 그대로 + persistent 25–40 · 사건 2–3 · weak 가중↑ · 바람 U(0,9)(풀 적용 범위 ws≤9 안). 보상 v5 잠금.
 #   SWIRL G1 = Isaac 과 같은 설정(pΔ0.01·R2·α0.1·N5·B256·ui1·τ0.005). Adam 표준 B128.
-#   원격 GPU 는 동시 수와 무관하게 ~17 에피/분이라, 둘 다 CPU 워커로 돈다(한 셀 = 한 장치).
+#   SWIRL 은 GPU(CPU 는 동시 실행 시 메모리 대역폭 병목), Adam 은 CPU(1 분/런).
 base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
 outdir: results/claudecodefortest/n68_v6_surrogate
 seeds: [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
 stages: {a: {}}
 learners:
-  s: {device: cpu, set: {agent.type: swirl, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
                          agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
                          agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 2.0, agent.swirl.N: 5, agent.swirl.q: 1.0e-3,
                          agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target}}

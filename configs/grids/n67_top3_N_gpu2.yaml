@@ -1,0 +1,19 @@
+# n67 — 09-24 오전(사용자: "surrogate 에서 상위 3개 설정을 SWIRL batch 128 · N 8/10/12 로"). 원격 surrogate 전용.
+#   상위 3개 = Isaac v13 격자(s42, 타이밍·PX4 수정 후)에서 약공격 탐지·탐지 후 hover 유지·학습 속도가 좋은 칸:
+#     G1 pΔ0.01·R2 (Kg 0.10) · G2 pΔ0.01·R1 (Kg 0.15) · P5 pΔ0.05·R2.5 (Kg 0.17)
+#     (기준 R0.5 는 weak_persist 유지 0.89·끊김 1.5 로 열세, P10 은 전반 열세라 제외)
+#   SWIRL 은 Adam 과 같은 스케줄 ui1·τ0.005 + batch 128(Adam 과 같은 배치). N ∈ {8, 10, 12}.
+#   Adam B128 대조 = n66 aM rwv5 (같은 base·오버레이·시드 → 같은 런, 재사용).
+#   GPU 2차 판(시드 43·44) — CPU 판은 메모리 대역폭 병목(18 동시 시 14배 느림)으로 10:34 중단, GPU 로 대체. 원격 GPU 처리량이 동시 수와 무관(~17 에피/분)이라 둘로 나눔.
+base: [configs/newenv_v5.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n67_top3_N_gpu2
+seeds: [43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.alpha: 0.1, agent.swirl.q: 1.0e-3, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {cfg: [{_name: G1, agent.swirl.p_delta: 0.01, agent.swirl.R: 2.0},
+                   {_name: G2, agent.swirl.p_delta: 0.01, agent.swirl.R: 1.0},
+                   {_name: P5, agent.swirl.p_delta: 0.05, agent.swirl.R: 2.5}],
+             agent.swirl.N: [8, 10, 12]}}
