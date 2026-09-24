@@ -1,0 +1,14 @@
+# configs/isaac_v6_swirl.yaml — 09-24: isaac_v5_swirl 과 같고 무대만 newenv_v6(최종 공격 무대).
+# configs/isaac_v5_swirl.yaml — 확정 무대 v5 Isaac 본선 SWIRL (09-22 14:52 사용자 '고'). 기본 = 후보 B(v2 저-K: pΔ0.01·α0.1·ui4·τ0.02·R1·N6·B256).
+#   후보 A′ 는 --set agent.swirl.p_delta=0.05 --set agent.swirl.R=2.0 --set agent.tau=0.005 --set agent.update_interval=1 --set agent.swirl.alpha=0.05
+#   실행: scripts/isaac_run.sh <out> --config configs/isaac_v5_swirl.yaml --config configs/overlays/isaac.yaml --set run.seed=42
+extends: newenv_v6.yaml
+run: {name: isaac_v6_swirl, outdir: results/claudecodefortest/isaac_v14_v6/swirl_s42, seed: 42, episodes: 200, ep_steps: 300, device: cuda}
+agent:
+  type: swirl
+  batch: 256
+  hidden: [24, 24]
+  tau: 0.02
+  update_interval: 4
+  swirl: {R: 1.0, huber_c: 0, N: 6, act: target, argmax: spas, p_delta: 0.01, alpha: 0.1, q: 1.0e-3}
+log: {steps: true, eval_n: 0}

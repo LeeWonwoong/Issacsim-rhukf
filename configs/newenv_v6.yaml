@@ -1,0 +1,26 @@
+# configs/newenv_v6.yaml — 최종 무대 v6 (09-24). v5 의 공격 가족(6클래스·prefix/tail·성장·δ밴드)·보상·학습기·패턴은 그대로.
+#   바뀐 것 (전부 scenario.attack / scenario.wind 의 기존 키만):
+#     ① persistent 지속: weak·trans 15–30 → 25–40 (강 persistent 와 맞춤), strong 25–40 → 30–40
+#        근거: Isaac s42 에서 Adam 의 hover 끊김이 지속 길이에 비례(2.4/2.8/4.0), SWIRL 유지율 0.97–0.99
+#     ② 에피소드당 사건 2–3개 (v5 1–3), 간격 30–50 (v5 30–60), 온셋 50–160 (v5 60–200) → 선언·유지·해제 반복, 잘림 억제
+#     ③ 클래스 가중: weak 0.175→0.21, strong_burst 0.15→0.12, trans_burst 0.175→0.14 (strong_burst 는 남겨 둔다 — Adam 우세 클래스 공개)
+#     ④ 바람 U(0,7) → U(0,9): surrogate 풀 적용 범위(ws≤9) 안. U(0,10) 은 ws9–10 failsafe 스모크 통과 후에만.
+#   δ 밴드 0.15–0.30 / 0.30–0.70 / 0.70–0.80 (09-21 사용자 확정)·delta_max 0.80·보상 (1,1.5,1.5,4) 불변.
+#   'weak_persist' 는 d0 기준 이름 — 성장 ×1.8–2.2 로 유효 δ 0.27–0.66.
+extends: newenv_v5.yaml
+run: {name: newenv_v6}
+scenario:
+  attack:
+    start: [50, 160]
+    events: [2, 3]
+    event_gap: [30, 50]
+    delta_max: 0.80
+    classes:
+      - {name: weak_burst,     weight: 0.21, delta: [0.15, 0.30], kind: burst,      dur: [4, 8]}
+      - {name: weak_persist,   weight: 0.21, delta: [0.15, 0.30], kind: persistent, dur: [25, 40], grow: [1.8, 2.2], grow_steps: [3, 6]}
+      - {name: trans_burst,    weight: 0.14, delta: [0.30, 0.70], kind: burst,      dur: [4, 8]}
+      - {name: trans_persist,  weight: 0.16, delta: [0.30, 0.70], kind: persistent, dur: [25, 40], grow: [1.3, 1.5], grow_steps: [3, 6]}
+      - {name: strong_burst,   weight: 0.12, delta: [0.70, 0.80], kind: burst,      dur: [4, 8]}
+      - {name: strong_persist, weight: 0.16, delta: [0.70, 0.80], kind: persistent, dur: [30, 40]}
+  wind: {mode: uniform, range: [0.0, 9.0]}
+  # patterns: 생략 = v5 균등 5종 [waypoint, circle, figure8, aggressive, scurve] (env/scenario.py:70)

@@ -1,0 +1,12 @@
+# configs/isaac_v6_adam.yaml — 09-24: isaac_v5_adam 과 같고 무대만 newenv_v6(최종 공격 무대).
+# configs/isaac_v5_adam.yaml — 확정 무대 v5 Isaac Adam 표준(lr 3e-4·β5·clip10·B256·ui1·τ0.005). SWIRL 과 같은 무대·보상·바람(newenv_v5).
+extends: newenv_v6.yaml
+run: {name: isaac_v6_adam, outdir: results/claudecodefortest/isaac_v14_v6/adam_s42, seed: 42, episodes: 200, ep_steps: 300, device: cpu}
+agent:
+  type: adam
+  batch: 256
+  hidden: [24, 24]
+  tau: 0.005
+  update_interval: 1
+  adam: {lr: 3.0e-4, huber_beta: 5.0, grad_clip: 10.0}
+log: {steps: true, eval_n: 0}
