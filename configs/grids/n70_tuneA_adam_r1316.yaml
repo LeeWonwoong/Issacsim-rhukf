@@ -1,0 +1,46 @@
+# 단계 A Adam (CPU) — 보상 r1316. 표준 B128 × L6[24]/[28]/[32] + 보고용 B256 × 4망, 시드 42–49 = 56런.
+# L4[24] B128 표준은 n69 재사용. 단계 B·C 도 이 결과를 재사용.
+# 실행: setsid nohup python3 scripts/grid.py run <이 파일> --gpu 0 --cpu 16 > <outdir>.launch.log 2>&1 < /dev/null &
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/tuneA_adam_r1316
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages:
+  a: {reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}
+learners:
+  a:
+    device: cpu
+    set: {run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.type: adam, run.device: cpu, agent.adam.lr: 0.0003,
+      agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.batch: 128}
+    axes:
+      net:
+      - _name: L6h24
+        obs.window: 6
+        agent.hidden: [24, 24]
+      - _name: L6h28
+        obs.window: 6
+        agent.hidden: [28, 28]
+      - _name: L6h32
+        obs.window: 6
+        agent.hidden: [32, 32]
+  r:
+    device: cpu
+    set: {run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.type: adam, run.device: cpu, agent.adam.lr: 0.0003,
+      agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}
+    axes:
+      net:
+      - _name: L4h24B256
+        obs.window: 4
+        agent.hidden: [24, 24]
+        agent.batch: 256
+      - _name: L6h24B256
+        obs.window: 6
+        agent.hidden: [24, 24]
+        agent.batch: 256
+      - _name: L6h28B256
+        obs.window: 6
+        agent.hidden: [28, 28]
+        agent.batch: 256
+      - _name: L6h32B256
+        obs.window: 6
+        agent.hidden: [32, 32]
+        agent.batch: 256

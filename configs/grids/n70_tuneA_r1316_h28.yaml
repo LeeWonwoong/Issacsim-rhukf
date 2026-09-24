@@ -1,0 +1,71 @@
+# 단계 A (원격 surrogate, SWIRL GPU) — 보상 r1316, 큰 망 h28. 7칸 × 시드 42·43 = 14런.
+# 기준 G1(L4[24] B256 N5 q1e-3) · Adam L4[24] B128 = n69 재사용(같은 base·set·시드).
+# 실행: setsid nohup python3 scripts/grid.py run <이 파일> --gpu 7 --cpu 0 > <outdir>.launch.log 2>&1 < /dev/null &
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/tuneA_r1316
+seeds: [42, 43]
+stages:
+  a: {reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}
+learners:
+  s:
+    device: gpu
+    set: {run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.type: swirl, run.device: cuda, agent.swirl.p_delta: 0.01,
+      agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target}
+    axes:
+      cfg:
+      - _name: L4h24B128N8G1
+        obs.window: 4
+        agent.hidden: [24, 24]
+        agent.batch: 128
+        agent.swirl.N: 8
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.000625
+        agent.swirl.R: 2.0
+      - _name: L4h24B128N8G2
+        obs.window: 4
+        agent.hidden: [24, 24]
+        agent.batch: 128
+        agent.swirl.N: 8
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.000625
+        agent.swirl.R: 1.0
+      - _name: L6h24B128N9G1
+        obs.window: 6
+        agent.hidden: [24, 24]
+        agent.batch: 128
+        agent.swirl.N: 9
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.0005556
+        agent.swirl.R: 2.0
+      - _name: L6h24B128N9G2
+        obs.window: 6
+        agent.hidden: [24, 24]
+        agent.batch: 128
+        agent.swirl.N: 9
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.0005556
+        agent.swirl.R: 1.0
+      - _name: L4h24B256N6G1
+        obs.window: 4
+        agent.hidden: [24, 24]
+        agent.batch: 256
+        agent.swirl.N: 6
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.0008333
+        agent.swirl.R: 2.0
+      - _name: L6h24B256N6G1
+        obs.window: 6
+        agent.hidden: [24, 24]
+        agent.batch: 256
+        agent.swirl.N: 6
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.0008333
+        agent.swirl.R: 2.0
+      - _name: L6h28B256N6G1
+        obs.window: 6
+        agent.hidden: [28, 28]
+        agent.batch: 256
+        agent.swirl.N: 6
+        agent.swirl.alpha: 0.083
+        agent.swirl.q: 0.0008333
+        agent.swirl.R: 2.0
