@@ -1,0 +1,20 @@
+# n69 — 09-24 16:20 (사용자: "1316 과 v6 중 탐지기 입장에서 오탐·미탐↓, 공격 중 hover 유지, 끝나면 바로 해제가 더 좋고
+#   SWIRL 이 Adam 을 압도하는 쪽을 먼저 확정"). n68(v6·v5 보상만)을 대체.
+#   무대 v6 고정 × 보상 {v5 (1,1.5,1.5,4), 1316 (1,3,1,6)} × {SWIRL G1, Adam B128} × 8 시드.
+#   SWIRL G1 = Isaac 확증 설정(pΔ0.01·R2·α0.1·N5·B256·ui1·τ0.005). SWIRL GPU, Adam CPU.
+#   판정(사전 등록): 탐지기 지표(재현율·사건 탐지·평시 FPR·끊김/사건·지연) 에서 SWIRL 이 더 좋고, 같은 보상 안 SWIRL−Adam 격차
+#   (greedy F1·FPR·끊김, 학습 중 정규화 리턴)가 더 큰 보상. 두 보상의 리턴 척도는 달라 원값 비교는 하지 않는다.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n69_v6_reward
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 2.0, agent.swirl.N: 5, agent.swirl.q: 1.0e-3,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {rw: [{_name: v5}, {_name: r1316, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {rw: [{_name: v5}, {_name: r1316, reward.c_fa: 3.0, reward.c_d: 1.0, reward.bonus: 6.0}]}}
