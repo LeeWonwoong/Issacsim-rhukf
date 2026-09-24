@@ -1,0 +1,17 @@
+# n71 — 09-24 23:25 사용자 요구(에피소드별 바람 체제: ep1–60 약풍 → 61–120 갑자기 강풍 → 121~ 섞임/약풍 복귀). surrogate 로 Isaac v6s 와 병행.
+#   무대 newenv_v6s(3단계 섞임 U(0,9)) / 축 st=weak 는 3단계 약풍 복귀 U(0,4) (= newenv_v6sw). 강풍 6.5–9 는 풀 범위 안.
+#   SWIRL G1(Isaac 확증 설정) vs Adam B128 · 8 시드. 판독 = 단계별 F1·평시 FPR·리턴, 전환 직후 15 에피 적응(ep 61–75, 121–135).
+base: [configs/newenv_v6s.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n71_v6_shift
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 256, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 2.0, agent.swirl.N: 5, agent.swirl.q: 1.0e-3,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {st: [{_name: mix}, {_name: weak, scenario.wind.schedule: [{from_ep: 60, mode: uniform, range: [6.5, 9.0]}, {from_ep: 120, mode: uniform, range: [0.0, 4.0]}]}]}}
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         agent.batch: 128, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {st: [{_name: mix}, {_name: weak, scenario.wind.schedule: [{from_ep: 60, mode: uniform, range: [6.5, 9.0]}, {from_ep: 120, mode: uniform, range: [0.0, 4.0]}]}]}}

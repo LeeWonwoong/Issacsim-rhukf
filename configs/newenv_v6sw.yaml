@@ -1,0 +1,13 @@
+# configs/newenv_v6sw.yaml — 09-24 23:20 사용자 요구: 학습 에피소드 번호에 따라 바람 체제가 바뀌는 무대(FIR '일시적 모델 불확실성' 서사).
+#   ep 1–60 약풍 U(0,4) → ep 61–120 갑자기 강풍 U(6.5,9) (aliasing 급증) → ep 121–200 약풍 복귀 U(0,4) (회복).
+#   공격·보상(v5)·패턴은 v6 그대로. 기존 scenario.wind.schedule(에피소드 0 기준 from_ep)만 사용 — 코드 수정 없음(Isaac·surrogate 공용 샘플러).
+#   강풍 상한 9 = v6 Isaac 생존 확인 범위·surrogate 풀 범위.
+extends: newenv_v6.yaml
+run: {name: newenv_v6sw}
+scenario:
+  wind:
+    mode: uniform
+    range: [0.0, 4.0]
+    schedule:
+      - {from_ep: 60, mode: uniform, range: [6.5, 9.0]}
+      - {from_ep: 120, mode: uniform, range: [0.0, 4.0]}
