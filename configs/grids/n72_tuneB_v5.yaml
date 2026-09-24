@@ -1,0 +1,32 @@
+# n72 — 09-25 02:30 튜닝 단계 B (v5 판): 단계 A(시드 42·43) 상위 2칸 × 시드 44–49 → 칸당 8시드.
+#   1순위 L6h24B128N9G2 (사용자 선호 B128·N≥6·큰 파라미터 + 학습 중 격차 최대 +2.92, ΔF1 +0.042; 사전 동점 규칙은 G1 우선이었으나
+#   n67 3시드에서 B128·N≥8 이면 G2(R1) 우위가 확인돼 G2 로 — 규칙 이탈을 기록한다), 2순위 L6h24B256N6G1 (절대 F1 최고 0.850).
+#   Adam 대조 = tuneA_adam_v5 a_a_netL6h24 (같은 망·시드 42–49).
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/tuneB_v5
+seeds: [44, 45, 46, 47, 48, 49]
+stages:
+  a: {}
+learners:
+  s:
+    device: gpu
+    set: {run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.type: swirl, run.device: cuda, agent.swirl.p_delta: 0.01,
+      agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target}
+    axes:
+      cfg:
+      - _name: L6h24B128N9G2
+        obs.window: 6
+        agent.hidden: [24, 24]
+        agent.batch: 128
+        agent.swirl.N: 9
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.0005556
+        agent.swirl.R: 1.0
+      - _name: L6h24B256N6G1
+        obs.window: 6
+        agent.hidden: [24, 24]
+        agent.batch: 256
+        agent.swirl.N: 6
+        agent.swirl.alpha: 0.1
+        agent.swirl.q: 0.0008333
+        agent.swirl.R: 2.0
