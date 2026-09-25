@@ -1,0 +1,20 @@
+# n81 — 09-25 19:05 사용자: "θ_target 결과 먼저 다 얻고 → θ_current 로 비교 → 되면 θ_current 로 다시 만든다".
+#   Isaac [R] 재생성 단계(pΔ↑·튜닝 SWIRL 의 act=active 판)용 surrogate 선별. n78(OFAT, act=target) 와 같은 칸 + pΔ 칸, act 만 active.
+#   중심 칸(p01R1·α0.1·q5e-4·N10, act=active) = n79. 공통: v6 무대·v5 보상 · L6·[24,24]·B128·ui1·τ0.005·spas · 시드 42–45.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n81_swirl_tune_active
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: active},
+      axes: {cfg: [{_name: a005,  agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.05, agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: a02,   agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.2,  agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: R05,   agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1,  agent.swirl.R: 0.5, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: R2,    agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1,  agent.swirl.R: 2.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: q25,   agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 2.5e-4, agent.swirl.N: 10},
+                   {_name: q1,    agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 1.0e-3, agent.swirl.N: 10},
+                   {_name: N12,   agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 4.17e-4, agent.swirl.N: 12},
+                   {_name: p03R1, agent.swirl.p_delta: 0.03, agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: p05R1, agent.swirl.p_delta: 0.05, agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10}]}}
