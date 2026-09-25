@@ -1,0 +1,18 @@
+# n73 — 09-25 09:20 사용자: "최종 설정 N 10·q 5e-4, pΔ 0.01 은 FIR 느낌이 안 나는데 괜찮나 — surrogate 로".
+#   FIR 성질은 매 호출 P←pΔ·I 리셋에서 오므로 pΔ 와 무관하게 유지되지만, pΔ ≪ R 이면 창 데이터보다 적분기(이전 추정) 비중이 커져 IIR 에 가깝게 보인다.
+#   → 같은 K(pΔ/R 고정)에서 prior 만 키운 칸(p03R3·p05R5)과 K 를 키운 칸(p03R1)을 최종 후보(p01R1)와 비교.
+#   공통: v6 무대·v5 보상 · L6(obs.window 6)·[24,24]·B128·N10·q5e-4·α0.1·ui1·τ0.005 · 시드 42–45.
+#   Adam 대조 = tuneA_adam_v5 a_a_netL6h24 (같은 망·시드).
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n73_final_pdelta
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {pr: [{_name: p01R1, agent.swirl.p_delta: 0.01, agent.swirl.R: 1.0},
+                  {_name: p03R3, agent.swirl.p_delta: 0.03, agent.swirl.R: 3.0},
+                  {_name: p03R1, agent.swirl.p_delta: 0.03, agent.swirl.R: 1.0},
+                  {_name: p05R5, agent.swirl.p_delta: 0.05, agent.swirl.R: 5.0}]}}
