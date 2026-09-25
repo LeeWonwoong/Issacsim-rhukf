@@ -1,0 +1,10 @@
+# n76 — 09-25 14:45: FIR 성격이 더 강한 pΔ0.03·R1(K↑, n73 p03R1: F1 0.855·끊김 0.48 최저) 을 시드 46–49 로 추가 → n73(42–45)과 합쳐 8시드.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n76_p03R1_seeds
+seeds: [46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.p_delta: 0.03, agent.swirl.R: 1.0,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target}}
