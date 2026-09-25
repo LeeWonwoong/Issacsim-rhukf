@@ -1,0 +1,11 @@
+# n75 — 09-25 13:40 리뷰어 방어 행(D-D 승인): 같은 망(L6·[24,24]) Adam lr 1e-3 × 배치 {128, 256} × 시드 42–49 (CPU).
+#   lr 3e-4 × {128, 256} 은 tuneA_adam_v5 a_a_netL6h24 · a_r_netL6h24B256 재사용. 나머지 Adam 설정은 표준(Huber β5·clip 10·ui1·τ0.005).
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n75_adam_defense
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 1.0e-3, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {agent.batch: [128, 256]}}

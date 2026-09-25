@@ -1,0 +1,11 @@
+# n74 — 09-25 13:40: 최종 설정 SWIRL(L6·[24,24]·B128·N10·q5e-4·R1·pΔ0.01·α0.1) 시드 46–49 — n73 p01R1(시드 42–45, 같은 설정)과 합쳐 8시드.
+#   Adam 대조 = tuneA_adam_v5 a_a_netL6h24(lr3e-4·B128) · a_r_netL6h24B256(lr3e-4·B256) · n75(lr1e-3·B128/B256), 모두 같은 망·시드 42–49.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n74_final_seeds
+seeds: [46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.p_delta: 0.01, agent.swirl.R: 1.0,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target}}
