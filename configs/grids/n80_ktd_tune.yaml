@@ -1,6 +1,7 @@
 # n80 — 09-25 17:30 사용자: "EKF·UKF-TD 는 surrogate 로 얼추 튜닝 — R 은 SWIRL 과 같게(1), Q 와 p_init 만 튜닝, UKF-TD α 0.1 동일".
 #   공유(규칙 6): v6 무대·v5 보상·L6·[24,24]·B128·ui1·τ0.005. 나머지는 코드 기본값(가장 기본 베이스라인).
 #   q ∈ {1e-4, 1e-3} × p_init ∈ {0.1, 0.5, 1.0} × 시드 42·43 (과거 n29 최선: EKF q1e-4·p0.5, UKF q1e-4·p1 — 범위 안).
+#   huber_c 0 = SWIRL 과 같은 가우스 측정(18:40 추가, 시작 전 — Isaac KTD 와 정합).
 base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
 outdir: results/claudecodefortest/n80_ktd_tune
 seeds: [42, 43]
@@ -8,9 +9,9 @@ stages: {a: {}}
 learners:
   e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
                          obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
-                         agent.swirl.R: 1.0},
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0},
       axes: {agent.swirl.q: [1.0e-4, 1.0e-3], agent.swirl.p_init: [0.1, 0.5, 1.0]}}
   u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
                          obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
-                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1},
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0},
       axes: {agent.swirl.q: [1.0e-4, 1.0e-3], agent.swirl.p_init: [0.1, 0.5, 1.0]}}
