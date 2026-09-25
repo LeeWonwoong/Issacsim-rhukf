@@ -1,0 +1,11 @@
+# n77 — 09-25 15:20 사용자 "p 는 더 높여서는 못해?": R1 고정·pΔ 0.05 / 0.1 (K↑↑) 선별, L6·B128·N10·q5e-4, 시드 42–45. 비교 = n73 p01R1·p03R1.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n77_pdelta_high
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {agent.swirl.p_delta: [0.05, 0.1]}}

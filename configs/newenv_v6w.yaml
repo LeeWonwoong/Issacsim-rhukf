@@ -1,0 +1,6 @@
+# configs/newenv_v6w.yaml — 09-25 사용자: "바람 바꿔서 5시드". v6 와 같고 바람만 U(4,9) — SWIRL 우위가 강풍(ws≥7)에 몰려 있어
+#   약풍 비중을 줄인다(aliasing 강화). 상한 9 = v6 Isaac 생존 확인 범위·surrogate 풀 범위.
+extends: newenv_v6.yaml
+run: {name: newenv_v6w}
+scenario:
+  wind: {mode: uniform, range: [4.0, 9.0]}
