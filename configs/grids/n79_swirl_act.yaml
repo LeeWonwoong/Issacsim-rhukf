@@ -1,0 +1,11 @@
+# n79 — 09-25 17:30 사용자: "SWIRL 을 target 이 아니라 current θ 로 행동시켜 비교". 최종 설정(L6·B128·N10·q5e-4·R1·pΔ0.01·α0.1)에서
+#   agent.swirl.act: active(= 현재 θ, rl/agent.py:155 — target 이 아니면 self.theta) · 시드 42–45. 비교 = n73 p01R1(act=target, 같은 시드).
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n79_swirl_act
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.p_delta: 0.01, agent.swirl.R: 1.0,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: active}}
