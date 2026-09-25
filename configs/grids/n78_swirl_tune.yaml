@@ -1,5 +1,6 @@
 # n78 — 09-25 16:20 사용자: "SWIRL 은 τ 고정하고 α·R·Q·N 을 튜닝" (비교 기준 = 튜닝된 Adam lr1e-3, 같은 망 L6·B128 — n75).
 #   최종 설정(pΔ0.01·R1·α0.1·q5e-4·N10) 중심, 한 번에 한 요인만 위·아래로 (OFAT) — 중심 칸 = n73 p01R1(시드 42–45).
+#   ★사용자 규칙 N·B ≥ 파라미터 수(L6·[24,24] = 1106) → B128 이면 N ≥ 9 → N8 칸 삭제(16:55).
 #   공통: v6 무대·v5 보상 · L6·[24,24]·B128·ui1·τ0.005(고정)·act=target·spas · 시드 42–45.
 base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
 outdir: results/claudecodefortest/n78_swirl_tune
@@ -15,5 +16,4 @@ learners:
                    {_name: R2,   agent.swirl.alpha: 0.1,  agent.swirl.R: 2.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
                    {_name: q25,  agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 2.5e-4, agent.swirl.N: 10},
                    {_name: q1,   agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 1.0e-3, agent.swirl.N: 10},
-                   {_name: N8,   agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 6.25e-4, agent.swirl.N: 8},
                    {_name: N12,  agent.swirl.alpha: 0.1,  agent.swirl.R: 1.0, agent.swirl.q: 4.17e-4, agent.swirl.N: 12}]}}
