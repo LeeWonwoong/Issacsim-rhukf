@@ -1,0 +1,15 @@
+# n82 — 09-26 22:15: [R] θ_current 재생성 설정 선별 — n81 상위 act=active 후보를 시드 46–49 로 늘려 8시드 판정.
+#   후보: 중심(pΔ0.01·R1, =n79) · q25 · R2 · p03R1 · a02 (n81 학습 중·F1·끊김 상위). 공통 = n81 과 동일(act active).
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n82_active_seeds
+seeds: [46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: active},
+      axes: {cfg: [{_name: center, agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: q25,    agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0, agent.swirl.q: 2.5e-4, agent.swirl.N: 10},
+                   {_name: R2,     agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.1, agent.swirl.R: 2.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: p03R1,  agent.swirl.p_delta: 0.03, agent.swirl.alpha: 0.1, agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10},
+                   {_name: a02,    agent.swirl.p_delta: 0.01, agent.swirl.alpha: 0.2, agent.swirl.R: 1.0, agent.swirl.q: 5.0e-4, agent.swirl.N: 10}]}}
