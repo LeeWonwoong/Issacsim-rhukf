@@ -1,0 +1,46 @@
+# n83 — 09-27 사용자: "EKF·UKF-TD 도 어느 정도 튜닝해서 Adam 은 이기게, SWIRL 에는 지게".
+#   목표 = 학습 중 전체 평균 리턴(ep0–199)과 초반 100에피 리턴에서 표준 Adam(lr3e-4, tuneA_adam_v5 netL6h24) 을 이기는 KTD 설정 찾기.
+#   SWIRL 순서를 맞추려고 일부러 나쁜 칸을 고르지 않는다 — 사전 등록한 판정 규칙(설계 노트 (3))으로 칸을 고른다.
+#   공유(규칙 6, n80 과 같은 set 블록): v6 무대·v5 보상·L6·[24,24]·B128·ui1·τ0.005·버퍼 50k·huber_c 0·UKF α0.1·R1.
+#   n80 진단: KTD 의 초반 적자는 평시 오경보(greedy hover 깜빡임)가 대부분 — ep5–9 greedy 평시 hover 0.10–0.20 vs Adam 0.012.
+#     p_init 을 내리면 ep0–9 는 좋아지지만 ep25–49 는 나빠짐(EKF q1e-4: p0.1 269.4 vs p1 274.7) = 드물게 여기되는 방향의 P 가 중반 학습을 끈다.
+#     → 튜닝 노브: act(행동망: 깜빡임만 겨냥, 학습 동역학은 그대로) × (q, p_init)(이득 크기·와인드업). 칸은 n80 선택값 기준 한 번에 1–2 요인만 바꾼다.
+#   act 공정성: act 는 비교하는 SWIRL 팔과 같은 값을 SWIRL·EKF·UKF-TD 가 함께 쓴다(target 팔 ↔ t 칸, active 팔 ↔ a 칸). Adam 은 두 팔 모두 online 망으로 행동(agent_adam.py:144).
+#   R: EKF 는 huber_c 0 에서 (q, p_init, R) 의 배율에 등변(rhukf_core.py:500-501,522-538; 예외 JITTER 1e-6 :531·tikhonov 1e-8 :539 는 무시 수준) → R0.5 팔은 (q/2, p/2, R0.5) 로 옮기면 같은 필터라 따로 돌리지 않는다.
+#      UKF 는 시그마 폭 α√(nP) 가 절대 P 에 달려 근사 등변 → u tSelR05 한 칸으로 확인한다.
+#   재사용 기준(재실행 안 함, 같은 시드 42·43): n80 a_{e,u}_q{1e-4,1e-3}_p_init{0.1,0.5,1} (act active) · Adam tuneA_adam_v5/a_a_netL6h24 ·
+#     SWIRL target n73 prp01R1·n78 cfgR05 / SWIRL active n79 a_s·n81 cfgp03R1.
+#   규모: 19칸 × 시드 2 = 38런. 시간(n80 grid.log): UKF 8.8분·EKF 31.7분/런 → --gpu 3 이면 UKF 약 1 h 뒤 EKF 약 3.2 h, 합 약 4.2 h. u 를 먼저 둬 UKF 판독이 먼저 나온다.
+#   N 은 n80 처럼 base 값(5) — KTD 에서는 처음 N−1 호출만 건너뛴다(rl/agent.py:194-196). Isaac KTD 는 N1.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n83_ktd_retune
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  # UKF-TD — n80 선택값 = q1e-4·p_init1 (act active). t = act target 칸, a = act active 칸.
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0},
+      axes: {cfg: [{_name: tSel,    agent.swirl.act: target, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0},    # act 만 바꿈 (n80 선택값)
+                   {_name: tP001,   agent.swirl.act: target, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.01},   # 이득 예열: 첫 ‖K‖≈SWIRL, P 는 q·t 로 자람
+                   {_name: tQ3e4,   agent.swirl.act: target, agent.swirl.q: 3.0e-4, agent.swirl.p_init: 1.0},    # 큰 q 로 중반 학습↑, 깜빡임은 target 이 흡수?
+                   {_name: tLow,    agent.swirl.act: target, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.03},   # SWIRL 과 같은 이득 크기(리셋 없이)
+                   {_name: tQ3e5,   agent.swirl.act: target, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 1.0},    # q 만 낮춤: ep5+ 바닥 이득 0.28→~0.15
+                   {_name: tP01,    agent.swirl.act: target, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.1},    # p_init 용량반응 중간점
+                   {_name: tSelR05, agent.swirl.act: target, agent.swirl.q: 5.0e-5, agent.swirl.p_init: 0.5, agent.swirl.R: 0.5},   # tSel 의 EKF-정확 쌍둥이(R0.5 팔용)
+                   {_name: aP001,   agent.swirl.act: active, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.01},
+                   {_name: aLow,    agent.swirl.act: active, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.03},
+                   {_name: aQ3e5,   agent.swirl.act: active, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 1.0}]}}
+  # EKF-TD — n80 선택값 = q1e-4·p_init0.5 (act active). R0.5 쌍둥이는 정확 등변이라 생략.
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0},
+      axes: {cfg: [{_name: tSel,    agent.swirl.act: target, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.5},
+                   {_name: tP001,   agent.swirl.act: target, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.01},
+                   {_name: tQ3e4,   agent.swirl.act: target, agent.swirl.q: 3.0e-4, agent.swirl.p_init: 0.5},
+                   {_name: tLow,    agent.swirl.act: target, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.03},
+                   {_name: tQ3e5,   agent.swirl.act: target, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.5},
+                   {_name: tP01,    agent.swirl.act: target, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.1},
+                   {_name: aP001,   agent.swirl.act: active, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.01},
+                   {_name: aLow,    agent.swirl.act: active, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.03},
+                   {_name: aQ3e5,   agent.swirl.act: active, agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.5}]}}
