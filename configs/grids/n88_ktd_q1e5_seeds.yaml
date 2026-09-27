@@ -1,0 +1,12 @@
+# n88 — 09-28 02:50: 3×3 최고 칸(q1e-5: UKF p_init0.5 · EKF p_init1, 시드 42·43 에서 선택값보다 +0.45·+0.33, 잡음 수준) 을 시드 44–49 로 확인 — 선택값(n86) 과 8시드 비교.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n88_ktd_q1e5_seeds
+seeds: [44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-5, agent.swirl.p_init: 0.5}}
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-5, agent.swirl.p_init: 1.0}}
