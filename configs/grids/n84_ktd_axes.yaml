@@ -1,0 +1,34 @@
+# n84 — 09-27 11:50 사용자: "KTD act=target 은 빼고, 다른 축으로 EKF·UKF 를 더 찾아봐" (n83 중단·대체).
+#   목표 = act=active(표준 KTD: 현재 θ 로 행동) 안에서 학습 중 전체 평균 리턴·초반 100에피 리턴이 표준 Adam(280.91 / 275.35, 시드 42·43) 을 넘는 설정.
+#   공유(규칙 6, n80 과 같은 set 블록): v6 무대·v5 보상·L6·[24,24]·B128·ui1·τ0.005·버퍼 50k·R1(SWIRL 과 같음)·UKF α0.1.
+#   n80·n83 진단: 초반 적자 = 평시 오경보(행동망 θ 가 호출마다 크게 흔들림). p_init↓ 는 ep0–9↑·ep25–49↓ 로 맞바뀜. EKF 는 huber0 에서 (q,p,R) 배율 등변 → R 축 불필요.
+#   새 축: ① huber_c(혁신 크기로 R 을 키워 큰 TD 오차 한 방에 θ 가 튀는 것을 막는 강건 KTD) ② p_init 위쪽(3) ③ q 아래쪽(1e-5) ④ 이득 예열(p0.01)·저이득(q3e-5 p0.03)·q 만 낮춤(q3e-5) ⑤ huber×p_init 조합.
+#   기준(재실행 안 함): n80 a_{e,u}_q{1e-4,1e-3}_p_init{0.1,0.5,1} (huber0·active) · Adam tuneA_adam_v5/a_a_netL6h24 · SWIRL n73 prp01R1 / n78 cfgR05 / n79 · n81.
+#   규모: 칸 8 × 학습기 2 × 시드 2 = 32런. 시간: UKF ~9분·EKF ~32분/런, --gpu 3 → UKF ~0.8 h 뒤 EKF ~2.9 h.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n84_ktd_axes
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.act: active},
+      axes: {cfg: [{_name: H1,    agent.swirl.huber_c: 1.0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0},
+                   {_name: H3,    agent.swirl.huber_c: 3.0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0},
+                   {_name: H3P3,  agent.swirl.huber_c: 3.0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 3.0},
+                   {_name: P3,    agent.swirl.huber_c: 0,   agent.swirl.q: 1.0e-4, agent.swirl.p_init: 3.0},
+                   {_name: Q1e5,  agent.swirl.huber_c: 0,   agent.swirl.q: 1.0e-5, agent.swirl.p_init: 1.0},
+                   {_name: Q3e5,  agent.swirl.huber_c: 0,   agent.swirl.q: 3.0e-5, agent.swirl.p_init: 1.0},
+                   {_name: P001,  agent.swirl.huber_c: 0,   agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.01},
+                   {_name: Low,   agent.swirl.huber_c: 0,   agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.03}]}}
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.act: active},
+      axes: {cfg: [{_name: H1,    agent.swirl.huber_c: 1.0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.5},
+                   {_name: H3,    agent.swirl.huber_c: 3.0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.5},
+                   {_name: H3P3,  agent.swirl.huber_c: 3.0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 3.0},
+                   {_name: P3,    agent.swirl.huber_c: 0,   agent.swirl.q: 1.0e-4, agent.swirl.p_init: 3.0},
+                   {_name: Q1e5,  agent.swirl.huber_c: 0,   agent.swirl.q: 1.0e-5, agent.swirl.p_init: 0.5},
+                   {_name: Q3e5,  agent.swirl.huber_c: 0,   agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.5},
+                   {_name: P001,  agent.swirl.huber_c: 0,   agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.01},
+                   {_name: Low,   agent.swirl.huber_c: 0,   agent.swirl.q: 3.0e-5, agent.swirl.p_init: 0.03}]}}
