@@ -1,0 +1,12 @@
+# n85 — 09-27 15:40 사용자: "Adam 에 AMSGrad 를 켜면?" — 표준 Adam(tuneA_adam_v5 a_a_netL6h24) 과 AMSGrad 한 가지만 다름.
+#   공통(규칙 6): L6·[24,24]·B128·ui1·τ0.005·버퍼 50k·Huber β5·clip 10·lr 3e-4·v6 무대·v5 보상 · 시드 42–49 (CPU).
+#   참고 행(재사용): lr 1e-3 AMSGrad 도 같이 — 튜닝 Adam(n75 lr1e-3) 의 AMSGrad 판.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n85_adam_amsgrad
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0, agent.adam.amsgrad: true},
+      axes: {agent.adam.lr: [3.0e-4, 1.0e-3]}}
