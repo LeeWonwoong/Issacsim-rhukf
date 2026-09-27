@@ -1,0 +1,15 @@
+# n87 — 09-28 00:45 사용자: "p_init {0.1,0.5,1} × q {1e-3,1e-4,1e-5} 식으로 튜닝했나?" → 3×3 격자의 빈 칸 4개 채움(q1e-5 행).
+#   이미 있음: n80 q{1e-3,1e-4}×p{0.1,0.5,1} · n84 q1e-5×(UKF p1 / EKF p0.5). 공통 = n80(act active·huber0·R1·UKF α0.1) · 시드 42·43.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n87_ktd_q1e5
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-5},
+      axes: {cfg: [{_name: p01, agent.swirl.p_init: 0.1}, {_name: p05, agent.swirl.p_init: 0.5}]}}
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-5},
+      axes: {cfg: [{_name: p01, agent.swirl.p_init: 0.1}, {_name: p1, agent.swirl.p_init: 1.0}]}}
