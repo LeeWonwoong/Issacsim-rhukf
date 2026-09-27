@@ -1,0 +1,12 @@
+# n86 — 09-28 00:15: 칼만-TD 선택값(n80: EKF q1e-4·p_init0.5 / UKF q1e-4·p_init1, R1·huber0·act active·α0.1) 을 시드 44–49 로 늘려 8시드 표(SWIRL·Adam 과 같은 시드 수).
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n86_ktd_seeds
+seeds: [44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0}}
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.5}}
