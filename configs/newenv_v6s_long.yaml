@@ -1,0 +1,12 @@
+# configs/newenv_v6s_long.yaml — 09-28 사용자: "바람 바뀌는 무대로 가되 전환 뒤 Adam 낙폭이 더 크게 드러나는 무대" 선별용 변형(모든 학습기 공통 무대).
+#   긴 약풍: ep1–100 약풍 U(0,3) 으로 오래 적응시킨 뒤 ep101–160 강풍 U(7,9), ep161–200 섞임 U(0,9) — 오래 굳은 추정의 전환 충격.
+#   공격·보상(v5)·패턴은 v6 그대로, scenario.wind.schedule 만 바꿈(코드 수정 없음). 강풍 상한 9 = surrogate 풀·Isaac 생존 범위.
+extends: newenv_v6.yaml
+run: {name: newenv_v6s_long}
+scenario:
+  wind:
+    mode: uniform
+    range: [0.0, 3.0]
+    schedule:
+      - {from_ep: 100, mode: uniform, range: [7.0, 9.0]}
+      - {from_ep: 160, mode: uniform, range: [0.0, 9.0]}

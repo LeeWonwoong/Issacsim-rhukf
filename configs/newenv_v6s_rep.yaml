@@ -1,0 +1,14 @@
+# configs/newenv_v6s_rep.yaml — 09-28 사용자: "바람 바뀌는 무대로 가되 전환 뒤 Adam 낙폭이 더 크게 드러나는 무대" 선별용 변형(모든 학습기 공통 무대).
+#   반복 전환: 약풍 U(0,3) ↔ 강풍 U(7,9) 을 40에피마다 번갈아(ep40·120 강풍 진입, ep80·160 약풍 복귀) — 전환마다 적응 속도를 재는 FIR '반복 일시 불확실성'.
+#   공격·보상(v5)·패턴은 v6 그대로, scenario.wind.schedule 만 바꿈(코드 수정 없음). 강풍 상한 9 = surrogate 풀·Isaac 생존 범위.
+extends: newenv_v6.yaml
+run: {name: newenv_v6s_rep}
+scenario:
+  wind:
+    mode: uniform
+    range: [0.0, 3.0]
+    schedule:
+      - {from_ep: 40, mode: uniform, range: [7.0, 9.0]}
+      - {from_ep: 80, mode: uniform, range: [0.0, 3.0]}
+      - {from_ep: 120, mode: uniform, range: [7.0, 9.0]}
+      - {from_ep: 160, mode: uniform, range: [0.0, 3.0]}
