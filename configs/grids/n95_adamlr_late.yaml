@@ -1,0 +1,10 @@
+# n95_adamlr_late — 09-28 13:00: 바람 전환 무대 변형별 Adam 학습률 민감도(1e-4 · 1e-3; 3e-4 는 n92_late) — 전 학습률 범위 공개용(베이스라인 선택 투명성). 무대 = configs/newenv_v6s_late.yaml, 시드 42–45, CPU.
+base: [configs/newenv_v6s_late.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n95_adamlr_late
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {agent.adam.lr: [1.0e-4, 1.0e-3]}}
