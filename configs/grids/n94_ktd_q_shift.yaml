@@ -1,0 +1,17 @@
+# n94 — 09-28 12:45 사용자: "전환 무대에서 왜 Adam 이 EKF 보다 좋나? NN-KF 문헌처럼 EKF 가 더 좋아야 설명이 쉽다"
+#   가설: 칼만-TD 는 q(과정 잡음)가 작으면 정보가 쌓일수록 P→작아져 유효 학습률이 1/t 처럼 줄어든다(Ollivier 2018: EKF = 학습률 1/t 인 온라인 자연경사).
+#   Adam 은 상수 학습률이라 전환을 따라간다. NN-EKF 문헌의 표준 처방 = 과정 잡음 Q 로 P 붕괴를 막아 '추적' 모드로(상수 유효 학습률 + 2차 전처리).
+#   → v6s(바람 전환) 무대에서 q 를 다시 고른다(v6 정상 무대에서만 고른 q1e-4 는 비정상 무대용이 아님). 나머지 = 선택값(R1·huber0·act active·UKF α0.1).
+base: [configs/newenv_v6s.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n94_ktd_q_shift
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.p_init: 0.5},
+      axes: {agent.swirl.q: [1.0e-3, 3.0e-3, 1.0e-2]}}
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.p_init: 1.0},
+      axes: {agent.swirl.q: [1.0e-3, 3.0e-3, 1.0e-2]}}

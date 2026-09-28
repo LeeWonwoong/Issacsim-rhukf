@@ -1,0 +1,9 @@
+# n94b — 09-28 12:45: n94 의 기준 칸(선택값 q1e-4) EKF-TD 를 v6s 에서(UKF 기준은 n93_ukf_base). 시드 42–45.
+base: [configs/newenv_v6s.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n94b_ekf_base_shift
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.p_init: 0.5, agent.swirl.q: 1.0e-4}}
