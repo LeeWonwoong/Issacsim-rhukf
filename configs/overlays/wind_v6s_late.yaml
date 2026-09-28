@@ -1,0 +1,18 @@
+# configs/overlays/wind_v6s_late.yaml — 09-28: Isaac 최종 4자용 바람 체제 오버레이(= configs/newenv_v6s_late.yaml 의 scenario.wind). isaac_v6s_*.yaml 뒤에 붙인다.
+scenario:
+  wind:
+    mode: uniform
+    range:
+    - 0.0
+    - 4.0
+    schedule:
+    - from_ep: 90
+      mode: uniform
+      range:
+      - 6.5
+      - 9.0
+    - from_ep: 150
+      mode: uniform
+      range:
+      - 0.0
+      - 9.0
