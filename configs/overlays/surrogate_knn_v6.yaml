@@ -1,0 +1,13 @@
+# configs/overlays/surrogate_knn_v6.yaml — ★09-28 17:15 풀만 교체(코드·노브는 v3clean 그대로).
+#   이유: v4clean/v2clean 풀은 타이밍 수정(09-23) 전 캡처 위주라 약풍 평시 gyro NIS 가 지금 Isaac 보다 시끄러웠다
+#         (평시 raw p95 ws<0.5: 풀 7.64 vs Isaac v6s 1.51, ws 2–4: 5.14 vs 2.15). 강풍은 비슷(p50 2.07 vs 1.88) →
+#         바람 대비가 눌려 surrogate 가 v6s 바람 전환 충격을 재현 못 했다(전환 직후 FPR ×1.0–1.2 vs Isaac ×1.8–3.8).
+#   pool_knn_v6 = 지금 Isaac 설정과 같은 런만: SIMCLOCK_UKF·LEARNER_PROC·ACT_LAT_SIM 0.08·speed 2·HOVER_ANCHOR_RESET·REENGAGE_FIX,
+#         바람 에피소드별 U(0,9) (isaac_v14–v31, 60런 · 11,224 에피 · 321만 행 · 공격 28만 행 · hover 27만 행).
+#         v6s 바람 전환 런(isaac_v17_shift·v24_shift·v29_active v6s, 31런)은 검증용 홀드아웃으로 뺐다.
+#   정적 검증: 풍속 구간별 평시 raw gyro NIS p50/p95/p99 가 v6s 홀드아웃과 5–10% 안(ws<0.5 p95 1.45 vs 1.51, ws 8.5+ 18.2 vs 18.0).
+#   ⚠ 코퓰러·에피효과 노브(knn_c2_*·knn_ep_off_*)는 옛 풀 기준 값 그대로 — 동적 검증(n98) 결과 보고 재적합 여부 결정.
+extends: surrogate_knn_v3clean.yaml
+env:
+  surrogate:
+    pool: results/claudecodefortest/pools/pool_knn_v6.npz

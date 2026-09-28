@@ -1,0 +1,12 @@
+# n98k_v6pool_base — 09-28 17:20 새 풀(surrogate_knn_v6) 동적 검증: v6s base 에서 EKF-TD(q1e-4·p0.5)·UKF-TD(q1e-4·p1·α0.1) 선택값(n96·n93 과 같음), 시드 42–45 → Isaac v6s(isaac_v24_shift) 전환 충격과 대조.
+base: [configs/newenv_v6s.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n98k_v6pool_base
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.5}}
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0}}
