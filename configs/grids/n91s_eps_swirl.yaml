@@ -1,0 +1,11 @@
+# n91s — 09-28 11:45: ε 감쇠 스텝 축(사용자 지정 4값, n90 대체) — SWIRL 튜닝(θ_T·pΔ0.01·R0.5·α0.1·q5e-4·N10) × decay {3000, 5000, 7000, 10000} × 시드 42–45 (GPU). 4000 = n78 cfgR05 재사용.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n91s_eps_swirl
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5},
+      axes: {agent.eps.decay: [3000, 5000, 7000, 10000]}}

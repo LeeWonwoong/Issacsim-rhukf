@@ -1,0 +1,11 @@
+# n91a — 09-28 11:45 사용자: "ε 감쇠 스텝은 3000·5000·7000·10000 만 비교(4000 은 기존)" (n90 대체) — ε 감쇠 스텝(현재 4000 ≈ 13에피) 을 전 학습기 공통으로 바꾼다.
+#   표준 Adam(lr3e-4·B128·Huber β5·clip10) × decay {3000, 5000, 7000, 10000} × 시드 42–45 (CPU). 4000 = tuneA_adam_v5/a_a_netL6h24 재사용.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n91a_eps_adam
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {agent.eps.decay: [3000, 5000, 7000, 10000]}}
