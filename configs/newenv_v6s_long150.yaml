@@ -1,6 +1,8 @@
-# configs/newenv_v6s_long150.yaml — 09-29 01:35 사용자 확정 최종 무대: "long 으로 하되 강풍은 101–150 만, 강풍 6–9·약풍 0–3 (숫자 깔끔하게)".
-#   ep1–100 약풍 U(0,3) → ep101–150 강풍 U(6,9) → ep151–200 약풍 U(0,3) 복귀.
-#   전환 전 100에피 동안 학습이 정착한 뒤 충격(전환 응답을 초기 학습과 분리), 강풍 50에피 뒤 원래 체제로 복귀(유지·재적응 확인).
+# configs/newenv_v6s_long150.yaml — 09-29 01:35 사용자 확정 최종 무대: "long 으로 하되 강풍은 101–150 만, 강풍 6–9·약풍 0–3 (숫자 깔끔하게)",
+#   01:55 정정: "원래 long 처럼 151–200 은 섞임 U(0,9)".
+#   ep1–100 약풍 U(0,3) → ep101–150 강풍 U(6,9) → ep151–200 섞임 U(0,9).
+#   전환 전 100에피 동안 학습이 정착한 뒤 충격(전환 응답을 초기 학습과 분리), 강풍 50에피 뒤 전 범위 섞임(유지·일반화 확인).
+#   섞임의 3–6 m/s 는 처음 보는 풍속이지만, 옛 long·v6s 섞임에서 네 학습기 모두 리턴·오경보가 약풍과 강풍 사이에 놓였다(충격 없음).
 #   공격·보상(v5)·패턴은 v6 그대로, scenario.wind.schedule 만 바꿈(코드 수정 없음). Isaac 은 configs/overlays/wind_v6s_long150.yaml.
 extends: newenv_v6.yaml
 run: {name: newenv_v6s_long150}
@@ -10,4 +12,4 @@ scenario:
     range: [0.0, 3.0]
     schedule:
       - {from_ep: 100, mode: uniform, range: [6.0, 9.0]}
-      - {from_ep: 150, mode: uniform, range: [0.0, 3.0]}
+      - {from_ep: 150, mode: uniform, range: [0.0, 9.0]}
