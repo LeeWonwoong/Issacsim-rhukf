@@ -1,0 +1,12 @@
+# n101k_hard100_c1000 — 09-28 22:10 hard100 에서 저이득 칼만 c=1000(EKF q1e-7·p5e-4 / UKF q1e-7·p1e-3) — Isaac 칼만 q 결정용, 시드 42–45.
+base: [configs/newenv_v6s_hard100.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n101k_hard100_c1000
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  e1000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  u1000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}

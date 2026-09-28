@@ -1,0 +1,10 @@
+# n101s_hard100 — 09-28 22:10 무대 hard100(U(0,2) 1–100 → U(7,9) 101–200, 사용자 지정) 새 풀 확인: SWIRL(θ_T·pΔ0.01·R0.5, ε decay 4000 기본) 시드 42–45.
+base: [configs/newenv_v6s_hard100.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n101s_hard100
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5}}

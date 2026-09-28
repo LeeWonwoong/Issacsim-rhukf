@@ -1,0 +1,11 @@
+# configs/newenv_v6s_hard100.yaml — 09-28 22:05 사용자: "hard 할 거면 100 에피소드에서 전환되게" — hard 의 전환 시점만 ep61 → ep101.
+#   ep1–100 거의 무풍 U(0,2) → ep101–200 강풍 U(7,9) 유지. 전환 전에 학습이 정착한 뒤 충격을 준다(초기 학습과 전환 응답 분리).
+#   공격·보상(v5)·패턴은 v6 그대로, scenario.wind.schedule 만 바꿈(코드 수정 없음). Isaac 은 configs/overlays/wind_v6s_hard100.yaml.
+extends: newenv_v6.yaml
+run: {name: newenv_v6s_hard100}
+scenario:
+  wind:
+    mode: uniform
+    range: [0.0, 2.0]
+    schedule:
+      - {from_ep: 100, mode: uniform, range: [7.0, 9.0]}

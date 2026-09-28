@@ -1,0 +1,12 @@
+# n101a_hard100 — 09-28 22:10 hard100 새 풀: 표준 Adam 3e-4(a)·민감도 Adam 1e-3(b), CPU, 시드 42–45.
+base: [configs/newenv_v6s_hard100.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n101a_hard100
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}}
+  b: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 1.0e-3, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}}

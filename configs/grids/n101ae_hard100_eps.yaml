@@ -1,0 +1,10 @@
+# n101ae_hard100_eps — 09-28 22:10 hard100 에서 ε 감쇠 스텝 축(3000·5000·7000·10000, 4000 = n101a) × 표준 Adam 3e-4, CPU, 시드 42–45.
+base: [configs/newenv_v6s_hard100.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n101ae_hard100_eps
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {agent.eps.decay: [3000, 5000, 7000, 10000]}}

@@ -1,0 +1,11 @@
+# n101se_hard100_eps — 09-28 22:10 hard100 에서 ε 감쇠 스텝 축(사용자 지정 3000·5000·7000·10000, 4000 = n101s) × SWIRL — n91s(옛 풀·v6)는 두 번 중단돼 SWIRL 쪽이 비어 있었음. 시드 42–43.
+base: [configs/newenv_v6s_hard100.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n101se_hard100_eps
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5},
+      axes: {agent.eps.decay: [3000, 5000, 7000, 10000]}}
