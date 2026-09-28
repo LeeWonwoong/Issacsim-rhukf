@@ -1,0 +1,9 @@
+# n93_ukf_late — 09-28 12:30 사용자: "Adam 보다 EKF·UKF-TD(KOVA 계열)가 더 좋아야 어필" → 바람 전환 무대 변형마다 UKF-TD(선택값 q1e-4·p_init1·R1·huber0·α0.1·act active) 를 같은 시드(42–45)로 — 전환 직후·회복 뒤 칼만 vs Adam 판정. 무대 = configs/newenv_v6s_late.yaml
+base: [configs/newenv_v6s_late.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n93_ukf_late
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0}}
