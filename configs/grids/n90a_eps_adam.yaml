@@ -1,0 +1,11 @@
+# n90a — 09-28 11:35 사용자: "eps decay 축을 surrogate 에서 바꿔서 차이가 더 나는 축으로" — ε 감쇠 스텝(현재 4000 ≈ 13에피) 을 전 학습기 공통으로 바꾼다.
+#   표준 Adam(lr3e-4·B128·Huber β5·clip10) × decay {1000, 2000, 8000, 16000} × 시드 42–45 (CPU). 4000 = tuneA_adam_v5/a_a_netL6h24 재사용.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n90a_eps_adam
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0},
+      axes: {agent.eps.decay: [1000, 2000, 8000, 16000]}}
