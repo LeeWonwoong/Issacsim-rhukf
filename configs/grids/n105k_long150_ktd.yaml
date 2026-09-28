@@ -1,0 +1,12 @@
+# n105k_long150_ktd — 09-29 01:50 long150 surrogate 짝(칼만, GPU 1개씩 — 원격 ≤80 %): EKF c1000 · UKF c1000 × 시드 42–46 (Isaac 과 같은 설정).
+base: [configs/newenv_v6s_long150.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n105k_long150_ktd
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  e1000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  u1000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}

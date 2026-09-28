@@ -1,0 +1,9 @@
+# n108a_long150w06_adam — 09-29 01:50 대조: 약풍을 처음부터 U(0,6) 으로 한 무대(newenv_v6s_long150w06)에서 표준 Adam 3e-4 × 시드 42–46 — long150(n105a a)과 전환 붕괴 크기 비교.
+base: [configs/newenv_v6s_long150w06.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n108a_long150w06_adam
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}}
