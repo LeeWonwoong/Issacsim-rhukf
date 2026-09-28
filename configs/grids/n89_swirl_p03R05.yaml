@@ -1,0 +1,11 @@
+# n89 — 09-28 11:20 사용자: "SWIRL 본 설정 pΔ 0.03 · R 0.5 는?" → surrogate 8시드(42–49) + 튜닝값 R05(pΔ0.01·R0.5) 시드 46–49 보강(n78 은 42–45).
+#   공통: v6 무대·v5 보상 · L6·[24,24]·B128·ui1·τ0.005·α0.1·q5e-4·N10·huber0·spas·act=target.
+base: [configs/newenv_v6.yaml, configs/overlays/surrogate_knn_v4clean.yaml]
+outdir: results/claudecodefortest/n89_swirl_p03R05
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target},
+      axes: {cfg: [{_name: p03R05, agent.swirl.p_delta: 0.03, agent.swirl.R: 0.5}]}}
