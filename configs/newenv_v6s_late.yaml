@@ -1,0 +1,11 @@
+# configs/newenv_v6s_late.yaml — 09-28 사용자: "v6s 전환을 60–120 이 아니라 90–150 으로 늦추면?" — v6s 와 바람 범위는 같고 시점만 30에피 뒤로.
+#   ep1–90 약풍 U(0,4) → ep91–150 강풍 U(6.5,9) → ep151–200 섞임 U(0,9). 시점 효과만 분리(범위를 바꾼 n92_long 과 대조).
+extends: newenv_v6.yaml
+run: {name: newenv_v6s_late}
+scenario:
+  wind:
+    mode: uniform
+    range: [0.0, 4.0]
+    schedule:
+      - {from_ep: 90, mode: uniform, range: [6.5, 9.0]}
+      - {from_ep: 150, mode: uniform, range: [0.0, 9.0]}
