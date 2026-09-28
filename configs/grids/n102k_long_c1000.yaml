@@ -1,0 +1,12 @@
+# n102k_long_c1000 — 09-29 01:25 후보 무대 long(U(0,3) 1–100 → U(7,9) 101–160 → 섞임 161–200)에서 저이득 칼만 c1000(EKF q1e-7·p5e-4 / UKF q1e-7·p1e-3) — SWIRL·Adam(n99s·n99a) 과 같은 시드 42–45, 무대 선택용.
+base: [configs/newenv_v6s_long.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n102k_long_c1000
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  e1000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  u1000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}
