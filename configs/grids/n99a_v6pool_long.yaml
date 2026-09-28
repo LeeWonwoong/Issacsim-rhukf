@@ -1,0 +1,9 @@
+# n99a_v6pool_long — 09-28 17:40 새 풀(surrogate_knn_v6) 무대 선별 1단계: 표준 Adam 3e-4 만 먼저(CPU, 빠름) — 강풍 전환 뒤 Adam 붕괴가 가장 선명한 변형을 추린 뒤 SWIRL·칼만은 상위 후보에만. 무대 = configs/newenv_v6s_long.yaml, 시드 42–45.
+base: [configs/newenv_v6s_long.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n99a_v6pool_long
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}}
