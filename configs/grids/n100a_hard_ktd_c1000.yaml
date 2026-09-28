@@ -1,0 +1,12 @@
+# n100a_hard_ktd_c1000 — 09-28 21:50 최종 무대 hard(U(0,2)→ep60 U(7,9)) 에서 저이득 칼만 c=1000(EKF q1e-7·p5e-4 / UKF q1e-7·p1e-3) 확인 — n97v6(base, 2시드)에서 c1000 이 EKF 285.9·UKF 285.8 로 Adam 282.7 을 넘고 SWIRL 286.4 에 근접. Isaac 최종 칼만 q 결정용. 시드 42–45.
+base: [configs/newenv_v6s_hard.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n100a_hard_ktd_c1000
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  e1000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  u1000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}

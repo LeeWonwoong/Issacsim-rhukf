@@ -1,0 +1,9 @@
+# n99a2_v6pool_hard_lr1e3 — 09-28 21:50 최종 무대 hard 에서 Adam lr 1e-3 민감도(공개용, 옛 풀에서 SWIRL 과의 격차를 ~1 로 줄였던 설정). CPU, 시드 42–45.
+base: [configs/newenv_v6s_hard.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n99a2_v6pool_hard_lr1e3
+seeds: [42, 43, 44, 45]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 1.0e-3, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}}

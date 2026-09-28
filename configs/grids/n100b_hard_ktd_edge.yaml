@@ -1,0 +1,18 @@
+# n100b_hard_ktd_edge — 09-28 21:50 hard 에서 칼만 격자 끝 점검 — n97v6 에서 최선 c=1000 이 격자 끝이라 c=10000(EKF q1e-8·p5e-5 / UKF q1e-8·p1e-4)까지 확장 + 기존 선택값 c=1 기준. 시드 42–43.
+base: [configs/newenv_v6s_hard.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n100b_hard_ktd_edge
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  e10000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-8, agent.swirl.p_init: 0.00005}}
+  u10000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-8, agent.swirl.p_init: 0.0001}}
+  e1: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 0.5}}
+  u1: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-4, agent.swirl.p_init: 1.0}}
