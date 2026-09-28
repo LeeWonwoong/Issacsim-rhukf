@@ -1,0 +1,26 @@
+# n97v6_ktd_lowgain_base — 09-28 17:10 n97(저이득 칼만 (q, p_init)/c, c∈{10,100,1000})을 새 풀(surrogate_knn_v6)로 재실행 — 옛 풀판은 바람 전환 충격 미재현이라 중단. 기준 c=1 은 n98k_v6pool_base.
+#   처방 = 이득↓. EKF 는 huber0 에서 (q, p_init, R) 등변 → (q, p_init)/c 는 R=c 와 같은 필터(KOVA 의 R=배치 크기 계열). c ∈ {10, 100, 1000}.
+#   선택값(EKF q1e-4·p0.5 / UKF q1e-4·p1)을 c 로 나눔. UKF 는 시그마점 폭이 P 에 달려 근사 등변. 나머지 = n96/n93 과 동일. 무대 v6s base, 시드 42–43 먼저.
+base: [configs/newenv_v6s.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n97v6_ktd_lowgain_base
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  e10:   {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-5, agent.swirl.p_init: 0.05}}
+  e100:  {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-6, agent.swirl.p_init: 0.005}}
+  e1000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  u10:   {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-5, agent.swirl.p_init: 0.1}}
+  u100:  {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-6, agent.swirl.p_init: 0.01}}
+  u1000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}
