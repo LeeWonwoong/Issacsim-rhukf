@@ -1,0 +1,32 @@
+# n120s_vfinal_rw15510_tune — 09-29 16:30 사용자: "surrogate 에서 보상 1,5,5,10 으로 SWIRL 튜닝 — R 2 또는 3, P 튜닝".
+#   근거: 보상 1,5,5,10 에서 TD 잔차² 가 약 8배(Adam 21–60 에피 1.09→7.66, 후반 0.45→3.67) → 현행 R 0.5 에 해당하는 값 ≈ 2–4.
+#   R ∈ {2, 3} × pΔ ∈ {0.01, 0.05, 0.1}, 나머지 SWIRL 설정 = 현행(θ_T·N10·q5e-4·α0.1·huber0·spas). vfinal + 보상 1,5,5,10, 시드 42–44. 원격 GPU·blocking·동시 1개.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_1_5_5_10.yaml]
+outdir: results/claudecodefortest/n120s_vfinal_rw15510_tune
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  r2p001: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 2.0}}
+  r2p005: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.05, agent.swirl.R: 2.0}}
+  r2p01: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.1, agent.swirl.R: 2.0}}
+  r3p001: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 3.0}}
+  r3p005: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.05, agent.swirl.R: 3.0}}
+  r3p01: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.1, agent.swirl.R: 3.0}}
