@@ -1,0 +1,18 @@
+# n117k_vfinal_r05 — 09-29 12:55 사용자: "EKF·UKF 값 먼저 확정 — R 0.5(SWIRL 과 같은 관측 모델)에서 q 1e-7, p_init 1e-2·1e-3, 3시드로 빠르게". 원격 GPU(SWIRL 튜닝 일시 정지).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n117k_vfinal_r05
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  e_p1e2: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.01}}
+  e_p1e3: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}
+  u_p1e2: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.01}}
+  u_p1e3: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}
