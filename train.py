@@ -32,6 +32,8 @@ def make_agent(exp):
     torch.manual_seed(exp.cfg.seed); np.random.seed(exp.cfg.seed)
     if exp.cfg.agent_type == 'adam':
         from rl.agent_adam import OnlineAdamAgent as AG
+    elif exp.cfg.agent_type == 'clf':                 # ★09-30 비용가중 지도 분류기 베이스라인(보상에서 라벨 복원)
+        from rl.agent_clf import OnlineCostClassifierAgent as AG
     else:
         from rl.agent import OnlineRHUKFAgent as AG
     return AG(exp.cfg)
@@ -244,7 +246,7 @@ def main(argv=None):
         f"attack={exp.scenario.attack.family} wind={exp.scenario.wind.mode} seed={c.seed} ep={c.max_episodes}×{c.episode_max_steps}")
     if float(exp.reward.shape_tilt) > 0:
         log(f"[train] P2′ 성형 λ={exp.reward.shape_tilt} θ0={exp.reward.tilt_ref} 동결={exp.reward.shape_freeze} γ={exp.reward.shape_gamma}")
-    if exp.agent_type != 'adam':
+    if exp.agent_type not in ('adam', 'clf'):
         log(f"[train] SWIRL form={c.state_form} anchor={c.anchor_type} argmax={c.ddqn_argmax}/{c.h0_online_moving_init} "
             f"pΔ={c.p_delta_init} huber={c.huber_c} N={c.N_horizon} R={c.r_init} q={c.q_init} α={c.alpha} τ={c.tau_srrhuif} ui={c.update_interval}")
     t0 = time.time()

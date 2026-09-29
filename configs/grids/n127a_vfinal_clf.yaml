@@ -1,0 +1,16 @@
+# n127a_vfinal_clf — 09-30 01:40 사용자 위임. 리뷰어 R6("근시 문제면 비용가중 지도 분류기로 되지 않나") 대응 베이스라인, 원격 CPU, 시드 42–46.
+#   agent.type=clf (rl/agent_clf.py): DQN 과 같은 망·관측·ε·버퍼·Adam, 학습 신호 = 같은 보상 r 에서 복원한 라벨, 비용가중 CE.
+#   threshold cost = 1스텝 베이즈 임계 c_fa/(c_fa+c_d) · bonus = 진입 c_fa/(c_fa+c_d+B)·유지 c_fa/(c_fa+c_d).
+#   대칭 비용(c_fa=c_d)이면 격차축(배율)에 학습이 불변 → vfinal·A-1 은 임계(보너스)만 다르다. 모양축 S12·S21 은 가중·임계가 바뀐다.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n127a_vfinal_clf
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  cost_l3e4: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: cost, agent.adam.lr: 0.0003}}
+  bonus_l3e4: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: bonus, agent.adam.lr: 0.0003}}
+  cost_l1e3: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: cost, agent.adam.lr: 0.001}}
+  bonus_l1e3: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: bonus, agent.adam.lr: 0.001}}
+  A1bonus_l3e4: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: bonus, agent.adam.lr: 0.0003, reward.alive: 1, reward.c_fa: 1, reward.c_d: 1, reward.bonus: 3}}
+  S12bonus_l3e4: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: bonus, agent.adam.lr: 0.0003, reward.alive: 1, reward.c_fa: 1, reward.c_d: 2, reward.bonus: 4}}
+  S21bonus_l3e4: {device: cpu, set: {agent.type: clf, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.clf.threshold: bonus, agent.adam.lr: 0.0003, reward.alive: 1, reward.c_fa: 2, reward.c_d: 1, reward.bonus: 4}}

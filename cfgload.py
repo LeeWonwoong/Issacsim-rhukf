@@ -32,11 +32,12 @@ from sim.surrogate import SurrogateConfig
 
 # ── 스키마: 섹션 → 허용 키 (dataclass 섹션은 필드에서 자동) ─────────────────────────────
 _AGENT_KEYS = {'type', 'gamma', 'n_step', 'batch', 'buffer', 'hidden', 'tau', 'update_interval', 'per',
-               'hover_dwell', 'eps', 'replay', 'swirl', 'adam'}
+               'hover_dwell', 'eps', 'replay', 'swirl', 'adam', 'clf'}
 _EPS_KEYS = {'start', 'end', 'decay', 'hover_p', 'z_mu', 'z_cap'}
 _REPLAY_KEYS = {'mode', 'halflife'}
 _SWIRL_KEYS = {'form', 'p_delta', 'p_init', 'huber_c', 'N', 'R', 'q', 'alpha', 'anchor', 'argmax', 'h0', 'spas', 'act', 'eval'}
 _ADAM_KEYS = {'lr', 'amsgrad', 'init', 'optimizer', 'loss', 'huber_beta', 'grad_clip'}
+_CLF_KEYS = {'threshold'}                 # ★09-30 비용가중 분류기 베이스라인(agent.type=clf): 망·최적화기는 agent.adam 을 공유
 _RUN_KEYS = {'name', 'seed', 'episodes', 'ep_steps', 'outdir', 'device'}
 _LOG_KEYS = {'probe_every', 'probe_n', 'steps', 'eval_n'}
 _ENV_KEYS = {'kind', 'surrogate', 'isaac'}
@@ -163,6 +164,7 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     rp = dict(ag.get('replay') or {}); _check(rp, _REPLAY_KEYS, 'agent.replay')
     sw = dict(ag.get('swirl') or {}); _check(sw, _SWIRL_KEYS, 'agent.swirl')
     ad = dict(ag.get('adam') or {}); _check(ad, _ADAM_KEYS, 'agent.adam')
+    cl = dict(ag.get('clf') or {}); _check(cl, _CLF_KEYS, 'agent.clf')
 
     import torch
     cfg.device = ('cuda' if torch.cuda.is_available() else 'cpu') if run['device'] == 'auto' else run['device']
@@ -170,9 +172,10 @@ def load_experiment(paths: Iterable[str], sets: Optional[List[str]] = None) -> S
     cfg.outdir = run['outdir']
 
     atype = ag.get('type', 'swirl')
-    if atype not in ('swirl', 'adam', 'ukf', 'ekf'):
-        raise ValueError(f'agent.type={atype!r} (swirl|adam|ukf|ekf)')
-    cfg.agent_type = 'adam' if atype == 'adam' else 'rhukf'
+    if atype not in ('swirl', 'adam', 'ukf', 'ekf', 'clf'):
+        raise ValueError(f'agent.type={atype!r} (swirl|adam|ukf|ekf|clf)')
+    cfg.agent_type = atype if atype in ('adam', 'clf') else 'rhukf'
+    cfg.clf_threshold = str(cl.get('threshold', 'cost'))
     cfg.filter_mode = {'swirl': 'rhukf', 'ukf': 'ukf', 'ekf': 'ekf'}.get(atype, 'rhukf')
     M = {'gamma': 'gamma', 'batch': 'batch_size', 'buffer': 'buffer_size', 'tau': 'tau_srrhuif',
          'update_interval': 'update_interval', 'per': 'use_per', 'hover_dwell': 'hover_dwell'}
