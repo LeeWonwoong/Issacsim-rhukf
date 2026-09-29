@@ -1,0 +1,12 @@
+# n118k_vfinal_r05_p5e3 — 09-29 15:00 사용자: "p_init 1e-3 은 SWIRL 에 너무 가깝다 — 5e-3 은? 빠르게, surrogate 최우선" — R0.5·q1e-7·p_init 5e-3, EKF·UKF, 시드 42–44 (1e-2·1e-3 = n117k).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n118k_vfinal_r05_p5e3
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  e_p5e3: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.005}}
+  u_p5e3: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.005}}
