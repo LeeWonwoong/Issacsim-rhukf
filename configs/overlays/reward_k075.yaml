@@ -1,0 +1,6 @@
+# configs/overlays/reward_k075.yaml — 09-29 19:20 사용자: "vfinal 을 더 애매하게(행동 격차↓), 오경보=미탐 같은 값" — 후보 B: 기본 1 · 오경보 = 미탐 = 0.75 · 탐지 보너스 2.0 (현행 1.5·1.5·4). fn_onset_mult·scale 은 그대로.
+reward:
+  alive: 1.0
+  c_fa: 0.75
+  c_d: 0.75
+  bonus: 2.0

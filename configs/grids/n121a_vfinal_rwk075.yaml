@@ -1,0 +1,9 @@
+# n121a_vfinal_rwk075 — 09-29 19:20 보상 비율 선별(Adam 먼저, CPU): 후보 B (1,0.75,0.75,2) — 행동 격차↓(비용/기본 보상 k 축소, 오경보=미탐, 보너스/비용 ≈2.5–3). Adam MSE·clip 없음·lr3e-4, 시드 42–44. 현행(k1.5) = n111a pure.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_k075.yaml]
+outdir: results/claudecodefortest/n121a_vfinal_rwk075
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9}}
