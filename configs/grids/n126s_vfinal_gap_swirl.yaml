@@ -1,0 +1,13 @@
+# n126s_vfinal_gap_swirl — 09-30 01:20 사용자 위임. SWIRL 격차축 G·모양축 S (리뷰어 R2·R5 대응), 원격 GPU·blocking·한 번에 1개, 시드 42–44.
+#   G: C(1,.5,.5,1.5) R0.1 · (1,5,5,10) R5  (+ 기존 A-1 n122s_vfinal_rwA1 R0.25 · vfinal n110s/n122s_cur R0.5)
+#   S: S12=(1,1,2,4) · S21=(1,2,1,4) R0.5.  R 은 사전 등록(configs/grids/PREREG_rwA1_0930.md) — Adam 후반 TD MSE 의 1-2-5 근사. pΔ 0.01 고정.
+#   짝 Adam = n125a_vfinal_gap_adam (lr 3e-4·1e-3, 5시드).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n126s_vfinal_gap_swirl
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  C: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.R: 0.1, reward.alive: 1, reward.c_fa: 0.5, reward.c_d: 0.5, reward.bonus: 1.5}}
+  X5: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.R: 5.0, reward.alive: 1, reward.c_fa: 5, reward.c_d: 5, reward.bonus: 10}}
+  S12: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5, reward.alive: 1, reward.c_fa: 1, reward.c_d: 2, reward.bonus: 4}}
+  S21: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5, reward.alive: 1, reward.c_fa: 2, reward.c_d: 1, reward.bonus: 4}}
