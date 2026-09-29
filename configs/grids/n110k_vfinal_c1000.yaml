@@ -1,0 +1,12 @@
+# n110k_vfinal_c1000 — 09-29 11:40 vfinal surrogate 짝(칼만): EKF c1000 · UKF c1000 × 시드 42–46 (Isaac isaac_vfinal 과 같은 설정).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n110k_vfinal_c1000
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  e1000: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  u1000: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}
