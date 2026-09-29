@@ -1,7 +1,7 @@
-# n110s_vfinal_swirl_tune — 09-29 11:40 최종 무대 vfinal SWIRL 튜닝(Isaac SWIRL 은 이 결과로 맨 마지막) — 중심 c(pΔ0.01·R0.5) + pΔ∈{0.03,0.05,0.1}@R0.5 + R∈{0.25,1,2}@pΔ0.01, 시드 42–45. 선택 규칙(사전 등록): 4시드 평균 200에피 리턴 최고(칼만 c 선택과 같은 기준). 원격 GPU·CUDA_LAUNCH_BLOCKING=1.
+# n110s_vfinal_swirl_tune — 09-29 11:40 최종 무대 vfinal SWIRL 튜닝(Isaac SWIRL 은 이 결과로 맨 마지막) — 중심 c(pΔ0.01·R0.5) + pΔ∈{0.03,0.05,0.1}@R0.5 + R∈{0.25,1,2}@pΔ0.01, 시드 42–44(09-29 13:05 사용자: 3시드로 축소 — 결과 보기 전). 선택 규칙(사전 등록): 3시드 평균 200에피 리턴 최고(칼만 c 선택과 같은 기준). 원격 GPU·CUDA_LAUNCH_BLOCKING=1.
 base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
 outdir: results/claudecodefortest/n110s_vfinal_swirl_tune
-seeds: [42, 43, 44, 45]
+seeds: [42, 43, 44]
 stages: {a: {}}
 learners:
   c: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
