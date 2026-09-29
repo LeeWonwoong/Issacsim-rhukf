@@ -1,0 +1,7 @@
+# configs/overlays/reward_1_5_5_10.yaml — 09-29 16:10 사용자: "벌점 쪽을 더 강하게 줘서 탐지기 성능 자체가 리턴에 더 잘 드러나게" — 기본 보상 1 · 오경보 5 · 미탐 5 · 탐지 보너스 10.
+#   현행 vfinal(v5) 보상 = alive 1 · c_fa 1.5 · c_d 1.5 · bonus 4 (fn_onset_mult 1.8·scale 1 은 그대로). 무대·학습기 설정은 바꾸지 않음(보상만).
+reward:
+  alive: 1.0
+  c_fa: 5.0
+  c_d: 5.0
+  bonus: 10.0

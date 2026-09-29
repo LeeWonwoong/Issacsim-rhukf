@@ -1,0 +1,10 @@
+# n119s_vfinal_rw15510 — 09-29 16:10 보상 (1,5,5,10) 실험 — SWIRL pΔ0.01·R0.5 (현행 튜닝 기준점), 시드 42–44. 현행 보상 대조 = n110s c.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_1_5_5_10.yaml]
+outdir: results/claudecodefortest/n119s_vfinal_rw15510
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5}}

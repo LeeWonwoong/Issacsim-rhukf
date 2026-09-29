@@ -1,0 +1,12 @@
+# n119k_vfinal_rw15510 — 09-29 16:10 보상 (1,5,5,10) 실험 — 칼만: EKF·UKF p_init 0.01·R 0.5·q 1e-7 (Isaac 본 설정과 동일), 시드 42–44. 현행 보상 대조 = n117k e/u_p1e2.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_1_5_5_10.yaml]
+outdir: results/claudecodefortest/n119k_vfinal_rw15510
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  e: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.01}}
+  u: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 0.5, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.01}}

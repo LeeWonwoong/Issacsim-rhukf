@@ -1,0 +1,9 @@
+# n119a_vfinal_rw15510 — 09-29 16:10 보상 (1,5,5,10) 실험 — Adam MSE·clip 없음·lr3e-4 (Isaac 본 설정과 동일), CPU, 시드 42–44. 현행 보상 대조 = n111a pure.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_1_5_5_10.yaml]
+outdir: results/claudecodefortest/n119a_vfinal_rw15510
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9}}
