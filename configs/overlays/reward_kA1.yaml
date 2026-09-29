@@ -1,0 +1,6 @@
+# configs/overlays/reward_kA1.yaml — 09-29 19:35 사용자: 보상 후보 A-1 = 기본 1 · 오경보 = 미탐 = 1 · 탐지 보너스 3 (A 는 보너스 2.5 = reward_k1.yaml, 현행 1.5·1.5·4). fn_onset_mult·scale 그대로.
+reward:
+  alive: 1.0
+  c_fa: 1.0
+  c_d: 1.0
+  bonus: 3.0
