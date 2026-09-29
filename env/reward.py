@@ -12,6 +12,9 @@
              · c_sw(★09-23, 기본 0): 실행 행동이 바뀐 스텝마다(track↔hover, 양방향) 모드 전환 비용.
                failsafe 진입·해제는 PX4 모드·파라미터 전환·임무 중단을 일으키는 운용 사건 = 알람 채터링(ISA-18.2) 비용.
              · 지연 비용은 놓친 스텝마다 상수 → 누적 비용 = c_d × 탐지 지연 (고전 QCD 지연 비용)
+             · ★09-29 증가형 지연 비용(c_d_ref>0 일 때만; 기본 0 = 상수·비트 동일):
+               c_d(d) = c_d · min(d, c_d_cap) / c_d_ref,  d = 온셋 뒤 몇 번째 공격 스텝(1부터 = attack_delay+1)
+               c_d_ref = 이 지연에서 벌점 = c_d (대응 데드라인 d≤3 에 맞춰 3), c_d_cap = 벌점 상한 지연(6 → 최대 2·c_d)
              · bonus: 사건(버스트)마다 처음 hover 가 켜진 스텝 1회(이미 hover 중에 온셋이어도 지급) — 모든 공격을 잡는 감지기
              · alive: 모든 스텝 공통 상수(정책 불변, 종료 시에만 효과 = 추락 비용)
 공통: 추락(terminated)이면 −terminal_penalty 추가.  마지막에 전체 × scale.
@@ -55,6 +58,8 @@ class RewardConfig:
     bonus: float = 1.0
     alive: float = 0.0
     c_sw: float = 0.0              # ★09-23 모드 전환 비용(track↔hover 스텝마다). 0 = 끔(이전과 비트 동일)
+    c_d_ref: float = 0.0           # ★09-29 증가형 지연 비용 기준 지연(스텝). 0 = 끔(상수 c_d, 이전과 비트 동일)
+    c_d_cap: int = 6               # 증가형 지연 비용이 더 커지지 않는 지연(스텝)
     # ── ★09-23 P2′ 자세 퍼텐셜 성형 (0 = 끔) ──
     shape_tilt: float = 0.0        # λ
     tilt_ref: float = 0.1          # θ0 [rad]
@@ -65,6 +70,8 @@ class RewardConfig:
         if self.mode not in ('label4', 'cost'):
             raise ValueError(f'reward.mode={self.mode!r} (label4|cost)')
         self.terminal_penalty = abs(float(self.terminal_penalty))   # 옛 설정은 음수로 적었다 → 크기로 정규화
+        if float(self.c_d_ref) < 0 or int(self.c_d_cap) < 1:
+            raise ValueError(f'reward.c_d_ref={self.c_d_ref} (≥0) · c_d_cap={self.c_d_cap} (≥1)')
         if float(self.shape_tilt) < 0 or float(self.tilt_ref) <= 0 or int(self.shape_freeze) < 0:
             raise ValueError(f'reward.shape_tilt={self.shape_tilt} (≥0) · tilt_ref={self.tilt_ref} (>0) · '
                              f'shape_freeze={self.shape_freeze} (≥0)')
@@ -153,7 +160,10 @@ class RewardTracker:
                 if prev_action == 1:
                     r -= rc.c_fa
             elif prev_action == 0:
-                r -= rc.c_d
+                if rc.c_d_ref > 0:
+                    r -= rc.c_d * min(max(attack_delay, 0) + 1, int(rc.c_d_cap)) / float(rc.c_d_ref)
+                else:
+                    r -= rc.c_d
             elif not self._paid:
                 r += rc.bonus
                 self._paid = True

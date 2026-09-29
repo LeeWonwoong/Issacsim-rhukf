@@ -1,0 +1,10 @@
+# n123a_vfinal_dramp_cur — 09-29 21:00 사용자: 증가형 미탐 비용(reward_dramp: c_d·min(d,6)/3) × 현행 보상 (1,1.5,1.5,4) × Adam MSE, CPU, 시드 42–46.
+#   비교 기준: 상수 c_d = n111a_vfinal_adam_pure (학습기 설정 동일).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_dramp.yaml]
+outdir: results/claudecodefortest/n123a_vfinal_dramp_cur
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  a: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9}}
