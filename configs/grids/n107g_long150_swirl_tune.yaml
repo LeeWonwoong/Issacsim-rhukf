@@ -1,0 +1,30 @@
+# n107g_long150_swirl_tune — 09-29 11:05 n107(원격 CPU)이 17런 동시 경합으로 에피 730 s 까지 느려져 원격 GPU 로 이전: CUDA_LAUNCH_BLOCKING=1(커널 동기 실행 → 깊은 큐 없음 → SWIRL 1개 GPU 32–55 %)로 ≤80 % 유지. 설정은 n107 과 같음: pΔ∈{0.03,0.05,0.1}@R0.5, R∈{0.25,1,2}@pΔ0.01, 시드 42–43.
+base: [configs/newenv_v6s_long150.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n107g_long150_swirl_tune
+seeds: [42, 43]
+stages: {a: {}}
+learners:
+  p03: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.03, agent.swirl.R: 0.5}}
+  p05: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.05, agent.swirl.R: 0.5}}
+  p10: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.1, agent.swirl.R: 0.5}}
+  r025: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.25}}
+  r1: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 1.0}}
+  r2: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 2.0}}

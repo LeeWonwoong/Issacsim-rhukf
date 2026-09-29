@@ -1,0 +1,10 @@
+# n105sg_long150_swirl — 09-29 11:10 long150 surrogate 짝(SWIRL θ_T·pΔ0.01·R0.5 × 시드 42–46, Isaac 과 같은 설정) — 원격 GPU·CUDA_LAUNCH_BLOCKING=1(SWIRL 1개 36–52 %). n105s(CPU)는 경합으로 에피 1140 s 라 중단.
+base: [configs/newenv_v6s_long150.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n105sg_long150_swirl
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  s: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5}}
