@@ -1,0 +1,37 @@
+# n112k_vfinal_ktd_check — 09-29 12:15 사용자: "EKF·UKF 튜닝 완료? q 1e-7·p_init 5e-4/1e-3 너무 작지 않나?" — c 한 축 격자(q·p 동시 축소)만 했으므로 vfinal 에서 독립 확인:
+#   q ∈ {3e-8, 1e-7, 3e-7} (p_init 고정) + p_init ×10·×100 (q 1e-7 고정), EKF·UKF, 시드 42–44. 로컬 GPU(Isaac 일시 정지 중).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n112k_vfinal_ktd_check
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  e_q3e8: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 3.0e-8, agent.swirl.p_init: 0.0005}}
+  e_c: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.0005}}
+  e_q3e7: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 3.0e-7, agent.swirl.p_init: 0.0005}}
+  e_p10: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.005}}
+  e_p100: {device: gpu, set: {agent.type: ekf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.05}}
+  u_q3e8: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 3.0e-8, agent.swirl.p_init: 0.001}}
+  u_c: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.001}}
+  u_q3e7: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 3.0e-7, agent.swirl.p_init: 0.001}}
+  u_p10: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.01}}
+  u_p100: {device: gpu, set: {agent.type: ukf, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                             obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                             agent.swirl.R: 1.0, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.N: 1, agent.swirl.act: active, agent.swirl.q: 1.0e-7, agent.swirl.p_init: 0.1}}

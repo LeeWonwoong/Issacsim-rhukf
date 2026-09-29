@@ -1,0 +1,25 @@
+# n111a_vfinal_adam_pure — 09-29 12:00 사용자: "Huber·clip 은 업데이트 구조가 아닌 다른 로직의 강건성이라 Adam 에만 유리 — 진짜 SGD+적응 이득인 순수 Adam 으로".
+#   vfinal 에서 Adam 변형 비교(CPU, 시드 42–46): hc = 현행(Huber β5·clip 10) / pure = MSE·clip 없음(1e9) / mc = MSE·clip10 / hn = Huber β5·clip 없음 / pure 의 lr 1e-3·1e-4.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n111a_vfinal_adam_pure
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  hc: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 10.0}}
+  pure: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9}}
+  mc: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 10.0}}
+  hn: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 3.0e-4, agent.adam.huber_beta: 5.0, agent.adam.grad_clip: 1.0e9}}
+  pure1e3: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 1.0e-3, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9}}
+  pure1e4: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.adam.lr: 1.0e-4, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9}}
