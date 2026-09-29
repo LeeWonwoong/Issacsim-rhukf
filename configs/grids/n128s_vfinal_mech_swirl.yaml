@@ -1,0 +1,10 @@
+# n128s_vfinal_mech_swirl — 09-30 01:55 사용자 위임. SWIRL 메커니즘 대조(원격 GPU·blocking·한 번에 1개, 시드 42–44):
+#   z  = alive 0 (Adam 은 alive0 에서 F1 .877→.892 로 SWIRL 근처까지 회복 — SWIRL 우위가 Q 공통수준 대비 작은 격차에 대한 강건성뿐인지)
+#   g0 = γ 0 (즉시 보상 회귀 = 근시 분류기 목표; 분류기 n127a 가 SWIRL 이상이었다). R 0.5 는 vfinal 과 같게(사전 등록 원칙: 같은 c).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n128s_vfinal_mech_swirl
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  z: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5, reward.alive: 0.0}}
+  g0: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target, agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5, agent.gamma: 0.0}}

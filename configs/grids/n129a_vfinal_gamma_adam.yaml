@@ -1,0 +1,13 @@
+# n129a_vfinal_gamma_adam — 09-30 01:55 사용자 위임. 분류기(n127a)가 모든 RL 을 앞선 원인 분리: 부트스트랩(γ)이 문제를 스스로 어렵게 만드는가.
+#   γ=0 DQN = 즉시 보상 회귀 = (보너스 포함) 근시 베이즈 분류기와 같은 목표. vfinal 보상, Adam MSE, lr 3e-4·1e-3, 시드 42–46, 원격 CPU. γ0.97 = n111a.
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml]
+outdir: results/claudecodefortest/n129a_vfinal_gamma_adam
+seeds: [42, 43, 44, 45, 46]
+stages: {a: {}}
+learners:
+  g00_l3e4: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9, agent.adam.lr: 0.0003, agent.gamma: 0.0}}
+  g00_l1e3: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9, agent.adam.lr: 0.001, agent.gamma: 0.0}}
+  g05_l3e4: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9, agent.adam.lr: 0.0003, agent.gamma: 0.5}}
+  g05_l1e3: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9, agent.adam.lr: 0.001, agent.gamma: 0.5}}
+  g09_l3e4: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9, agent.adam.lr: 0.0003, agent.gamma: 0.9}}
+  g09_l1e3: {device: cpu, set: {agent.type: adam, run.device: cpu, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8, obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000, agent.adam.huber_beta: 5.0, agent.adam.loss: mse, agent.adam.grad_clip: 1.0e9, agent.adam.lr: 0.001, agent.gamma: 0.9}}
