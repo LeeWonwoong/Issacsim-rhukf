@@ -287,6 +287,20 @@ def test_regress_in_learning_triggers_hard_reset():
         node._cb_gt(plant.gt_msg(20000))                               # 스탬프 역행
         assert node.flight_state == 'HARD_RESET' and node._fatal is None
         assert not node._scq.q and node._sc_ctx is None and not node._sc_defq
+        ep0, sc0 = node.episode, dict(node.scenario)                   # ★09-30 에피 도중 HARD → 같은 번호·같은 시나리오 재시도
+        node._start_new_episode()
+        import numpy as _np
+        def _same(x, y):
+            if isinstance(x, dict):
+                return isinstance(y, dict) and set(x) == set(y) and all(_same(x[k], y[k]) for k in x)
+            if isinstance(x, (list, tuple)):
+                return isinstance(y, (list, tuple)) and len(x) == len(y) and all(_same(a, b) for a, b in zip(x, y))
+            if isinstance(x, _np.ndarray) or isinstance(y, _np.ndarray):
+                return _np.array_equal(_np.asarray(x), _np.asarray(y))
+            if hasattr(x, '__dict__') and not isinstance(x, type):          # 데이터클래스(공격 계획 등): 필드끼리
+                return type(x) is type(y) and _same(vars(x), vars(y))
+            return bool(x == y)
+        assert node.episode == ep0 and _same(node.scenario, sc0)
 
 
 def test_run_isaac_rejects_knob_mismatch():

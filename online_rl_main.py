@@ -1167,6 +1167,23 @@ class OnlineRLNode(Node):
         if self._sc:
             self._sc_reset()      # 드레인 큐·GPS·결정 대기·적용 행동·타이밍 카운터
 
+    def _advance_episode_number(self, max_retry=None):
+        """★09-30 에피소드 누락 버그 수정. 번호는 _end_episode(학습)가 기록을 마쳤을 때(_ep_consumed=True)만 소비된다.
+        전에는 TAKEOFF 에 들어갈 때마다 번호를 올려, 이륙 실패→WARM_RESET·에피 도중 HARD 리셋이면 그 번호의 시나리오가 통째로 빠졌다
+        (vfinal 런당 0–4개, speed 2.5 에서 더 잦음). 이제 소비 전에 다시 불리면 같은 번호·같은 시나리오((seed, episode) 결정적 추첨)로
+        재시도한다. 한 번호의 시도가 상한(노브 EP_MAX_RETRY, 기본 9 = HARD 에스컬레이션 3주기)을 넘으면 번호를 건너뛰지 않고
+        치명 종료(_sc_die → rc≠0)한다 — 조용한 누락을 다시 만들지 않고, 인프라 고장을 체인이 완료로 오인하지 않게."""
+        if max_retry is None:
+            max_retry = int(float(knob('EP_MAX_RETRY', 9) or 9))
+        if getattr(self, '_ep_consumed', True):
+            self.episode += 1; self._ep_attempts = 1
+        else:
+            self._ep_attempts = getattr(self, '_ep_attempts', 1) + 1
+            if self._ep_attempts > max_retry:
+                self._sc_die(f'[EP-RETRY] 에피소드 {self.episode} 시도 {max_retry}회 모두 끝나기 전에 리셋 — 인프라 고장 반복(건너뛰지 않고 중단)')
+            self.get_logger().warn(f'  [EP-RETRY] 에피소드 {self.episode} 이 끝나기 전에 리셋됨 → 같은 번호·같은 시나리오로 다시 시도 ({self._ep_attempts}/{max_retry}번째 시도)')
+        self._ep_consumed = False
+
     def _start_new_episode(self):
         if self.sweep_mode:
             self._start_sweep_episode(); return
@@ -1174,7 +1191,7 @@ class OnlineRLNode(Node):
             self.scenario = self.cfg.eval_scenarios[self.eval_scenario_idx]
             label = f'EVAL {self.eval_scenario_idx+1}/{len(self.cfg.eval_scenarios)}'
         else:
-            self.episode += 1
+            self._advance_episode_number()     # ★09-30 에피소드 누락 버그 수정 (위 _advance_episode_number 설명)
             if self.episode > self.cfg.max_episodes:
                 self._finish_training(); return
             if self.capture is not None and self.capture.mode == 'pairs':
@@ -1372,7 +1389,13 @@ class OnlineRLNode(Node):
         if getattr(self, 'capture', None) is not None and self._cap_rows:
             # ★09-18 검토: 에피소드 도중 리셋(heartbeat 등) → 이 에피소드 행을 버리고 같은 번호를 다시 돌린다(짝 보존)
             self.get_logger().warn(f'  [CAPTURE] 에피소드 {self.episode} 도중 HARD 리셋 — 행 {len(self._cap_rows)} 폐기, 다시 실행')
-            self._cap_rows = []; self.episode -= 1
+            self._cap_rows = []               # ★09-30 번호 되돌림(episode -= 1)은 _ep_consumed 규칙이 대신한다(이중 차감 방지)
+        if not getattr(self, '_ep_consumed', True) and isinstance(getattr(self, '_sc_req_ep', None), dict):
+            # ★09-30 재시도는 같은 번호를 쓰므로, 중단된 시도의 늦은 learn 회신이 재시도 기록에 섞이지 않게 표지값으로 바꾼다
+            for _k in [k for k, v in self._sc_req_ep.items() if v == self.episode]:
+                self._sc_req_ep[_k] = -1
+        if getattr(self, 'capture', None) is not None and self._cap_rows:
+            pass
         elif self._cap_rows:
             # ★09-23 결함 수정: 학습 모드에서 에피소드 도중 HARD 리셋이면 중단된 행이 다음 에피 npz 앞에 붙었다(60 파일, 스텝 역행).
             self.get_logger().warn(f'  [STEPS] 에피소드 {self.episode} 도중 HARD 리셋 — 기록 중이던 행 {len(self._cap_rows)} 폐기')
@@ -2830,6 +2853,7 @@ class OnlineRLNode(Node):
 
         self.agent.end_episode(self.episode_reward, self.step_count)
         _R = self._ep_record(reason)
+        self._ep_consumed = True          # ★09-30 이 번호는 기록까지 끝났다 → 다음 _start_new_episode 가 번호를 올린다
         if self._sc and self._lp and self.episode in set(self._sc_req_ep.values()):
             self._sc_pend_ep.append(_R)       # ★09-23 이 에피 마지막 learn 회신(종료 스텝 갱신) 뒤에 기록 — 블로킹 대기 없음
         else:
