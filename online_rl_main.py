@@ -1404,6 +1404,44 @@ class OnlineRLNode(Node):
         self.cur_pos[:] = 0; self.cur_vel[:] = 0; self.cur_euler[:] = 0
         self.home_lat = None; self.init_counter = 0; self.flight_state = 'HARD_RESET'
 
+    def _stab_guard(self):
+        """★09-30 이륙·안정화 감시. 추락(WARM) 뒤 재이륙에서 기체가 뒤집힌 채 STABILIZE 에 들어가면
+        자세 안정 조건이 영원히 안 서 무한 대기했다(w79 swirlA1_s43 에피 156, 16:42 부터 정지 — STABILIZE 엔 시간 제한·추락 감지가 없었다).
+          ① TAKEOFF·STABILIZE 에서 뒤집힘(|roll| 또는 |pitch| > 1.05 rad)이 1 s 이어지면 → HARD (뒤집힌 기체는 WARM 재이륙 불가, _apply_reset 과 같은 규칙)
+          ② STABILIZE 가 STAB_TIMEOUT_S(벽시계, 기본 60 s; 정상은 warmup 3 sim s) 안에 LEARNING 으로 못 가면 → WARM, 연속 3 회면 HARD
+        에피소드는 _end_episode 전이라 번호가 소비되지 않았다 → _start_new_episode 가 같은 번호·같은 시나리오로 다시 시도(EP-RETRY)."""
+        st = self.flight_state
+        if st != getattr(self, '_guard_state', None):
+            self._guard_state = st; self._guard_t0 = pytime.time(); self._guard_flip = 0
+        if st == 'LEARNING':
+            self._guard_fail = 0
+        if st not in ('TAKEOFF', 'STABILIZE'):
+            return False
+        r, p = float(self.cur_euler[0]), float(self.cur_euler[1])
+        self._guard_flip = self._guard_flip + 1 if (abs(r) > 1.05 or abs(p) > 1.05) else 0
+        if self._guard_flip >= max(1, int(round(1.0 / self.step_dt))):
+            self.get_logger().error(f'  [GUARD] {st} 에서 기체 뒤집힘(roll={r:+.2f} pitch={p:+.2f} rad) 1 s 지속 → HARD_RESET '
+                                    f'(에피 {self.episode} 는 같은 번호·같은 시나리오로 재시도)')
+            self._guard_fail = 0; self.guard_reset_count = getattr(self, 'guard_reset_count', 0) + 1
+            self._trigger_hard_reset()
+            return True
+        if st == 'STABILIZE':
+            lim = float(knob('STAB_TIMEOUT_S', 60) or 60)
+            if pytime.time() - self._guard_t0 > lim:
+                self._guard_fail = getattr(self, '_guard_fail', 0) + 1
+                self.guard_reset_count = getattr(self, 'guard_reset_count', 0) + 1
+                if self._guard_fail >= 3:
+                    self.get_logger().error(f'  [GUARD] STABILIZE {lim:.0f}s 초과 ×{self._guard_fail}연속 → HARD_RESET (에피 {self.episode} 재시도)')
+                    self._guard_fail = 0; self._trigger_hard_reset()
+                else:
+                    self.get_logger().warn(f'  [GUARD] STABILIZE {lim:.0f}s 초과 (roll={r:+.2f} pitch={p:+.2f}) → WARM_RESET '
+                                           f'({self._guard_fail}/3, 에피 {self.episode} 재시도)')
+                    self._send_attack_cmd(False)
+                    self._reset_episode_state(); self.home_lat = None; self.init_counter = 0
+                    self.flight_state = 'WARM_RESET'
+                return True
+        return False
+
     def _apply_reset(self, reason):
         """crash 종류에 따라 SOFT / WARM / HARD 리셋 선택 (train·eval 공통)."""
         if reason == 'crash_flip' or (reason == 'crash_altitude' and (abs(self.cur_euler[0]) > 1.05 or abs(self.cur_euler[1]) > 1.05)):
@@ -1483,6 +1521,8 @@ class OnlineRLNode(Node):
 
         if self._lp:
             self._sc_poll()   # ★09-23 학습기 회신·생존 감시 (모든 상태)
+        if self._stab_guard():
+            return
         _sc_live = self._sc and self.flight_state in ('STABILIZE', 'LEARNING')
 
         # ── Offboard 유지 (★ 50Hz 규칙 발행 = PX4 안정) ──

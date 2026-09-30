@@ -303,6 +303,60 @@ def test_regress_in_learning_triggers_hard_reset():
         assert node.episode == ep0 and _same(node.scenario, sc0)
 
 
+def _same_obj(x, y):
+    if isinstance(x, dict):
+        return isinstance(y, dict) and set(x) == set(y) and all(_same_obj(x[k], y[k]) for k in x)
+    if isinstance(x, (list, tuple)):
+        return isinstance(y, (list, tuple)) and len(x) == len(y) and all(_same_obj(a, b) for a, b in zip(x, y))
+    if isinstance(x, np.ndarray) or isinstance(y, np.ndarray):
+        return np.array_equal(np.asarray(x), np.asarray(y))
+    if hasattr(x, '__dict__') and not isinstance(x, type):
+        return type(x) is type(y) and _same_obj(vars(x), vars(y))
+    return bool(x == y)
+
+
+def test_stabilize_flip_triggers_hard_and_retries_same_episode():
+    """★09-30 w79 swirlA1_s43 정지 재현: 추락 뒤 재이륙에서 뒤집힌 채 STABILIZE → 전에는 무한 대기. 이제 1 s 뒤 HARD, 같은 번호·시나리오로 재시도."""
+    mod = load_module(os.path.join(ROOT, 'online_rl_main.py'), 'orm_flip')
+    exp = _exp('adam', os.path.join(_TMP, 'flip')); seed_all(42)
+    with patched_ros(mod, []):
+        for st in ('STABILIZE', 'TAKEOFF'):
+            node = make_node(mod, exp, {'SIMCLOCK_UKF': 1})
+            node.sim_mgr.restart = lambda: None
+            node._start_new_episode(); node.flight_state = st
+            if st == 'STABILIZE':
+                node._sc_enter_stabilize()
+            ep0, sc0 = node.episode, dict(node.scenario)
+            node.cur_euler[:] = (3.05, 0.02, 0.0)                         # 롤 ≈ 180° (실측: 쿼터니언 x=0.93)
+            n1 = int(round(1.0 / node.step_dt))
+            for _ in range(n1 - 1):
+                node._tick()
+            assert node.flight_state == st                                # 1 s 전에는 기다린다(순간 값에 반응하지 않음)
+            node._tick()
+            assert node.flight_state == 'HARD_RESET', st
+            node._start_new_episode()
+            assert node.episode == ep0 and _same_obj(node.scenario, sc0), st
+
+
+def test_stabilize_timeout_warm_then_hard_retries_same_episode():
+    mod = load_module(os.path.join(ROOT, 'online_rl_main.py'), 'orm_stabto')
+    exp = _exp('adam', os.path.join(_TMP, 'stabto')); seed_all(42)
+    import time as _t
+    with patched_ros(mod, []):
+        node = make_node(mod, exp, {'SIMCLOCK_UKF': 1, 'STAB_TIMEOUT_S': 0.05})
+        node.sim_mgr.restart = lambda: None
+        node._start_new_episode(); ep0, sc0 = node.episode, dict(node.scenario)
+        for k in range(3):
+            node.flight_state = 'STABILIZE'; node._sc_enter_stabilize()
+            node.cur_euler[:] = (0.3, 0.0, 0.0)                           # 기울었지만 뒤집히진 않음 → 자세 안정 조건 미충족
+            node._tick(); _t.sleep(0.08); node._tick()
+            assert node.flight_state == ('HARD_RESET' if k == 2 else 'WARM_RESET'), k
+            node._start_new_episode()
+            assert node.episode == ep0 and _same_obj(node.scenario, sc0), k
+        node.flight_state = 'LEARNING'; node._stab_guard()                # 성공하면 연속 실패 수가 0 으로
+        assert node._guard_fail == 0
+
+
 def test_run_isaac_rejects_knob_mismatch():
     mod = load_module(os.path.join(ROOT, 'online_rl_main.py'), 'orm_ri')
     from env.knobs import set_knobs
