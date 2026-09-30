@@ -485,6 +485,56 @@ def compute_per_priorities(theta, theta_target, batch_hist, sp, cfg, force=False
     return idx_all, td.abs()
 
 
+def _act_grad(name, z):
+    """활성함수 도함수 (z = 선형 출력)."""
+    if name == 'silu':
+        sg = torch.sigmoid(z); return sg * (1.0 + z * (1.0 - sg))
+    if name == 'relu':
+        return (z > 0).to(z.dtype)
+    if name == 'tanh':
+        return 1.0 - torch.tanh(z) ** 2
+    raise NotImplementedError(name)
+
+
+def per_sample_jacobian(theta_flat, info, s_batch, a):
+    """★09-30 EKF-TD 야코비안 해석 계산: H[j] = ∂Q(s_j, a_j)/∂θ → (H [B, n_x], q_sel [B]).
+    배치 순전파 1회 + 역전파 1회 + 층별 외적(einsum). autograd.functional.jacobian(vectorize) 과 수치 동일(tests/test_ekf_jac.py),
+    작은 커널 수천 개 대신 층당 몇 개라 GPU 에서 빠르다. 레이아웃은 forward_single 과 같다(층마다 W row-major 뒤 b)."""
+    th = theta_flat.to(torch.float32).reshape(-1)
+    x = s_batch.to(torch.float32)
+    if x.shape[-1] != info['dimS']:
+        x = x.t()
+    B = x.shape[0]; L = info['layers']; nl = len(L); use_resid = info.get('use_residual', False)
+    Ws, hs, zs, res = [], [], [], []
+    h = x.t()                                                       # [in, B]
+    for i, ly in enumerate(L):
+        W = th[ly['W_start']:ly['W_start'] + ly['W_len']].view(ly['W_shape']); b = th[ly['b_start']:ly['b_start'] + ly['b_len']].view(-1, 1)
+        Ws.append(W); hs.append(h)
+        z = W @ h + b; zs.append(z)
+        r = bool(use_resid and i < nl - 1 and ly['W_shape'][0] == ly['W_shape'][1]); res.append(r)
+        if i < nl - 1:
+            h = (h + info['act_fn'](z)) if r else info['act_fn'](z)
+        else:
+            h = z
+    idx = torch.arange(B, device=x.device)
+    q_sel = h[a, idx]                                               # [B]
+    H = torch.empty(B, info['total_params'], dtype=torch.float32, device=x.device)
+    dz = torch.zeros_like(h); dz[a, idx] = 1.0                      # 출력층 선형 출력에 대한 기울기 [nA, B]
+    carry = None
+    for i in range(nl - 1, -1, -1):
+        ly = L[i]
+        H[:, ly['W_start']:ly['W_start'] + ly['W_len']] = torch.einsum('ob,ib->boi', dz, hs[i]).reshape(B, -1)
+        H[:, ly['b_start']:ly['b_start'] + ly['b_len']] = dz.t()
+        if i == 0:
+            break
+        dh = Ws[i].t() @ dz                                         # ∂/∂h_i  [in, B]
+        if carry is not None:
+            dh = dh + carry                                         # 층 i 의 잔차 연결로 h_i 에 바로 흘러온 기울기
+        carry = dh if res[i - 1] else None                          # h_i = h_{i-1} + act(z_{i-1}) 면 h_{i-1} 로 그대로 전달
+        dz = dh * _act_grad(info.get('act_name', 'silu'), zs[i - 1])
+    return H, q_sel
+
+
 # ═════════════════════════════════════════════════════════════
 #  EKF-TD baseline (2026-09-13): 시그마포인트 대신 야코비안 H=∂Q(s,a;θ)/∂θ (Singhal&Wu 1989 / KOVA 형).
 #  나머지(DDQN 타깃, Q, R(Huber 적응 옵션), K, P 갱신)는 rhukf_step_fv 와 동일 → 공정 ablation.
@@ -500,14 +550,19 @@ def ekf_step(theta_current_in, theta_target, filter_P_cov, batch, sp, is_first, 
     P_prev = (p_init_val * eye_n) if (is_first or filter_P_cov is None) else filter_P_cov
     P_pred = P_prev + cfg.q_init * eye_n
     P_pred = 0.5 * (P_pred + P_pred.t())
-    # ── 야코비안 H [B, n_x] (autograd) ──
-    with torch.enable_grad():
-        th = theta_pred_flat.detach().to(torch.float32).requires_grad_(True)
-        def _f(t):
-            q = _FS_EAGER(t, info, s_batch)                            # [nA, B]  (eager: compile 판은 vmap/autograd 불가)
-            return q[batch['a'], torch.arange(batch_sz, device=device)].to(torch.float32)
-        H = torch.autograd.functional.jacobian(_f, th, vectorize=True).to(DTYPE)   # [B, n_x]
-        z_hat = _f(th).detach().to(DTYPE).view(-1, 1)
+    # ── 야코비안 H [B, n_x] ── ★09-30 기본 analytic(층별 외적, GPU 빠름) · 'autograd' = 이전 구현(09-15 eager jacobian, 재현용)
+    if str(getattr(cfg, 'ekf_jac', 'analytic')) == 'analytic' and info.get('act_name', 'silu') in ('silu', 'relu', 'tanh'):
+        with torch.no_grad():
+            H32, q_sel = per_sample_jacobian(theta_pred_flat.detach(), info, s_batch, batch['a'])
+        H = H32.to(DTYPE); z_hat = q_sel.to(DTYPE).view(-1, 1)
+    else:
+        with torch.enable_grad():
+            th = theta_pred_flat.detach().to(torch.float32).requires_grad_(True)
+            def _f(t):
+                q = _FS_EAGER(t, info, s_batch)                            # [nA, B]  (eager: compile 판은 vmap/autograd 불가)
+                return q[batch['a'], torch.arange(batch_sz, device=device)].to(torch.float32)
+            H = torch.autograd.functional.jacobian(_f, th, vectorize=True).to(DTYPE)   # [B, n_x]
+            z_hat = _f(th).detach().to(DTYPE).view(-1, 1)
     # ── DDQN 타깃 (rhukf_step_fv 와 동일) ──
     Q_tgt = forward_bmm(theta_target.squeeze().unsqueeze(0), info, s_next)[0]      # [nA, B]
     a_best_next = forward_single(theta_pred_flat, info, s_next).argmax(dim=0)
