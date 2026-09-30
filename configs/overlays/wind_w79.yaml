@@ -1,0 +1,9 @@
+# configs/overlays/wind_w79.yaml — 09-30 12:45 사용자: 강풍을 7–9 로 (v6s 그림처럼 Adam 전환 주춤이 분명하게; Adam 은 풍속 1 m/s 당 전환 후회 +6.8 로 SWIRL 의 2–3배 민감).
+#   ep1–60 U(0,3) → ep61–120 U(7,9) → ep121–200 섞임 U(0,9). 같은 (seed, ep) 난수 u → 강풍 = 7+2u (v6s 6.5+2.5u·vfinal 6+3u 보다 모든 에피에서 같거나 셈).
+scenario:
+  wind:
+    mode: uniform
+    range: [0.0, 3.0]
+    schedule:
+    - {from_ep: 60, mode: uniform, range: [7.0, 9.0]}
+    - {from_ep: 120, mode: uniform, range: [0.0, 9.0]}
