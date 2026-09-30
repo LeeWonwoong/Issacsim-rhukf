@@ -1,0 +1,19 @@
+# n124s_vfinal_rwA1_tune_R — 09-30 09:45 사용자: "SWIRL vfinal 도는 동안 원격에서 튜닝 빠르게" → Isaac A-1 SWIRL(≈14:30 시작) 전에 결정이 나오도록 n124s 의 R 축(0.1·0.5·1 @pΔ0.01)만 먼저, 시드 42–44.
+#   같은 outdir(n124s_vfinal_rwA1_tune) — 뒤에 도는 전체 격자가 완료 런을 건너뛴다. 선택 규칙 = configs/grids/PREREG_rwA1_0930.md (Isaac A-1 절).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_kA1.yaml]
+outdir: results/claudecodefortest/n124s_vfinal_rwA1_tune
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  r01: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.1}}
+  r05: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 0.5}}
+  r1: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.01, agent.swirl.R: 1.0}}
