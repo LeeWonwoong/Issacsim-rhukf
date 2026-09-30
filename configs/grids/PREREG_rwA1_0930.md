@@ -58,3 +58,9 @@ SWIRL A-1 시드별 F1 .883/.897/.908/.909/.925 (평균 .904; 설정 확인 aliv
 - Isaac A-1 빠른 확인 = Adam lr 3e-4 · Adam lr 1e-3 · SWIRL 각 시드 42–43 (**설명용**). 판정은 위 규칙 그대로 시드 42–44 (SWIRL vs Adam lr 3e-4) — s44 두 런은 빠른 확인 바로 뒤에 돈다.
 - Adam lr 1e-3 은 리뷰어 R1(튜닝 비대칭) 대비 참고 비교로만 보고하고 판정에 쓰지 않는다.
 - 실행 속도: Adam 런 speed 2.5, SWIRL·칼만 speed 2 (샘플 클럭 UKF·ACT_LAT_SIM 이라 결과는 sim 시간 기준; overrun·HARD 수를 런마다 기록해 확인).
+
+### 칼만(EKF·UKF) A-1 튜닝 (2026-09-30 19:10, 사용자 "A-1 이면 EKF·UKF 도 A-1 에서 튜닝", 결과 열기 전 등록)
+- 격자 n131k_vfinal_rwA1_ktd (surrogate, vfinal 바람 = SWIRL A-1 튜닝 n124s 와 같은 무대, 보상 A-1), 시드 42–44, 학습기별 한 축:
+  중심 c = q 1e-7 · p_init 0.01 · R 0.25 (SWIRL A-1 채택 pΔ 0.01·R 0.25 와 같은 사전·관측) / p_init 1e-3 / R 0.5 / R 1. q 는 1e-7 고정.
+- 규칙(SWIRL 과 동일): 학습기별 **3시드 평균 200에피 학습 리턴 최고**, 중심 대비 차 < 0.05 면 중심 → isaac_vfinal/DECISION_KTD_A1 (자동 작성).
+- Isaac A-1 칼만 런(시드 42–46)은 이 결정값으로 돈다. 헤드라인 판정(SWIRL vs Adam)에는 여전히 쓰지 않는다.
