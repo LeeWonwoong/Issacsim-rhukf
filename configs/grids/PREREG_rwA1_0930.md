@@ -64,3 +64,8 @@ SWIRL A-1 시드별 F1 .883/.897/.908/.909/.925 (평균 .904; 설정 확인 aliv
   중심 c = q 1e-7 · p_init 0.01 · R 0.25 (SWIRL A-1 채택 pΔ 0.01·R 0.25 와 같은 사전·관측) / p_init 1e-3 / R 0.5 / R 1. q 는 1e-7 고정.
 - 규칙(SWIRL 과 동일): 학습기별 **3시드 평균 200에피 학습 리턴 최고**, 중심 대비 차 < 0.05 면 중심 → isaac_vfinal/DECISION_KTD_A1 (자동 작성).
 - Isaac A-1 칼만 런(시드 42–46)은 이 결정값으로 돈다. 헤드라인 판정(SWIRL vs Adam)에는 여전히 쓰지 않는다.
+
+### 변경 (2026-09-30 22:25, 사용자) — Isaac A-1 무대를 w79 로
+- Isaac **vfinal 바람 A-1 런은 취소**(진행 중이던 adamA1_s42 17에피는 isaac_vfinal/_aborted_0930/ 로). Isaac A-1 은 **w79 바람(U(0,3)→U(7,9)→U(0,9))에서 SWIRL·Adam·EKF·UKF × 시드 42–46**.
+  SWIRL = DECISION_A1(pΔ 0.01·R 0.25), 칼만 = DECISION_KTD_A1(q1e-7·p_init 1e-3·R 0.25) — 둘 다 surrogate(vfinal 바람)에서 위 규칙으로 정한 값 그대로.
+- 위 "헤드라인 보상 판정"의 기준값(+3.03/+9.96)은 vfinal 바람 Isaac 에서 정의돼 w79 에 그대로 적용할 수 없다 → w79 A-1 결과는 판정 규칙 없이 **기술적으로 보고**(5시드 짝 비교·부호 일치 수를 함께 적는다).
