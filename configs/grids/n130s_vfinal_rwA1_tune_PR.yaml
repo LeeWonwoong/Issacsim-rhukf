@@ -1,0 +1,16 @@
+# n130s_vfinal_rwA1_tune_PR — 09-30 16:00 사용자: "FIR 서사와 맞으려면 P 를 키워야 하고, P 가 크려면 R 도 커야" → pΔ .03·.10 을 R 같은 비율로 올려 재실행.
+#   비율 pΔ/R = 0.04 (채택 중심 pΔ .01·R .25 와 같음): pΔ .03 → R .75, pΔ .10 → R 2.5. 선형 근사에서 이득 K = P Jᵀ(J P Jᵀ + R)⁻¹ 는 불변, P 만 비례해 커짐.
+#   q(5e-4)·α(0.1) 는 그대로 → 정확한 등변은 아님(UT 시그마 퍼짐 ∝ √pΔ, q/pΔ 비 감소). 비교: 같은 outdir 의 a_p03_·a_p10_(R .25) 와 n122s a_s_(중심).
+base: [configs/newenv_vfinal.yaml, configs/overlays/surrogate_knn_v6.yaml, configs/overlays/reward_kA1.yaml]
+outdir: results/claudecodefortest/n124s_vfinal_rwA1_tune
+seeds: [42, 43, 44]
+stages: {a: {}}
+learners:
+  p03r75: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.03, agent.swirl.R: 0.75}}
+  p10r25: {device: gpu, set: {agent.type: swirl, run.device: cuda, run.episodes: 200, log.eval_n: 100, log.probe_every: 20, log.probe_n: 8,
+                         obs.window: 6, agent.hidden: [24, 24], agent.batch: 128, agent.tau: 0.005, agent.update_interval: 1, agent.buffer: 50000,
+                         agent.swirl.N: 10, agent.swirl.q: 5.0e-4, agent.swirl.alpha: 0.1, agent.swirl.huber_c: 0, agent.swirl.argmax: spas, agent.swirl.act: target,
+                         agent.swirl.p_delta: 0.1, agent.swirl.R: 2.5}}
