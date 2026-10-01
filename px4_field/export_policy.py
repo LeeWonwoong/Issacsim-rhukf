@@ -28,6 +28,18 @@ def main():
     obs = dict(compress=getattr(cfg, 'obs_compress', 'log1p_sqrt'), clip=float(getattr(cfg, 'obs_clip', 4.0)),
                div=float(getattr(cfg, 'obs_div', 4.0)), window=int(getattr(cfg, 'window_size', 4)),
                features=list(getattr(cfg, 'obs_features', ['vel', 'gyro', 'action'])))
+    # ★10-01 재구성 뒤 Config 에 obs_compress·obs_clip·obs_div·obs_features 가 없다(위 기본값이 우연히 맞았을 뿐).
+    #   런 폴더의 config.yaml(obs 절)을 정답으로 읽고, 체크포인트 쪽과 다르면 실기 관측이 학습과 달라지므로 멈춘다.
+    cy = os.path.join(os.path.dirname(os.path.abspath(a.pt)), 'config.yaml')
+    if os.path.exists(cy):
+        import yaml
+        o = (yaml.safe_load(open(cy)) or {}).get('obs') or {}
+        ref = dict(compress=o.get('compress', obs['compress']), clip=float(o.get('clip', obs['clip'])), div=float(o.get('div', obs['div'])),
+                   window=int(o.get('window', obs['window'])), features=list(o.get('features', obs['features'])))
+        if ref != obs:
+            sys.exit(f'관측 규약 불일치: 체크포인트 {obs} vs config.yaml {ref} — config.yaml 을 따르려면 확인 후 수정')
+    else:
+        print(f'⚠ {cy} 없음 — 체크포인트 기본값으로 관측 규약을 정함(확인 필요): {obs}')
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     np.savez(a.out, theta=theta, W_start=W_start, W_len=W_len, W_rows=W_rows, W_cols=W_cols, b_start=b_start, b_len=b_len,
              act_name=str(info.get('act_name', getattr(cfg, 'activation_fn', 'silu'))), dimS=int(info['dimS']), nA=int(info['nA']),
