@@ -76,6 +76,12 @@ class PolicyPattern(F5Pattern):
         self.create_subscription(VehicleThrustSetpoint, R('/fmu/out/vehicle_thrust_setpoint'), self._cb_th, qos)
         self.create_subscription(VehicleTorqueSetpoint, R('/fmu/out/vehicle_torque_setpoint'), self._cb_tq, qos)
         self.pub_attack = self.create_publisher(ActuatorAttack, R('/fmu/in/actuator_attack'), qos) if (ActuatorAttack is not None and self.A.attack == 'dds') else None
+        # ★10-01 SITL 전용 바람 일정(--sitl-wind on_s,off_s,speed): run_sim 의 /scenario_config 로 패턴 시계 기준 바람 켬/끔 → 한 비행에 정상→바람→바람+공격→공격→정상
+        self.wind_now = 0.0; self._wind_sent = None; self.pub_scen = None
+        if self.A.sitl_wind:
+            from std_msgs.msg import String as _Str
+            self._Str = _Str; self.pub_scen = self.create_publisher(_Str, '/scenario_config', 10)
+            self.get_logger().info(f'  SITL 바람 일정: {self.A.sitl_wind} (켬 s, 끔 s, m/s — 패턴 시계 기준)')
         # --attack rc : 노드는 공격을 쏘지 않는다. RC aux(실기 ATK_AUX_*) 또는 외부 DDS 트리거(rc_attack_trigger.py --stdin)가 넣는 δ 를 **기록만** 한다.
         self._aux = (0.0, 0.0); self._ext_delta = 0.0
         if self.A.attack == 'rc':
@@ -102,7 +108,7 @@ class PolicyPattern(F5Pattern):
         self._pcsv = open(self._pcsv_path, 'w', newline=''); self._pw = csv.writer(self._pcsv)
         self._pw.writerow(['t_wall', 't_seq', 'k', 'state', 'nis_v_raw', 'nis_g_raw', 'obs_v', 'obs_g', 'q_track', 'q_hover', 'action', 'hovering',
                            'atk_active', 'delta', 'dir', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'gps_hz', 'ukf_ms', 'sp_x', 'sp_y', 'sp_z', 'sp_vx', 'sp_vy', 'stage',
-                           *[f'o{i}' for i in range(self.obs.spec.dim)]])   # ★09-22 정책 입력 벡터(창 4×[vel,gyro,prev_action], 오래된 프레임부터)
+                           *[f'o{i}' for i in range(self.obs.spec.dim)], 'wind'])   # ★09-22 정책 입력 벡터(창 4×[vel,gyro,prev_action], 오래된 프레임부터)
         self._ukf_ms = 0.0
         self.create_timer(UKF_DT, self._ukf_tick)
         self.get_logger().info(
@@ -203,6 +209,7 @@ class PolicyPattern(F5Pattern):
             self.action = a if (self.state == 'ENGAGED' and self._in_pattern()) else 0
             self.prev_action = self.action
             self._attack_step()
+            self._wind_step()
             self._policy_log()
         self._ukf_ms = (time.time() - t0) * 1000.0
 
@@ -245,6 +252,16 @@ class PolicyPattern(F5Pattern):
         aa.torque = [float(d * math.cos(self.atk_dir)), float(d * math.sin(self.atk_dir)), 0.0]; aa.thrust = 0.0
         self.pub_attack.publish(aa)
 
+    def _wind_step(self):
+        if self.pub_scen is None: return
+        on_s, off_s, ws = [float(v) for v in self.A.sitl_wind.split(',')]
+        te = (time.time() - self.t_engage - self.settle) if self.t_engage is not None else -1.0
+        want = ws if (self.state == 'ENGAGED' and on_s <= te < off_s) else 0.0
+        if want != self._wind_sent:
+            m = self._Str(); m.data = json.dumps({'disturbance_type': self.A.wind_type if want > 0 else 'none', 'wind_speed': want}); self.pub_scen.publish(m)
+            self._wind_sent = want; self.get_logger().info(f'  [WIND] t_pat {te:.1f}s → 바람 {want:.1f} m/s ({self.A.wind_type if want > 0 else "none"})')
+        self.wind_now = want
+
     def _policy_log(self):
         lp = self.lp; t_seq = 0.0 if self.t_engage is None else time.time() - self.t_engage
         st = getattr(self, 'last_st', None)   # 정책 입력 12-D (창 미충전이면 빈칸)
@@ -254,7 +271,7 @@ class PolicyPattern(F5Pattern):
                            int(self.atk_delta > 0), f'{self.atk_delta:.3f}', f'{self.atk_dir:.3f}',
                            *(f'{v:.3f}' for v in ((lp.x, lp.y, lp.z, lp.vx, lp.vy, lp.vz) if lp is not None else (0,) * 6)),
                            f'{self.fresh_n / max(1e-6, time.time() - self._t_start):.1f}', f'{self._ukf_ms:.1f}',
-                           *(f'{v:.3f}' for v in getattr(self, '_last_sp', (float('nan'),) * 5)), self.stage, *st_cols])
+                           *(f'{v:.3f}' for v in getattr(self, '_last_sp', (float('nan'),) * 5)), self.stage, *st_cols, f'{getattr(self, "wind_now", 0.0):.2f}'])
 
     # ── 패턴 스텝: 정책 hover 삽입 ──
     def step(self, t):
@@ -406,6 +423,8 @@ def main():
     ap.add_argument('--reengage-r', dest='reengage_r', type=float, default=2.0, help='hover 뒤 재접근 반경 [m] (sim REENGAGE_R)')
     ap.add_argument('--min-hover-steps', dest='min_hover_steps', type=int, default=5, help='실행 hover 최소 유지 스텝(10 Hz). 정책 원결정 로그와 별개. 0=sim 과 동일(즉시 복귀 가능)')
     ap.add_argument('--gps-hz', dest='gps_hz', type=float, default=10.0, help='정책 결정·GPS 갱신 게이트 [Hz] (학습 10)')
+    ap.add_argument('--sitl-wind', dest='sitl_wind', default=None, help='SITL 전용 바람 일정 "on_s,off_s,speed" (패턴 시계 기준, run_sim /scenario_config). 실기 무시')
+    ap.add_argument('--wind-type', dest='wind_type', default='wind_turbulence', help='SITL 바람 종류 (학습과 같은 wind_turbulence)')
     ap.add_argument('--sitl-auto', dest='sitl_auto', type=float, default=0.0, help='SITL 전용: 자동 arm·OFFBOARD·이륙 고도[m] (0=끔, 실기 금지)')
     ap.add_argument('--fs-url', dest='fs_url', default=None, help='FailsafeParams MAVLink URL (SITL udpin:0.0.0.0:14540 / 실기 /dev/ttyACM0)')
     ap.add_argument('--failsafe-params', dest='failsafe_params', default=None, help='비우면 Isaac 오버레이 FAILSAFE_PARAMS 그대로; "" 면 비활성')

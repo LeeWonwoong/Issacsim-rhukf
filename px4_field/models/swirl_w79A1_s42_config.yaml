@@ -1,0 +1,251 @@
+run:
+  name: isaac_v6s_swirl
+  seed: 42
+  episodes: 200
+  ep_steps: 300
+  outdir: results/claudecodefortest/isaac_w79/swirlA1_s42
+  device: cuda
+env:
+  kind: isaac
+  surrogate:
+    pool: results/claudecodefortest/night/train_pool_v5e.npz
+    pool_format: auto
+    pool_clip: 4.0
+    reseed_per_episode: true
+    crash:
+      ploc_tiers:
+        7:
+        - 0.7
+        - 0.2
+        - 0.76
+        - 0.3
+        - 0.8
+        - 0.9
+        - 0.84
+        - 1.0
+        10:
+        - 0.7
+        - 0.3
+        - 0.76
+        - 0.7
+        - 0.8
+        - 0.8
+        - 0.84
+        - 1.0
+      dead_tiers:
+        10:
+        - 0.78
+        - 26
+        - 0.8
+        - 16
+        - 0.84
+        - 4
+      plateau_curve: true
+      dead_mode: curve
+  isaac:
+    headless: true
+    speed: 2
+    sim_env:
+      WIND_MOMENT_ARM: 0.05
+    cfg:
+      eval_interval: 1000000
+    knobs:
+      SPEED_SCALE: 1.0
+      SENSOR_NOISE_SCALE: 1.0
+      SPEED_MOD_AMP: 0
+      ACCEL_FF: 1
+      COM_BIAS_STD: 0.05
+      FLIP_TERMINAL: 0
+      HOVER_DRIFT_SYM: 1
+      ATK_COND_DONE: 50
+      UKF_Q_GYRO: 0.002
+      UKF_R_GYRO: 0.2
+      UKF_Q_EULER: 0.002
+      UKF_Q_VEL: 0.001
+      UKF_R_VEL: 0.1
+      FAILSAFE_PARAMS: MC_RR_INT_LIM=1.0,MC_PR_INT_LIM=1.0,MC_ROLLRATE_I=0.8,MC_PITCHRATE_I=0.8
+      SIMCLOCK_UKF: 1
+      LEARNER_PROC: 1
+      ACT_LAT_SIM: 0.08
+      TIMING_LOG: 1
+      HOVER_ANCHOR_RESET: 1
+      REENGAGE_FIX: 1
+    launcher: isim
+    compile: true
+scenario:
+  attack:
+    p_attack: 0.5
+    family: profile
+    start:
+    - 50
+    - 160
+    delta_lo: 0.1
+    split: 0.72
+    delta_hi: 0.84
+    p_upper: 0.5
+    hold:
+    - 25
+    - 40
+    events:
+    - 2
+    - 3
+    event_gap:
+    - 30
+    - 50
+    prefix:
+    - 0.3
+    - 0.6
+    - 0.9
+    - 1.0
+    tail:
+    - 0.7
+    - 0.35
+    classes:
+    - name: weak_burst
+      weight: 0.21
+      delta:
+      - 0.15
+      - 0.3
+      kind: burst
+      dur:
+      - 4
+      - 8
+    - name: weak_persist
+      weight: 0.21
+      delta:
+      - 0.15
+      - 0.3
+      kind: persistent
+      dur:
+      - 25
+      - 40
+      grow:
+      - 1.8
+      - 2.2
+      grow_steps:
+      - 3
+      - 6
+    - name: trans_burst
+      weight: 0.14
+      delta:
+      - 0.3
+      - 0.7
+      kind: burst
+      dur:
+      - 4
+      - 8
+    - name: trans_persist
+      weight: 0.16
+      delta:
+      - 0.3
+      - 0.7
+      kind: persistent
+      dur:
+      - 25
+      - 40
+      grow:
+      - 1.3
+      - 1.5
+      grow_steps:
+      - 3
+      - 6
+    - name: strong_burst
+      weight: 0.12
+      delta:
+      - 0.7
+      - 0.8
+      kind: burst
+      dur:
+      - 4
+      - 8
+    - name: strong_persist
+      weight: 0.16
+      delta:
+      - 0.7
+      - 0.8
+      kind: persistent
+      dur:
+      - 30
+      - 40
+    delta_max: 0.8
+  wind:
+    mode: uniform
+    tiers:
+      0: 0.5
+      6: 0.5
+    range:
+    - 0.0
+    - 3.0
+    schedule:
+    - from_ep: 60
+      mode: uniform
+      range:
+      - 7.0
+      - 9.0
+    - from_ep: 120
+      mode: uniform
+      range:
+      - 0.0
+      - 9.0
+obs:
+  compress: log1p_sqrt
+  clip: 4.0
+  div: 4.0
+  window: 6
+  features:
+  - vel
+  - gyro
+  - action
+reward:
+  mode: cost
+  scale: 1.0
+  terminal_penalty: 0.0
+  fn_onset_mult: 1.8
+  alive: 1.0
+  c_fa: 1.0
+  c_d: 1.0
+  bonus: 3.0
+agent:
+  type: swirl
+  gamma: 0.97
+  n_step: 3
+  batch: 128
+  buffer: 50000
+  hidden:
+  - 24
+  - 24
+  tau: 0.005
+  update_interval: 1
+  hover_dwell: 0
+  eps:
+    start: 0.99
+    end: 0.01
+    decay: 4000
+    hover_p: 0.1
+  replay:
+    mode: uniform
+  swirl:
+    form: error
+    p_delta: 0.01
+    huber_c: 0
+    N: 10
+    R: 0.25
+    q: 0.0005
+    alpha: 0.1
+    anchor: target
+    argmax: spas
+    h0: spas
+    act: target
+  adam:
+    lr: 0.0003
+    amsgrad: false
+    init: he
+    optimizer: adam
+    loss: huber
+    huber_beta: 1.0
+    grad_clip: 1.0
+log:
+  probe_every: 1
+  probe_n: 4
+  steps: true
+  eval_n: 0

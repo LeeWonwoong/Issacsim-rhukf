@@ -21,6 +21,7 @@ def load(path):
     d = {k: f(k) for k in ('t_seq', 'nis_v_raw', 'nis_g_raw', 'obs_v', 'obs_g', 'q_track', 'q_hover', 'action', 'hovering', 'atk_active', 'delta', 'x', 'y', 'z')}
     d['state'] = np.array([r['state'] for r in rows]); d['t'] = f('t_wall'); d['t'] -= d['t'][0]
     d['atk'] = (d['delta'] > 0) | (d['atk_active'] > 0)
+    d['wind'] = np.array([float(r.get('wind') or 0.0) for r in rows])   # ★10-01 SITL 바람 일정(없으면 0)
     if 'sp_x' in rows[0]:
         for k in ('sp_x', 'sp_y', 'sp_z'): d[k] = np.array([float(r[k]) if r[k] not in ('', 'nan') else np.nan for r in rows])
         d['err'] = np.hypot(d['x'] - d['sp_x'], d['y'] - d['sp_y'])
@@ -52,11 +53,13 @@ def draw(fig, d, title=''):
     a2 = fig.add_subplot(4, 2, 4, sharex=a1); a2.plot(t, d['delta'], color='#e8a33c', lw=1.2); a2.set_ylabel('δ (공격)'); a2.set_ylim(0, 0.9)
     a3 = fig.add_subplot(4, 2, 6, sharex=a1); a3.step(t, d['action'], color='#d1483a', lw=1, label='정책 action'); a3.step(t, d['hovering'] * 0.8, color='k', lw=0.8, label='hover 실행'); a3.set_ylim(-0.1, 1.2); a3.legend(fontsize=7, loc='upper left'); a3.set_ylabel('행동')
     a4 = fig.add_subplot(4, 2, 8, sharex=a1); a4.plot(t, d['q_hover'] - d['q_track'], color='#7b3fe0', lw=1); a4.axhline(0, color='gray', ls=':'); a4.set_ylabel('Q_hover − Q_track'); a4.set_xlabel('t [s]')
-    for a in (a1, a2, a3):
+    for a in (a1, a2, a3, a4):
+        for s0, s1 in _spans(t, d['wind'] > 0): a.axvspan(s0, s1, color='#4aa3df', alpha=.12)
         for s0, s1 in _spans(t, d['atk']): a.axvspan(s0, s1, color='#e8a33c', alpha=.15)
         for s0, s1 in _spans(t, d['hovering'] > 0): a.axvspan(s0, s1, color='#d1483a', alpha=.12)
     n_decl = int(np.sum(np.diff(np.r_[0, d['hovering']]) > 0)); n_atk = int(np.sum(np.diff(np.r_[0, d['atk'].astype(int)]) > 0))
-    fig.suptitle(f'{title}  —  공격 사건 {n_atk} · hover 선언 {n_decl} · 스텝 {len(t)} · gyro obs max {d["obs_g"].max():.2f}', fontsize=10)
+    wtxt = f' · 바람 {d["wind"].max():.1f} m/s 구간 {len(_spans(t, d["wind"] > 0))}' if (d['wind'] > 0).any() else ''
+    fig.suptitle(f'{title}  —  공격 사건 {n_atk} · hover 선언 {n_decl} · 스텝 {len(t)} · gyro obs max {d["obs_g"].max():.2f}{wtxt}  (배경: 파랑 바람 · 주황 공격 · 빨강 hover)', fontsize=10)
     fig.tight_layout()
 
 
