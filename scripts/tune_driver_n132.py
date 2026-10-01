@@ -23,7 +23,7 @@ RES = os.path.join(ROOT, 'results', 'claudecodefortest')
 LOG = os.path.join(RES, 'n132_driver.log')
 STATE = os.path.join(RES, 'n132_state.json')
 STOP = os.path.join(RES, 'STOP_N132')
-T0 = time.time()
+T0 = float(os.environ.get('N132_T0') or time.time())   # 재기동 시 최초 시작 시각을 넘겨 누적 캡·조건부 캡을 이어서 센다
 CAP_H = 33.5
 
 BASE = {'A1': ['configs/newenv_vfinal.yaml', 'configs/overlays/surrogate_knn_v6.yaml', 'configs/overlays/reward_kA1.yaml'],
@@ -47,8 +47,17 @@ def spec(tag, N=10, c=1.0, alpha=None, rmul=1.0):
             'agent.swirl.alpha': round(alpha if alpha is not None else 0.1 / math.sqrt(c), 6)}
 
 
+def spec_abs(N, pd, R, alpha):
+    return {'agent.swirl.N': N, 'agent.swirl.p_delta': pd, 'agent.swirl.R': R, 'agent.swirl.q': round(0.5 * pd / N, 9), 'agent.swirl.alpha': round(alpha, 6)}
+
+
+# ★10-01 10:40 사용자 "N 12 정도에 R 0.4·0.5, p 0.01·0.03" — A-1 블록 조건부 뒤·5시드 확인 앞에 추가 (q·N = 0.5·pΔ 유지, pΔ .03 은 α=.1/√3 로 퍼짐 α√pΔ 를 중심과 같게)
+USER_A1 = {'n12r4': spec_abs(12, 0.01, 0.4, 0.1), 'n12r5': spec_abs(12, 0.01, 0.5, 0.1),
+           'n12p3r4': spec_abs(12, 0.03, 0.4, 0.1 / math.sqrt(3)), 'n12p3r5': spec_abs(12, 0.03, 0.5, 0.1 / math.sqrt(3))}
+
+
 def cells(tag):
-    return {'c': spec(tag), 'e10': spec(tag, c=10), 'a32': spec(tag, alpha=0.3162), 'e3': spec(tag, c=3), 'n15': spec(tag, N=15),
+    return {**USER_A1, 'c': spec(tag), 'e10': spec(tag, c=10), 'a32': spec(tag, alpha=0.3162), 'e3': spec(tag, c=3), 'n15': spec(tag, N=15),
             'n12': spec(tag, N=12), 'a05': spec(tag, alpha=0.05), 'n15e3': spec(tag, N=15, c=3), 'e5': spec(tag, c=5),
             'n15iso': spec(tag, N=15, rmul=1.49), 'e3k': spec(tag, c=3, rmul=0.5), 'n20': spec(tag, N=20)}
 
@@ -323,6 +332,11 @@ def main():
              ('n15iso', lambda d, f: f('n15') and (abs(summ('A1', d['n15'])['d200']) >= 0.5 or abs(summ('A1', d['n15'])['d61_80']) >= 2.0), 99),
              ('e3k', lambda d, f: f('e3') and g3p('A1', 'e3', cells('A1')['e3'], d['e3']), 99)]
     doneA = block('A1', main_cells, condA)
+    for name in USER_A1:                                     # ★10-01 사용자 추가 셀 (게이트 동일)
+        lg(f'사용자 추가 셀 A1/{name}'); doneA[name] = gated('A1', name, cells('A1')[name])
+    S2 = {n: summ('A1', doneA[n]) for n in USER_A1 if len(doneA[n]) == 3}
+    for n, s_ in S2.items():
+        lg(f'  3시드 A1/{n}: Δ200 {s_["d200"]:+.2f} ({s_["pos200"]}/3) Δ61–200 {s_["d61_200"]:+.2f} Δ61–80 {s_["d61_80"]:+.2f} endQ×{s_["endQr"]:.2f} ΔF1 {s_["dF1"]:+.3f}')
     bestA, g3A = confirm('A1', doneA, 99)
     candA = None
     ca = ST.get('confirm', {}).get('A1', {})
